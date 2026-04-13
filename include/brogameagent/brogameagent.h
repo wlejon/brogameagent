@@ -8,5 +8,7 @@
 #include "agent.h"
 #include "world.h"
 #include "observation.h"
+#include "projectile.h"
 #include "action_mask.h"
 #include "reward.h"
+#include "simulation.h"

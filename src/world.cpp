@@ -23,6 +23,8 @@ void World::tick(float dt) {
         if (a->unit().alive()) a->update(dt);
         a->unit().tickCooldowns(dt);
     }
+    stepProjectiles(dt);
+    cullProjectiles();
 }
 
 std::vector<Agent*> World::enemiesOf(const Agent& self) const {
@@ -178,6 +180,76 @@ int World::randInt(int lo, int hi) {
 
 bool World::chance(float p) {
     return randFloat01() < p;
+}
+
+int World::spawnProjectile(const Projectile& proto) {
+    Projectile p = proto;
+    p.id = nextProjectileId_++;
+    p.alive = true;
+    projectiles_.push_back(p);
+    return p.id;
+}
+
+void World::stepProjectiles(float dt) {
+    for (Projectile& p : projectiles_) {
+        if (!p.alive) continue;
+
+        // Homing: re-steer toward target if it's still alive.
+        if (p.targetId >= 0) {
+            Agent* t = findById(p.targetId);
+            if (t && t->unit().alive()) {
+                float dx = t->x() - p.x;
+                float dz = t->z() - p.z;
+                float d = std::sqrt(dx * dx + dz * dz);
+                if (d > 1e-4f) {
+                    p.vx = (dx / d) * p.speed;
+                    p.vz = (dz / d) * p.speed;
+                }
+            } else {
+                // Lost target — continue as skillshot on last velocity.
+                p.targetId = -1;
+            }
+        }
+
+        p.x += p.vx * dt;
+        p.z += p.vz * dt;
+        p.remainingLife -= dt;
+        if (p.remainingLife <= 0.0f) {
+            p.alive = false;
+            continue;
+        }
+
+        // Collision: first enemy whose disk overlaps the projectile disk.
+        for (Agent* a : agents_) {
+            if (!a->unit().alive()) continue;
+            if (a->unit().teamId == p.teamId) continue;
+            float dx = a->x() - p.x;
+            float dz = a->z() - p.z;
+            float hitR = p.radius + a->unit().radius;
+            if (dx * dx + dz * dz <= hitR * hitR) {
+                bool wasAlive = a->unit().alive();
+                float dealt = a->unit().takeDamage(p.damage, p.kind);
+                if (dealt > 0.0f) {
+                    events_.push_back(DamageEvent{
+                        p.ownerId,
+                        a->unit().id,
+                        dealt,
+                        p.kind,
+                        wasAlive && !a->unit().alive()
+                    });
+                }
+                p.alive = false;
+                break;
+            }
+        }
+    }
+}
+
+void World::cullProjectiles() {
+    projectiles_.erase(
+        std::remove_if(projectiles_.begin(), projectiles_.end(),
+                       [](const Projectile& p) { return !p.alive; }),
+        projectiles_.end());
 }
 
 bool World::resolveAbility(Agent& caster, int slot, int targetId) {

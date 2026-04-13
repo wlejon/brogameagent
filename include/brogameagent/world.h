@@ -2,6 +2,7 @@
 
 #include "types.h"
 #include "unit.h"
+#include "projectile.h"
 #include <cstdint>
 #include <functional>
 #include <random>
@@ -56,7 +57,23 @@ public:
     /// Advance all agents by dt. Calls Agent::update() on each (scripted
     /// path-following). Policy-driven agents should NOT be tick()'d —
     /// call applyAction() per agent from your own loop.
+    /// Also advances projectiles (movement + collision + expiry).
     void tick(float dt);
+
+    // --- Projectiles ---
+
+    /// Add a projectile to the world. The stored copy has its `id` assigned
+    /// from a monotonic counter and the assigned id is returned.
+    int spawnProjectile(const Projectile& proto);
+
+    /// Advance all live projectiles by dt (called automatically by tick(),
+    /// exposed for callers that manage their own step order).
+    void stepProjectiles(float dt);
+
+    const std::vector<Projectile>& projectiles() const { return projectiles_; }
+
+    /// Remove all dead (!alive) projectiles. Called automatically by tick().
+    void cullProjectiles();
 
     const std::vector<Agent*>& agents() const { return agents_; }
     const std::vector<AABB>& obstacles() const { return obstacles_; }
@@ -150,6 +167,9 @@ private:
     std::unordered_map<int, AbilitySpec> abilities_;
 
     std::vector<DamageEvent> events_;
+
+    std::vector<Projectile> projectiles_;
+    int nextProjectileId_ = 1;
 
     std::mt19937_64 engine_{0xC0FFEEULL};
 };

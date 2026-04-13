@@ -1004,6 +1004,229 @@ TEST(reward_tracker_records_death) {
     CHECK(d.deaths == 1);
 }
 
+// ─── Projectiles / Simulation ───────────────────────────────────────────────
+
+TEST(projectile_skillshot_hits_enemy_on_line) {
+    World world;
+    Agent shooter, target;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.unit().hp = 100; target.unit().maxHp = 100;
+    target.unit().radius = 0.5f;
+    shooter.setPosition(0, 0);
+    target.setPosition(10, 0);
+    world.addAgent(&shooter);
+    world.addAgent(&target);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0;
+    p.x = 0; p.z = 0;
+    p.vx = 20.0f; p.vz = 0; p.speed = 20.0f;
+    p.damage = 40.0f;
+    p.remainingLife = 2.0f;
+    world.spawnProjectile(p);
+
+    // Step until it should have travelled ~10 units.
+    for (int i = 0; i < 60; i++) world.tick(1.0f / 60.0f);
+
+    CHECK_NEAR(target.unit().hp, 60.0f, 1e-3f);
+    CHECK(world.projectiles().empty()); // culled on hit
+}
+
+TEST(projectile_skillshot_misses_returns_no_damage) {
+    World world;
+    Agent shooter, target;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.unit().hp = 100; target.unit().maxHp = 100;
+    shooter.setPosition(0, 0);
+    target.setPosition(0, 10); // off to the side (different axis)
+    world.addAgent(&shooter);
+    world.addAgent(&target);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0;
+    p.vx = 20; p.vz = 0; p.speed = 20;
+    p.damage = 40;
+    p.remainingLife = 0.5f;
+    world.spawnProjectile(p);
+
+    for (int i = 0; i < 60; i++) world.tick(1.0f / 60.0f);
+
+    CHECK_NEAR(target.unit().hp, 100.0f, 1e-3f);
+    CHECK(world.projectiles().empty()); // expired
+}
+
+TEST(projectile_ignores_same_team) {
+    World world;
+    Agent shooter, ally;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    ally.unit().id = 2; ally.unit().teamId = 0;
+    ally.unit().hp = 100; ally.unit().maxHp = 100;
+    shooter.setPosition(0, 0);
+    ally.setPosition(5, 0);
+    world.addAgent(&shooter);
+    world.addAgent(&ally);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0;
+    p.vx = 20; p.vz = 0; p.speed = 20;
+    p.damage = 40; p.remainingLife = 1.0f;
+    world.spawnProjectile(p);
+
+    for (int i = 0; i < 60; i++) world.tick(1.0f / 60.0f);
+    CHECK_NEAR(ally.unit().hp, 100.0f, 1e-3f);
+}
+
+TEST(projectile_homing_tracks_moving_target) {
+    World world;
+    Agent shooter, target;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.unit().hp = 100; target.unit().maxHp = 100;
+    target.unit().radius = 0.5f;
+    shooter.setPosition(0, 0);
+    target.setPosition(10, 0);
+    world.addAgent(&shooter);
+    world.addAgent(&target);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0;
+    p.x = 0; p.z = 0;
+    // Initial velocity pointed wrong direction; homing should correct.
+    p.vx = 0; p.vz = 20; p.speed = 20;
+    p.targetId = 2;
+    p.damage = 30;
+    p.remainingLife = 5.0f;
+    world.spawnProjectile(p);
+
+    // Move the target across the step loop to exercise tracking.
+    for (int i = 0; i < 120; i++) {
+        target.setPosition(10.0f + i * 0.05f, 0.0f);
+        world.tick(1.0f / 60.0f);
+        if (!target.unit().alive() || world.projectiles().empty()) break;
+    }
+    CHECK(target.unit().hp < 100.0f); // got hit
+}
+
+TEST(projectile_emits_damage_event) {
+    World world;
+    Agent s, t;
+    s.unit().id = 1; s.unit().teamId = 0;
+    t.unit().id = 2; t.unit().teamId = 1; t.unit().hp = 100; t.unit().maxHp = 100;
+    s.setPosition(0, 0); t.setPosition(5, 0);
+    world.addAgent(&s); world.addAgent(&t);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0; p.vx = 20; p.vz = 0; p.speed = 20;
+    p.damage = 25; p.kind = DamageKind::Magical; p.remainingLife = 1.0f;
+    world.spawnProjectile(p);
+
+    for (int i = 0; i < 60; i++) world.tick(1.0f / 60.0f);
+
+    CHECK(world.events().size() == 1);
+    CHECK(world.events()[0].attackerId == 1);
+    CHECK(world.events()[0].targetId == 2);
+    CHECK(world.events()[0].kind == DamageKind::Magical);
+}
+
+TEST(simulation_runs_policy_per_tick) {
+    World world;
+    Agent a;
+    a.unit().id = 1; a.unit().teamId = 0;
+    a.unit().moveSpeed = 10.0f;
+    a.setPosition(0, 0);
+    world.addAgent(&a);
+
+    Simulation sim(world);
+    int calls = 0;
+    sim.addPolicy(1, [&](Agent& self, const World&) {
+        calls++;
+        AgentAction act;
+        act.moveZ = -1.0f; // forward
+        (void)self;
+        return act;
+    });
+
+    sim.runSteps(1.0f / 60.0f, 30);
+    CHECK(calls == 30);
+    CHECK(sim.steps() == 30);
+    CHECK_NEAR(sim.elapsed(), 0.5f, 1e-3f);
+    CHECK(a.z() < -1.0f); // moved forward
+}
+
+TEST(simulation_scripted_and_policy_agents_coexist) {
+    NavGrid grid(-20, -20, 20, 20, 0.5f);
+    World world;
+
+    Agent policy_agent, scripted_agent;
+    policy_agent.unit().id = 1; policy_agent.unit().teamId = 0;
+    policy_agent.unit().moveSpeed = 6.0f;
+    policy_agent.setPosition(0, 0);
+
+    scripted_agent.unit().id = 2; scripted_agent.unit().teamId = 0;
+    scripted_agent.setNavGrid(&grid);
+    scripted_agent.setPosition(5, 5);
+    scripted_agent.setSpeed(6.0f);
+    scripted_agent.setTarget(10, 5);
+
+    world.addAgent(&policy_agent);
+    world.addAgent(&scripted_agent);
+
+    Simulation sim(world);
+    sim.addPolicy(1, [](Agent&, const World&) {
+        AgentAction act; act.moveZ = -1.0f; return act;
+    });
+
+    sim.runSteps(1.0f / 60.0f, 120);
+
+    CHECK(policy_agent.z() < -1.0f);        // policy moved it
+    CHECK(scripted_agent.x() > 6.0f);       // scripted moved toward target
+}
+
+TEST(simulation_dead_agent_skipped_but_cooldowns_tick) {
+    World world;
+    Agent a;
+    a.unit().id = 1; a.unit().hp = 0; a.unit().maxHp = 100;
+    a.unit().attackCooldown = 1.0f;
+    world.addAgent(&a);
+
+    Simulation sim(world);
+    int calls = 0;
+    sim.addPolicy(1, [&](Agent&, const World&) { calls++; return AgentAction{}; });
+
+    sim.runSteps(0.5f, 1);
+    CHECK(calls == 0); // dead → policy not invoked
+    CHECK_NEAR(a.unit().attackCooldown, 0.5f, 1e-4f);
+}
+
+TEST(simulation_deterministic_with_seed) {
+    // Two sims from the same seed produce identical states after N steps.
+    auto runOnce = [](uint64_t seed) {
+        World world;
+        world.seed(seed);
+        Agent a;
+        a.unit().id = 1; a.unit().moveSpeed = 6.0f;
+        a.setPosition(0, 0);
+        world.addAgent(&a);
+        Simulation sim(world);
+        sim.addPolicy(1, [](Agent& self, const World& w) {
+            AgentAction act;
+            // policy uses the world's rng to choose a direction
+            float r = const_cast<World&>(w).randFloat01();
+            act.moveX = (r < 0.5f) ? -1.0f : 1.0f;
+            (void)self;
+            return act;
+        });
+        sim.runSteps(1.0f / 60.0f, 50);
+        return std::pair<float,float>{a.x(), a.z()};
+    };
+    auto r1 = runOnce(777);
+    auto r2 = runOnce(777);
+    CHECK(r1.first == r2.first);
+    CHECK(r1.second == r2.second);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
