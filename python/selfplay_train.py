@@ -64,6 +64,11 @@ RECORD_DIR       = "replays_selfplay"   # None to disable
 RECORD_EVERY     = 25                    # record every Nth update (env 0 only)
 LOG_EVERY        = 1
 
+CHECKPOINT_DIR   = "checkpoints"         # None to disable checkpointing
+SAVE_EVERY       = 25                    # save every N updates + on wall-budget exit
+RESUME_FROM      = None                  # path to a .pt file, or "auto" to resume
+                                          # from checkpoints/latest.pt if present
+
 
 # ─── Policy ─────────────────────────────────────────────────────────────────
 
@@ -208,6 +213,104 @@ class OpponentPool:
 
     def sample(self, n: int, rng: np.random.Generator) -> np.ndarray:
         return rng.integers(0, len(self.entries), size=n)
+
+
+# ─── Checkpointing ──────────────────────────────────────────────────────────
+
+
+CHECKPOINT_VERSION = 1
+
+
+def policy_arch() -> dict:
+    """Snapshot of architectural dims — must match for a checkpoint to load
+    against the current code. Changing any of these invalidates old ckpts."""
+    return {
+        "obs_dim":     OBS_DIM,
+        "hidden":      HIDDEN,
+        "attack_dim":  ATTACK_DIM,
+        "ability_dim": ABILITY_DIM,
+    }
+
+
+def save_checkpoint(path: str, policy: Policy, optimizer: optim.Optimizer,
+                     pool: "OpponentPool", learner_elo: float,
+                     update: int, wins: int, losses: int, draws: int,
+                     episodes_done: int) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    blob = {
+        "version":               CHECKPOINT_VERSION,
+        "arch":                  policy_arch(),
+        "policy_state_dict":     policy.state_dict(),
+        "optimizer_state_dict":  optimizer.state_dict(),
+        "pool": [
+            {
+                "id":          e["id"],
+                "elo":         e["elo"],
+                "games":       e["games"],
+                "state_dict":  e["net"].state_dict(),
+            }
+            for e in pool.entries
+        ],
+        "pool_next_id":  pool._next_id,
+        "training": {
+            "update":        update,
+            "learner_elo":   learner_elo,
+            "wins":          wins,
+            "losses":        losses,
+            "draws":         draws,
+            "episodes_done": episodes_done,
+        },
+    }
+    # Write atomically — save to .tmp then rename so a crash mid-save
+    # doesn't corrupt the existing checkpoint.
+    tmp = path + ".tmp"
+    torch.save(blob, tmp)
+    if os.path.exists(path):
+        os.replace(tmp, path)
+    else:
+        os.rename(tmp, path)
+
+
+def load_checkpoint(path: str, device: str) -> dict:
+    """Load a checkpoint blob. Validates arch matches current code."""
+    # weights_only=False required because we store python dicts / lists of
+    # state_dicts alongside the tensors.
+    blob = torch.load(path, map_location=device, weights_only=False)
+    if blob.get("version") != CHECKPOINT_VERSION:
+        raise RuntimeError(
+            f"checkpoint version mismatch ({blob.get('version')} vs "
+            f"{CHECKPOINT_VERSION}) — architecture may have changed"
+        )
+    want = policy_arch()
+    got = blob.get("arch", {})
+    if got != want:
+        raise RuntimeError(
+            f"checkpoint arch mismatch: stored {got} vs current {want}"
+        )
+    return blob
+
+
+def restore_policy_from_blob(blob: dict, device: str) -> Policy:
+    p = Policy().to(device)
+    p.load_state_dict(blob["policy_state_dict"])
+    return p
+
+
+def restore_pool_from_blob(blob: dict, device: str) -> "OpponentPool":
+    pool = OpponentPool(MAX_POOL, device)
+    for entry in blob["pool"]:
+        net = Policy().to(device).eval()
+        net.load_state_dict(entry["state_dict"])
+        for p in net.parameters():
+            p.requires_grad_(False)
+        pool.entries.append({
+            "id":    entry["id"],
+            "net":   net,
+            "elo":   entry["elo"],
+            "games": entry["games"],
+        })
+    pool._next_id = blob["pool_next_id"]
+    return pool
 
 
 def expected_score(rating_a: float, rating_b: float) -> float:
@@ -361,8 +464,30 @@ def main():
     policy = Policy().to(DEVICE)
     optimizer = optim.Adam(policy.parameters(), lr=LR)
     pool = OpponentPool(MAX_POOL, DEVICE)
-    pool.add(policy, ELO_INIT)
     learner_elo = ELO_INIT
+    start_update = 0
+    wins = losses_ = draws = episodes_done = 0
+
+    # Resume from checkpoint if requested.
+    resume_path = RESUME_FROM
+    if resume_path == "auto" and CHECKPOINT_DIR:
+        candidate = os.path.join(CHECKPOINT_DIR, "latest.pt")
+        resume_path = candidate if os.path.exists(candidate) else None
+    if resume_path:
+        print(f"resuming from {resume_path}")
+        blob = load_checkpoint(resume_path, DEVICE)
+        policy.load_state_dict(blob["policy_state_dict"])
+        optimizer.load_state_dict(blob["optimizer_state_dict"])
+        pool = restore_pool_from_blob(blob, DEVICE)
+        tr = blob["training"]
+        learner_elo  = tr["learner_elo"]
+        start_update = tr["update"]
+        wins         = tr["wins"]
+        losses_      = tr["losses"]
+        draws        = tr["draws"]
+        episodes_done = tr["episodes_done"]
+    else:
+        pool.add(policy, ELO_INIT)
 
     # Per-env opponent assignment (resampled when an env's episode ends).
     opp_idx = pool.sample(NUM_ENVS, rng).astype(np.int64)
@@ -379,15 +504,16 @@ def main():
     reward_buf   = torch.zeros(ROLLOUT_LEN, NUM_ENVS, device=DEVICE)
     done_buf     = torch.zeros(ROLLOUT_LEN, NUM_ENVS, device=DEVICE)
 
-    # Episode counters for logging / ELO bookkeeping.
-    episodes_done   = 0
-    wins, losses_, draws = 0, 0, 0
+    # Episode counters are already initialized above (zero or restored from
+    # a checkpoint). Don't reset them here.
 
     if RECORD_DIR:
         os.makedirs(RECORD_DIR, exist_ok=True)
+    if CHECKPOINT_DIR:
+        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     t0 = time.time()
-    upd = 0
+    upd = start_update
     while True:
         upd += 1
         if WALL_BUDGET_SEC is not None:
@@ -514,6 +640,13 @@ def main():
             new_id = pool.add(policy, learner_elo)
             print(f"  >> snapshot id={new_id} (pool size = {len(pool)})")
 
+        if CHECKPOINT_DIR and upd % SAVE_EVERY == 0:
+            save_checkpoint(
+                os.path.join(CHECKPOINT_DIR, "latest.pt"),
+                policy, optimizer, pool, learner_elo,
+                upd, wins, losses_, draws, episodes_done,
+            )
+
         if upd % LOG_EVERY == 0:
             elapsed = time.time() - t0
             sps = upd * NUM_ENVS * ROLLOUT_LEN / elapsed
@@ -529,6 +662,15 @@ def main():
                   f"wr={wr:.2f} dec_wr={dwr:.2f}  "
                   f"sps={sps:6.0f}  "
                   f"pool=[{pool_summary}]")
+
+    # Final save on exit so the wall-budget run is always resumable.
+    if CHECKPOINT_DIR:
+        save_checkpoint(
+            os.path.join(CHECKPOINT_DIR, "latest.pt"),
+            policy, optimizer, pool, learner_elo,
+            upd - 1, wins, losses_, draws, episodes_done,
+        )
+        print(f"checkpoint saved: {CHECKPOINT_DIR}/latest.pt")
 
     print(f"done. learner_elo={learner_elo:.1f}  "
           f"W/L/D = {wins}/{losses_}/{draws}")

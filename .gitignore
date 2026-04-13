@@ -15,3 +15,8 @@ python/__pycache__/
 *.bgar
 replays/
 replays_selfplay/
+replays_checkpoint/
+
+# Training checkpoints
+checkpoints/
+*.pt
