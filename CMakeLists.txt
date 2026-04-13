@@ -25,6 +25,9 @@ add_library(brogameagent STATIC
     src/action_mask.cpp
     src/reward.cpp
     src/simulation.cpp
+    src/recorder.cpp
+    src/replay_reader.cpp
+    src/vec_simulation.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 
@@ -98,6 +101,13 @@ if(BROGAMEAGENT_PYTHON)
         ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/python_archive"
         ARCHIVE_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}/python_archive"
     )
+endif()
+
+# --- CLI tools ---
+option(BROGAMEAGENT_TOOLS "Build brogameagent CLI tools" ${PROJECT_IS_TOP_LEVEL})
+if(BROGAMEAGENT_TOOLS)
+    add_executable(replay_query tools/replay_query.cpp)
+    target_link_libraries(replay_query PRIVATE brogameagent)
 endif()
 
 # Tests

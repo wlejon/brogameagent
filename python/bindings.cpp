@@ -365,4 +365,218 @@ PYBIND11_MODULE(brogameagent, m) {
         .def_readonly("aim", &LeadAimResult::aim)
         .def_readonly("valid", &LeadAimResult::valid)
         .def_readonly("time_to_hit", &LeadAimResult::timeToHit);
+
+    // --- Recorder ---
+
+    py::class_<Recorder>(m, "Recorder")
+        .def(py::init<>())
+        .def("open", &Recorder::open,
+             py::arg("path"), py::arg("episode_id"), py::arg("seed"), py::arg("dt"))
+        .def("is_open", &Recorder::isOpen)
+        .def("write_roster", &Recorder::writeRoster)
+        .def("record_frame", &Recorder::recordFrame,
+             py::arg("step_idx"), py::arg("elapsed"), py::arg("world"))
+        .def("close", &Recorder::close)
+        .def_property_readonly("frame_count", &Recorder::frameCount);
+
+    // --- ReplayReader (for analysis in Python) ---
+
+    py::class_<replay::FileHeader>(m, "ReplayFileHeader")
+        .def_readonly("magic",      &replay::FileHeader::magic)
+        .def_readonly("version",    &replay::FileHeader::version)
+        .def_readonly("episode_id", &replay::FileHeader::episodeId)
+        .def_readonly("seed",       &replay::FileHeader::seed)
+        .def_readonly("dt",         &replay::FileHeader::dt);
+
+    py::class_<replay::AgentStatic>(m, "ReplayAgentStatic")
+        .def_readonly("id",           &replay::AgentStatic::id)
+        .def_readonly("team_id",      &replay::AgentStatic::teamId)
+        .def_readonly("max_hp",       &replay::AgentStatic::maxHp)
+        .def_readonly("max_mana",     &replay::AgentStatic::maxMana)
+        .def_readonly("radius",       &replay::AgentStatic::radius)
+        .def_readonly("attack_range", &replay::AgentStatic::attackRange);
+
+    py::class_<replay::FrameHeader>(m, "ReplayFrameHeader")
+        .def_readonly("step_idx",    &replay::FrameHeader::stepIdx)
+        .def_readonly("elapsed",     &replay::FrameHeader::elapsed)
+        .def_readonly("live_count",  &replay::FrameHeader::liveCount)
+        .def_readonly("proj_count",  &replay::FrameHeader::projCount)
+        .def_readonly("event_count", &replay::FrameHeader::eventCount);
+
+    py::class_<replay::AgentState>(m, "ReplayAgentState")
+        .def_readonly("id",     &replay::AgentState::id)
+        .def_readonly("x",      &replay::AgentState::x)
+        .def_readonly("z",      &replay::AgentState::z)
+        .def_readonly("vx",     &replay::AgentState::vx)
+        .def_readonly("vz",     &replay::AgentState::vz)
+        .def_readonly("yaw",    &replay::AgentState::yaw)
+        .def_readonly("aim_yaw",&replay::AgentState::aimYaw)
+        .def_readonly("hp",     &replay::AgentState::hp)
+        .def_readonly("mana",   &replay::AgentState::mana)
+        .def_readonly("attack_cooldown", &replay::AgentState::attackCooldown)
+        .def_property_readonly("alive",
+            [](const replay::AgentState& s) {
+                return (s.flags & replay::AGENT_FLAG_ALIVE) != 0;
+            });
+
+    py::class_<replay::ProjectileState>(m, "ReplayProjectileState")
+        .def_readonly("id",       &replay::ProjectileState::id)
+        .def_readonly("owner_id", &replay::ProjectileState::ownerId)
+        .def_readonly("team_id",  &replay::ProjectileState::teamId)
+        .def_readonly("x",        &replay::ProjectileState::x)
+        .def_readonly("z",        &replay::ProjectileState::z)
+        .def_readonly("vx",       &replay::ProjectileState::vx)
+        .def_readonly("vz",       &replay::ProjectileState::vz)
+        .def_readonly("mode",     &replay::ProjectileState::mode)
+        .def_readonly("alive",    &replay::ProjectileState::alive);
+
+    py::class_<replay::DamageEventRec>(m, "ReplayDamageEvent")
+        .def_readonly("attacker_id", &replay::DamageEventRec::attackerId)
+        .def_readonly("target_id",   &replay::DamageEventRec::targetId)
+        .def_readonly("amount",      &replay::DamageEventRec::amount)
+        .def_readonly("kind",        &replay::DamageEventRec::kind)
+        .def_readonly("killed",      &replay::DamageEventRec::killed);
+
+    py::class_<ReplayReader::Frame>(m, "ReplayFrame")
+        .def_readonly("header",      &ReplayReader::Frame::header)
+        .def_readonly("agents",      &ReplayReader::Frame::agents)
+        .def_readonly("projectiles", &ReplayReader::Frame::projectiles)
+        .def_readonly("events",      &ReplayReader::Frame::events);
+
+    py::class_<ReplayReader::TrajectoryPoint>(m, "ReplayTrajectoryPoint")
+        .def_readonly("step_idx", &ReplayReader::TrajectoryPoint::stepIdx)
+        .def_readonly("elapsed",  &ReplayReader::TrajectoryPoint::elapsed)
+        .def_readonly("x",        &ReplayReader::TrajectoryPoint::x)
+        .def_readonly("z",        &ReplayReader::TrajectoryPoint::z)
+        .def_readonly("hp",       &ReplayReader::TrajectoryPoint::hp)
+        .def_readonly("alive",    &ReplayReader::TrajectoryPoint::alive);
+
+    py::class_<ReplayReader::DamageSummary>(m, "ReplayDamageSummary")
+        .def_readonly("attacker_id",  &ReplayReader::DamageSummary::attackerId)
+        .def_readonly("target_id",    &ReplayReader::DamageSummary::targetId)
+        .def_readonly("total_damage", &ReplayReader::DamageSummary::totalDamage)
+        .def_readonly("hits",         &ReplayReader::DamageSummary::hits)
+        .def_readonly("kills",        &ReplayReader::DamageSummary::kills);
+
+    // --- VecSimulation ---
+
+    py::class_<VecSimulation::Config>(m, "VecSimConfig")
+        .def(py::init<>())
+        .def_readwrite("num_envs",              &VecSimulation::Config::numEnvs)
+        .def_readwrite("arena_half_size",       &VecSimulation::Config::arenaHalfSize)
+        .def_readwrite("min_spawn_dist",        &VecSimulation::Config::minSpawnDist)
+        .def_readwrite("max_spawn_dist",        &VecSimulation::Config::maxSpawnDist)
+        .def_readwrite("dt",                    &VecSimulation::Config::dt)
+        .def_readwrite("max_steps_per_episode", &VecSimulation::Config::maxStepsPerEpisode)
+        .def_readwrite("hp",                    &VecSimulation::Config::hp)
+        .def_readwrite("damage",                &VecSimulation::Config::damage)
+        .def_readwrite("attack_range",          &VecSimulation::Config::attackRange)
+        .def_readwrite("attacks_per_sec",       &VecSimulation::Config::attacksPerSec)
+        .def_readwrite("move_speed",            &VecSimulation::Config::moveSpeed)
+        .def_readwrite("max_accel",             &VecSimulation::Config::maxAccel)
+        .def_readwrite("max_turn_rate",         &VecSimulation::Config::maxTurnRate)
+        .def_readwrite("radius",                &VecSimulation::Config::radius)
+        .def_readwrite("reward_damage_dealt",     &VecSimulation::Config::rewardDamageDealt)
+        .def_readwrite("reward_damage_taken_mul", &VecSimulation::Config::rewardDamageTakenMul)
+        .def_readwrite("reward_kill",             &VecSimulation::Config::rewardKill)
+        .def_readwrite("reward_death",            &VecSimulation::Config::rewardDeath)
+        .def_readwrite("reward_step",             &VecSimulation::Config::rewardStep)
+        .def_readwrite("reward_timeout",          &VecSimulation::Config::rewardTimeout);
+
+    py::class_<VecSimulation>(m, "VecSimulation")
+        .def(py::init<const VecSimulation::Config&>())
+        .def_property_readonly("num_envs", &VecSimulation::numEnvs)
+        .def_property_readonly("config",   &VecSimulation::config,
+            py::return_value_policy::reference_internal)
+        .def_readonly_static("HERO_ID",     &VecSimulation::HERO_ID)
+        .def_readonly_static("OPPONENT_ID", &VecSimulation::OPPONENT_ID)
+
+        .def("seed_and_reset", &VecSimulation::seedAndReset, py::arg("base_seed"))
+        .def("reset_done",     &VecSimulation::resetDone)
+        .def("reset_env",      &VecSimulation::resetEnv, py::arg("env_idx"))
+
+        .def("observe", [](const VecSimulation& v, int agentId) {
+            int N = v.numEnvs();
+            py::array_t<float> out({N, observation::TOTAL});
+            v.observe(agentId, out.mutable_data());
+            return out;
+        }, py::arg("agent_id"))
+
+        .def("observe_into", [](const VecSimulation& v, int agentId,
+                                py::array_t<float, py::array::c_style | py::array::forcecast> out) {
+            if (out.ndim() != 2 || out.shape(0) != v.numEnvs()
+                || out.shape(1) != observation::TOTAL) {
+                throw py::value_error("observe_into: out must be (num_envs, OBS_TOTAL)");
+            }
+            v.observe(agentId, out.mutable_data());
+        }, py::arg("agent_id"), py::arg("out"))
+
+        .def("action_mask", [](const VecSimulation& v, int agentId) {
+            int N = v.numEnvs();
+            py::array_t<float> mask({N, action_mask::TOTAL});
+            py::array_t<int>   ids({N, action_mask::N_ENEMY_SLOTS});
+            v.actionMask(agentId, mask.mutable_data(), ids.mutable_data());
+            return py::make_tuple(mask, ids);
+        }, py::arg("agent_id"))
+
+        .def("apply_actions", [](VecSimulation& v, int agentId,
+                                 const std::vector<AgentAction>& actions) {
+            if (static_cast<int>(actions.size()) != v.numEnvs()) {
+                throw py::value_error("apply_actions: list length must equal num_envs");
+            }
+            v.applyActions(agentId, actions.data());
+        }, py::arg("agent_id"), py::arg("actions"))
+
+        .def("step", &VecSimulation::step)
+
+        .def("dones", [](const VecSimulation& v) {
+            int N = v.numEnvs();
+            py::array_t<int> done({N});
+            py::array_t<int> winner({N});
+            v.dones(done.mutable_data(), winner.mutable_data());
+            return py::make_tuple(done, winner);
+        })
+
+        .def("rewards", [](VecSimulation& v) {
+            int N = v.numEnvs();
+            py::array_t<float> rh({N});
+            py::array_t<float> ro({N});
+            v.rewards(rh.mutable_data(), ro.mutable_data());
+            return py::make_tuple(rh, ro);
+        })
+
+        .def("step_counts", [](const VecSimulation& v) {
+            int N = v.numEnvs();
+            py::array_t<int> out({N});
+            v.stepCounts(out.mutable_data());
+            return out;
+        })
+
+        .def("episode_counts", [](const VecSimulation& v) {
+            int N = v.numEnvs();
+            py::array_t<int> out({N});
+            v.episodeCounts(out.mutable_data());
+            return out;
+        })
+
+        .def("world", static_cast<World& (VecSimulation::*)(int)>(&VecSimulation::world),
+             py::arg("env_idx"), py::return_value_policy::reference_internal)
+        .def("hero",     &VecSimulation::hero,     py::arg("env_idx"),
+             py::return_value_policy::reference_internal)
+        .def("opponent", &VecSimulation::opponent, py::arg("env_idx"),
+             py::return_value_policy::reference_internal);
+
+    py::class_<ReplayReader>(m, "ReplayReader")
+        .def(py::init<>())
+        .def("open", &ReplayReader::open, py::arg("path"))
+        .def_property_readonly("error_message", &ReplayReader::errorMessage)
+        .def_property_readonly("header", &ReplayReader::header,
+            py::return_value_policy::reference_internal)
+        .def_property_readonly("roster", &ReplayReader::roster,
+            py::return_value_policy::reference_internal)
+        .def_property_readonly("frame_count", &ReplayReader::frameCount)
+        .def("frame", &ReplayReader::frame, py::arg("index"))
+        .def("find_by_step", &ReplayReader::findByStep, py::arg("step_idx"))
+        .def("trajectory", &ReplayReader::trajectory, py::arg("agent_id"))
+        .def("damage_summary", &ReplayReader::damageSummary);
 }

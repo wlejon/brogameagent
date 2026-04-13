@@ -37,7 +37,6 @@ public:
 private:
     int   agentId_     = 0;
     bool  wasAlive_    = true;
-    float lastHp_      = 0.0f;
     float lastX_       = 0.0f;
     float lastZ_       = 0.0f;
     int   lastEventIdx_ = 0; // index into World::events() already accounted for

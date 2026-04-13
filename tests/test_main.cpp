@@ -1200,6 +1200,23 @@ TEST(simulation_dead_agent_skipped_but_cooldowns_tick) {
     CHECK_NEAR(a.unit().attackCooldown, 0.5f, 1e-4f);
 }
 
+TEST(simulation_ticks_policy_agent_cooldowns) {
+    // Regression: Simulation::step must tick the policy agent's cooldowns,
+    // otherwise an attack fire sets attackCooldown and it never decrements,
+    // locking the agent out of subsequent attacks.
+    World world;
+    Agent a;
+    a.unit().id = 1; a.unit().hp = 100; a.unit().maxHp = 100;
+    a.unit().attackCooldown = 1.0f;
+    world.addAgent(&a);
+
+    Simulation sim(world);
+    sim.addPolicy(1, [](Agent&, const World&) { return AgentAction{}; });
+
+    sim.runSteps(0.25f, 2);
+    CHECK_NEAR(a.unit().attackCooldown, 0.5f, 1e-4f);
+}
+
 TEST(simulation_deterministic_with_seed) {
     // Two sims from the same seed produce identical states after N steps.
     auto runOnce = [](uint64_t seed) {
@@ -1464,6 +1481,420 @@ TEST(snapshot_restore_in_simulation_reproduces_rollout) {
     sim.runSteps(1.0f / 60.0f, 30);
     CHECK(a.x() == x1);
     CHECK(a.z() == z1);
+}
+
+// ─── Recorder / ReplayReader ────────────────────────────────────────────────
+
+#include <cstdio>
+#include <string>
+
+static std::string tempReplayPath(const char* tag) {
+    // Stable per-tag path in the working directory — tests are serial.
+    std::string p = "test_replay_";
+    p += tag;
+    p += ".bgar";
+    return p;
+}
+
+TEST(replay_roundtrip_header_roster_and_frame) {
+    World world;
+    world.seed(7);
+    Agent a, b;
+    a.unit().id = 1; a.unit().teamId = 0; a.unit().hp = 100; a.unit().maxHp = 100;
+    a.unit().attackRange = 3.0f; a.unit().radius = 0.4f;
+    a.setPosition(1.0f, 2.0f);
+
+    b.unit().id = 2; b.unit().teamId = 1; b.unit().hp = 50; b.unit().maxHp = 50;
+    b.unit().radius = 0.5f;
+    b.setPosition(-1.0f, 0.0f);
+
+    world.addAgent(&a);
+    world.addAgent(&b);
+
+    std::string path = tempReplayPath("roundtrip");
+    {
+        Recorder rec;
+        CHECK(rec.open(path, /*episodeId*/ 42, /*seed*/ 7, /*dt*/ 0.0333f));
+        rec.writeRoster(world.agents());
+        rec.recordFrame(0, 0.0f, world);
+        a.setPosition(1.5f, 2.5f);
+        rec.recordFrame(1, 0.0333f, world);
+        CHECK(rec.close());
+    }
+
+    ReplayReader r;
+    CHECK(r.open(path));
+    CHECK(r.header().magic == replay::MAGIC);
+    CHECK(r.header().version == replay::VERSION);
+    CHECK(r.header().episodeId == 42);
+    CHECK(r.header().seed == 7);
+    CHECK_NEAR(r.header().dt, 0.0333f, 1e-6f);
+    CHECK(r.roster().size() == 2);
+    CHECK(r.roster()[0].id == 1);
+    CHECK_NEAR(r.roster()[0].maxHp, 100.0f, 1e-5f);
+    CHECK(r.frameCount() == 2);
+
+    auto f0 = r.frame(0);
+    CHECK(f0.header.stepIdx == 0);
+    CHECK(f0.agents.size() == 2);
+    CHECK(f0.agents[0].id == 1);
+    CHECK_NEAR(f0.agents[0].x, 1.0f, 1e-5f);
+    CHECK_NEAR(f0.agents[0].z, 2.0f, 1e-5f);
+
+    auto f1 = r.frame(1);
+    CHECK(f1.header.stepIdx == 1);
+    CHECK_NEAR(f1.agents[0].x, 1.5f, 1e-5f);
+
+    std::remove(path.c_str());
+}
+
+TEST(replay_records_damage_events_per_frame) {
+    World world;
+    Agent atk, tgt;
+    atk.unit().id = 10; atk.unit().teamId = 0;
+    atk.unit().damage = 20; atk.unit().attackRange = 10; atk.unit().attacksPerSec = 1;
+    atk.setPosition(0, 0);
+    tgt.unit().id = 11; tgt.unit().teamId = 1;
+    tgt.unit().hp = 100; tgt.unit().maxHp = 100;
+    tgt.setPosition(2, 0);
+    world.addAgent(&atk);
+    world.addAgent(&tgt);
+
+    std::string path = tempReplayPath("events");
+    {
+        Recorder rec;
+        CHECK(rec.open(path, 0, 0, 0.1f));
+        rec.writeRoster(world.agents());
+
+        // Frame 0: no events.
+        rec.recordFrame(0, 0.0f, world);
+
+        // Frame 1: one attack landed.
+        world.resolveAttack(atk, 11);
+        rec.recordFrame(1, 0.1f, world);
+
+        // Frame 2: attack on cooldown, no new events (world still has old event).
+        world.resolveAttack(atk, 11);
+        rec.recordFrame(2, 0.2f, world);
+
+        rec.close();
+    }
+
+    ReplayReader r;
+    CHECK(r.open(path));
+    CHECK(r.frameCount() == 3);
+    CHECK(r.frame(0).events.size() == 0);
+    CHECK(r.frame(1).events.size() == 1);
+    CHECK(r.frame(2).events.size() == 0);   // delta slice, not cumulative
+    const auto& e = r.frame(1).events[0];
+    CHECK(e.attackerId == 10);
+    CHECK(e.targetId == 11);
+    CHECK_NEAR(e.amount, 20.0f, 1e-3f);
+
+    std::remove(path.c_str());
+}
+
+TEST(replay_records_projectiles) {
+    World world;
+    Agent shooter, target;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    shooter.setPosition(0, 0);
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.unit().hp = 100; target.unit().maxHp = 100;
+    target.setPosition(10, 0);
+    world.addAgent(&shooter);
+    world.addAgent(&target);
+
+    Projectile p{};
+    p.ownerId = 1; p.teamId = 0;
+    p.x = 0; p.z = 0;
+    p.vx = 20; p.vz = 0;
+    p.speed = 20; p.radius = 0.3f;
+    p.damage = 10; p.remainingLife = 5.0f;
+    p.mode = ProjectileMode::Single;
+    world.spawnProjectile(p);
+
+    std::string path = tempReplayPath("proj");
+    {
+        Recorder rec;
+        CHECK(rec.open(path, 0, 0, 0.1f));
+        rec.writeRoster(world.agents());
+        rec.recordFrame(0, 0.0f, world);   // pre-step: projectile exists
+        world.tick(0.1f);
+        rec.recordFrame(1, 0.1f, world);   // post-step
+        rec.close();
+    }
+
+    ReplayReader r;
+    CHECK(r.open(path));
+    CHECK(r.frame(0).projectiles.size() == 1);
+    const auto& pp = r.frame(0).projectiles[0];
+    CHECK(pp.ownerId == 1);
+    CHECK_NEAR(pp.vx, 20.0f, 1e-4f);
+    CHECK(pp.alive == 1);
+
+    std::remove(path.c_str());
+}
+
+TEST(replay_trajectory_and_damage_summary) {
+    World world;
+    Agent a, b;
+    a.unit().id = 1; a.unit().teamId = 0;
+    a.unit().damage = 15; a.unit().attackRange = 10; a.unit().attacksPerSec = 2;
+    a.setPosition(0, 0);
+    b.unit().id = 2; b.unit().teamId = 1;
+    b.unit().hp = 40; b.unit().maxHp = 40;
+    b.setPosition(1, 0);
+    world.addAgent(&a);
+    world.addAgent(&b);
+
+    std::string path = tempReplayPath("traj");
+    {
+        Recorder rec;
+        CHECK(rec.open(path, 0, 0, 0.5f));
+        rec.writeRoster(world.agents());
+        for (int i = 0; i < 5; i++) {
+            world.resolveAttack(a, 2);
+            rec.recordFrame(i, i * 0.5f, world);
+            a.setPosition(static_cast<float>(i + 1), 0.0f);
+            world.tick(0.5f); // tick cooldowns between shots
+        }
+        rec.close();
+    }
+
+    ReplayReader r;
+    CHECK(r.open(path));
+    auto traj = r.trajectory(1);
+    CHECK(traj.size() == 5);
+    CHECK_NEAR(traj[0].x, 0.0f, 1e-5f);
+    CHECK_NEAR(traj[4].x, 4.0f, 1e-5f);
+
+    auto dmg = r.damageSummary();
+    CHECK(dmg.size() >= 1);
+    const auto& row = dmg[0];
+    CHECK(row.attackerId == 1);
+    CHECK(row.targetId == 2);
+    // 40 / 15 = 3 hits to kill (15+15+10 after clamp); damage totals 40.
+    CHECK_NEAR(row.totalDamage, 40.0f, 1e-3f);
+    CHECK(row.kills == 1);
+
+    std::remove(path.c_str());
+}
+
+TEST(replay_rejects_bad_magic) {
+    std::string path = tempReplayPath("badmagic");
+    std::FILE* f = nullptr;
+#ifdef _MSC_VER
+    fopen_s(&f, path.c_str(), "wb");
+#else
+    f = std::fopen(path.c_str(), "wb");
+#endif
+    CHECK(f != nullptr);
+    uint32_t bad[4] = {0xdeadbeef, 0, 0, 0};
+    std::fwrite(bad, sizeof(bad), 1, f);
+    std::fclose(f);
+
+    ReplayReader r;
+    CHECK(!r.open(path));
+    CHECK(r.errorMessage().find("magic") != std::string::npos
+          || r.errorMessage().find("too small") != std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(replay_random_access_by_step) {
+    World world;
+    Agent a;
+    a.unit().id = 1;
+    a.setPosition(0, 0);
+    world.addAgent(&a);
+
+    std::string path = tempReplayPath("access");
+    {
+        Recorder rec;
+        rec.open(path, 0, 0, 0.1f);
+        rec.writeRoster(world.agents());
+        for (int i = 0; i < 10; i++) {
+            a.setPosition(static_cast<float>(i), 0.0f);
+            rec.recordFrame(i * 2, i * 0.1f, world); // odd steps absent
+        }
+        rec.close();
+    }
+
+    ReplayReader r;
+    CHECK(r.open(path));
+    CHECK(r.findByStep(6) == 3);         // step 6 is the 4th frame
+    CHECK(r.findByStep(7) == SIZE_MAX);  // odd step wasn't recorded
+
+    auto frame3 = r.frame(3);
+    CHECK(frame3.header.stepIdx == 6);
+    CHECK_NEAR(frame3.agents[0].x, 3.0f, 1e-5f);
+
+    std::remove(path.c_str());
+}
+
+// ─── VecSimulation ──────────────────────────────────────────────────────────
+
+TEST(vecsim_construct_and_observe) {
+    VecSimulation::Config cfg;
+    cfg.numEnvs = 8;
+    VecSimulation vec(cfg);
+    CHECK(vec.numEnvs() == 8);
+
+    vec.seedAndReset(42);
+
+    std::vector<float> hobs(8 * observation::TOTAL);
+    vec.observe(VecSimulation::HERO_ID, hobs.data());
+
+    // Each env should have non-zero self block (hp/maxHp == 1.0).
+    for (int e = 0; e < 8; e++) {
+        CHECK_NEAR(hobs[e * observation::TOTAL + 0], 1.0f, 1e-5f); // hp/maxHp
+    }
+}
+
+TEST(vecsim_deterministic_with_seed) {
+    VecSimulation::Config cfg;
+    cfg.numEnvs = 4;
+    cfg.maxStepsPerEpisode = 50;
+
+    auto runOnce = [&](uint64_t seed) {
+        VecSimulation v(cfg);
+        v.seedAndReset(seed);
+        std::vector<AgentAction> hAct(4), oAct(4);
+        for (int i = 0; i < 4; i++) {
+            hAct[i].moveZ = -1.0f;
+            oAct[i].moveZ =  1.0f;
+        }
+        for (int t = 0; t < 30; t++) {
+            v.applyActions(VecSimulation::HERO_ID,     hAct.data());
+            v.applyActions(VecSimulation::OPPONENT_ID, oAct.data());
+            v.step();
+        }
+        std::vector<float> rh(4), ro(4);
+        v.rewards(rh.data(), ro.data());
+        // Capture hero position of env 0 as a fingerprint.
+        return std::tuple<float,float,float>{
+            v.hero(0).x(), v.hero(0).z(), rh[0]
+        };
+    };
+    auto a = runOnce(123);
+    auto b = runOnce(123);
+    CHECK(std::get<0>(a) == std::get<0>(b));
+    CHECK(std::get<1>(a) == std::get<1>(b));
+    CHECK(std::get<2>(a) == std::get<2>(b));
+}
+
+TEST(vecsim_envs_are_independent) {
+    // Two envs should produce different hero spawn positions under the
+    // per-env seed offset. Sanity check that envs aren't accidentally sharing
+    // RNG state.
+    VecSimulation::Config cfg;
+    cfg.numEnvs = 2;
+    VecSimulation v(cfg);
+    v.seedAndReset(99);
+    bool xDiff = v.hero(0).x() != v.hero(1).x();
+    bool zDiff = v.hero(0).z() != v.hero(1).z();
+    CHECK(xDiff || zDiff);
+}
+
+TEST(vecsim_termination_on_kill_and_winner) {
+    VecSimulation::Config cfg;
+    cfg.numEnvs = 1;
+    cfg.maxStepsPerEpisode = 500;
+    cfg.minSpawnDist = 1.0f; cfg.maxSpawnDist = 1.5f; // close range
+    cfg.attackRange = 5.0f;
+    cfg.attacksPerSec = 5.0f;
+    cfg.damage = 1000.0f; // one-shot
+    cfg.hp = 100.0f;
+    VecSimulation v(cfg);
+    v.seedAndReset(1);
+
+    std::vector<AgentAction> hAct(1), oAct(1);
+    // Hero attacks opponent. Opponent does nothing.
+    hAct[0].attackTargetId = VecSimulation::OPPONENT_ID;
+    v.applyActions(VecSimulation::HERO_ID, hAct.data());
+    v.applyActions(VecSimulation::OPPONENT_ID, oAct.data());
+    v.step();
+
+    std::vector<int> done(1), winner(1);
+    v.dones(done.data(), winner.data());
+    CHECK(done[0] == 1);
+    CHECK(winner[0] == VecSimulation::HERO_ID);
+}
+
+TEST(vecsim_termination_on_timeout) {
+    VecSimulation::Config cfg;
+    cfg.numEnvs = 1;
+    cfg.maxStepsPerEpisode = 3;
+    cfg.damage = 0.0f;       // can't kill — guaranteed timeout
+    VecSimulation v(cfg);
+    v.seedAndReset(0);
+
+    std::vector<AgentAction> nop(1);
+    for (int t = 0; t < 4; t++) {
+        v.applyActions(VecSimulation::HERO_ID, nop.data());
+        v.applyActions(VecSimulation::OPPONENT_ID, nop.data());
+        v.step();
+    }
+    std::vector<int> done(1), winner(1);
+    v.dones(done.data(), winner.data());
+    CHECK(done[0] == 1);
+    CHECK(winner[0] == -1);
+}
+
+TEST(vecsim_reset_done_clears_flag_and_increments_episode) {
+    VecSimulation::Config cfg;
+    cfg.numEnvs = 1;
+    cfg.maxStepsPerEpisode = 2;
+    cfg.damage = 0.0f;
+    VecSimulation v(cfg);
+    v.seedAndReset(0);
+
+    std::vector<AgentAction> nop(1);
+    for (int t = 0; t < 3; t++) {
+        v.applyActions(VecSimulation::HERO_ID, nop.data());
+        v.applyActions(VecSimulation::OPPONENT_ID, nop.data());
+        v.step();
+    }
+    std::vector<int> ep(1), done(1), winner(1);
+    v.episodeCounts(ep.data());
+    CHECK(ep[0] == 0);
+
+    v.resetDone();
+    v.episodeCounts(ep.data());
+    CHECK(ep[0] == 1);
+    v.dones(done.data(), winner.data());
+    CHECK(done[0] == 0);
+}
+
+TEST(vecsim_reward_accumulates_then_drains) {
+    VecSimulation::Config cfg;
+    cfg.numEnvs = 1;
+    cfg.maxStepsPerEpisode = 100;
+    cfg.minSpawnDist = 1.0f; cfg.maxSpawnDist = 1.5f;
+    cfg.attackRange = 5.0f;
+    cfg.attacksPerSec = 1.0f;
+    cfg.damage = 10.0f;
+    cfg.hp = 100.0f;
+    cfg.rewardStep = 0.0f; cfg.rewardKill = 0.0f; cfg.rewardDeath = 0.0f;
+    cfg.rewardDamageDealt = 1.0f; cfg.rewardDamageTakenMul = 0.0f;
+    VecSimulation v(cfg);
+    v.seedAndReset(0);
+
+    std::vector<AgentAction> hAct(1), oAct(1);
+    hAct[0].attackTargetId = VecSimulation::OPPONENT_ID;
+
+    v.applyActions(VecSimulation::HERO_ID, hAct.data());
+    v.applyActions(VecSimulation::OPPONENT_ID, oAct.data());
+    v.step();
+
+    std::vector<float> rh(1), ro(1);
+    v.rewards(rh.data(), ro.data());
+    CHECK_NEAR(rh[0], 10.0f, 1e-3f);
+    CHECK_NEAR(ro[0], 0.0f, 1e-3f);
+
+    // Reward accumulator must drain to zero on read.
+    v.rewards(rh.data(), ro.data());
+    CHECK(rh[0] == 0.0f);
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────

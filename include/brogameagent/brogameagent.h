@@ -13,3 +13,6 @@
 #include "action_mask.h"
 #include "reward.h"
 #include "simulation.h"
+#include "recorder.h"
+#include "replay_reader.h"
+#include "vec_simulation.h"

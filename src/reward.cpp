@@ -10,7 +10,6 @@ namespace brogameagent {
 void RewardTracker::reset(const Agent& self, const World& world) {
     agentId_      = self.unit().id;
     wasAlive_     = self.unit().alive();
-    lastHp_       = self.unit().hp;
     lastX_        = self.x();
     lastZ_        = self.z();
     lastEventIdx_ = static_cast<int>(world.events().size());
@@ -38,7 +37,6 @@ RewardTracker::Delta RewardTracker::consume(const Agent& self, const World& worl
     bool alive = self.unit().alive();
     if (wasAlive_ && !alive) d.deaths = 1;
     wasAlive_ = alive;
-    lastHp_   = self.unit().hp;
 
     // Distance travelled.
     float dx = self.x() - lastX_;

@@ -45,6 +45,8 @@ LR              = 3e-4
 GAMMA           = 0.99
 SEED            = 1234
 LOG_EVERY       = 10
+RECORD_DIR      = "replays"          # None disables recording
+RECORD_EVERY    = 25                 # record every Nth episode
 
 
 # --- Environment ---
@@ -145,10 +147,18 @@ def sample_action(policy: Policy,
 # --- Rollout ---
 
 
-def run_episode(policy: Policy, rng: np.random.Generator, seed: int):
+def run_episode(policy: Policy, rng: np.random.Generator, seed: int,
+                record_path: str | None = None, episode_id: int = 0):
     world, hero, enemy = build_world(rng, seed)
     rt = bg.RewardTracker()
     rt.reset(hero, world)
+
+    recorder = None
+    if record_path is not None:
+        recorder = bg.Recorder()
+        if not recorder.open(record_path, episode_id, seed, DT):
+            raise RuntimeError(f"failed to open recorder at {record_path}")
+        recorder.write_roster(list(world.agents))
 
     log_probs = []
     rewards = []
@@ -182,12 +192,18 @@ def run_episode(policy: Policy, rng: np.random.Generator, seed: int):
         log_probs.append(logp)
         rewards.append(reward)
 
+        if recorder is not None:
+            recorder.record_frame(step, step * DT, world)
+
         if not enemy.unit.alive:
             info["killed"] = True
             info["steps"] = step + 1
             break
     else:
         info["steps"] = MAX_STEPS
+
+    if recorder is not None:
+        recorder.close()
 
     dx = hero.x - enemy.x
     dz = hero.z - enemy.z
@@ -232,9 +248,18 @@ def main():
                     k_enemies=bg.action_mask.N_ENEMY_SLOTS)
     optimizer = optim.Adam(policy.parameters(), lr=LR)
 
+    if RECORD_DIR:
+        os.makedirs(RECORD_DIR, exist_ok=True)
+
     kills_window = []
     for ep in range(1, EPISODES + 1):
-        log_probs, rewards, info = run_episode(policy, rng, seed=SEED + ep)
+        record_path = None
+        if RECORD_DIR and (ep == 1 or ep % RECORD_EVERY == 0):
+            record_path = os.path.join(RECORD_DIR, f"ep{ep:04d}.bgar")
+        log_probs, rewards, info = run_episode(
+            policy, rng, seed=SEED + ep,
+            record_path=record_path, episode_id=ep,
+        )
         loss = reinforce_update(optimizer, log_probs, rewards)
         kills_window.append(1 if info["killed"] else 0)
         if len(kills_window) > 50:
