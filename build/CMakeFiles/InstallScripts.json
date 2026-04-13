@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"D:/projects/brogameagent/build/cmake_install.cmake",
-		"D:/projects/brogameagent/build/tests/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
