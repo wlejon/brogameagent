@@ -546,6 +546,35 @@ PYBIND11_MODULE(brogameagent, m) {
             v.applyActions(agentId, actions.data());
         }, py::arg("agent_id"), py::arg("actions"))
 
+        // Vectorized path — avoids constructing N AgentAction Python objects
+        // per tick. Callers pass numpy arrays directly; aim yaw/pitch default
+        // to zero. Used by the self-play trainer to get ~3-4x throughput at
+        // large NUM_ENVS.
+        .def("apply_actions_raw", [](VecSimulation& v, int agentId,
+                py::array_t<float,   py::array::c_style | py::array::forcecast> move,
+                py::array_t<int32_t, py::array::c_style | py::array::forcecast> attack_target_id,
+                py::array_t<int32_t, py::array::c_style | py::array::forcecast> use_ability_id) {
+            int N = v.numEnvs();
+            if (move.ndim() != 2 || move.shape(0) != N || move.shape(1) != 2)
+                throw py::value_error("apply_actions_raw: move must be (num_envs, 2)");
+            if (attack_target_id.ndim() != 1 || attack_target_id.shape(0) != N)
+                throw py::value_error("apply_actions_raw: attack_target_id must be (num_envs,)");
+            if (use_ability_id.ndim() != 1 || use_ability_id.shape(0) != N)
+                throw py::value_error("apply_actions_raw: use_ability_id must be (num_envs,)");
+            std::vector<AgentAction> acts(static_cast<size_t>(N));
+            const float*   mv  = move.data();
+            const int32_t* atk = attack_target_id.data();
+            const int32_t* ab  = use_ability_id.data();
+            for (int i = 0; i < N; i++) {
+                acts[i].moveX          = mv[2 * i];
+                acts[i].moveZ          = mv[2 * i + 1];
+                acts[i].attackTargetId = atk[i];
+                acts[i].useAbilityId   = ab[i];
+            }
+            v.applyActions(agentId, acts.data());
+        }, py::arg("agent_id"), py::arg("move"),
+           py::arg("attack_target_id"), py::arg("use_ability_id"))
+
         .def("step", &VecSimulation::step)
 
         .def("dones", [](const VecSimulation& v) {

@@ -34,10 +34,10 @@ import brogameagent as bg
 
 # ─── Hyperparameters ────────────────────────────────────────────────────────
 
-NUM_ENVS         = 512
+NUM_ENVS         = 2048
 ROLLOUT_LEN      = 64
 PPO_EPOCHS       = 4
-MINIBATCH        = 4096
+MINIBATCH        = 8192
 LR               = 3e-4
 GAMMA            = 0.99
 GAE_LAMBDA       = 0.95
@@ -46,7 +46,7 @@ ENTROPY_COEF     = 0.01
 VALUE_COEF       = 0.5
 MAX_GRAD_NORM    = 0.5
 
-HIDDEN           = 128
+HIDDEN           = 256
 SIM_DT           = 0.016                # one sim tick = 16 ms
 ACTION_REPEAT    = 4                    # policy commits an action for 4 sim ticks (64 ms)
 MAX_STEPS_EP     = 600                  # in sim ticks (~9.6 s game time)
@@ -224,43 +224,52 @@ def update_elo(learner_elo: float, opp_elo: float, learner_score: float,
 # ─── Action conversion (numpy ↔ AgentAction list) ───────────────────────────
 
 
-def to_agent_actions(move_np: np.ndarray, attack_np: np.ndarray,
-                     ability_np: np.ndarray,
-                     enemy_ids_np: np.ndarray) -> list[bg.AgentAction]:
-    """Translate per-env (move, attack-slot, ability-slot) → list[AgentAction].
+def slots_to_action_arrays(move_t: torch.Tensor,
+                            attack_t: torch.Tensor,
+                            ability_t: torch.Tensor,
+                            enemy_ids_np: np.ndarray):
+    """Tensors-on-device + per-env enemy id table → numpy arrays ready for
+    VecSimulation.apply_actions_raw.
 
-    `attack==K` means "no auto-attack"; otherwise it's an enemy slot index.
-    `ability==N_ABILITIES` means "no cast"; otherwise it's a slot index 0..7.
-    The cast target reuses the chosen attack target (or self / -1 if none).
+    Slot conventions:
+      attack  == K_ENEMIES     → no auto-attack (target_id = -1)
+      attack  <  K_ENEMIES     → enemy slot, mapped through enemy_ids
+      ability == N_ABILITIES   → no cast   (use_ability_id = -1)
+      ability <  N_ABILITIES   → ability slot (0..7)
     """
-    n = move_np.shape[0]
-    actions: list[bg.AgentAction] = []
-    for i in range(n):
-        atk_choice = int(attack_np[i])
-        target = -1 if atk_choice == K_ENEMIES else int(enemy_ids_np[i, atk_choice])
-        ab_choice = int(ability_np[i])
-        ability_id = -1 if ab_choice == N_ABILITIES else ab_choice
-        actions.append(bg.AgentAction(
-            move_x=float(move_np[i, 0]),
-            move_z=float(move_np[i, 1]),
-            attack_target_id=target,
-            use_ability_id=ability_id,
-        ))
-    return actions
+    N = move_t.shape[0]
+    move_np    = move_t.detach().cpu().numpy().astype(np.float32, copy=False)
+    attack_np  = attack_t.detach().cpu().numpy().astype(np.int32,  copy=False)
+    ability_np = ability_t.detach().cpu().numpy().astype(np.int32, copy=False)
+
+    safe_idx   = np.clip(attack_np, 0, K_ENEMIES - 1)
+    rows       = np.arange(N)
+    target_ids = np.where(
+        attack_np == K_ENEMIES,
+        np.int32(-1),
+        enemy_ids_np[rows, safe_idx].astype(np.int32, copy=False),
+    ).astype(np.int32, copy=False)
+
+    ability_ids = np.where(
+        ability_np == N_ABILITIES,
+        np.int32(-1),
+        ability_np,
+    ).astype(np.int32, copy=False)
+    return move_np, target_ids, ability_ids
 
 
 # ─── Opponent forward pass (grouped by opponent network) ────────────────────
 
 
 @torch.no_grad()
-def opponent_actions(pool: OpponentPool,
-                     opp_idx_per_env: np.ndarray,
-                     obs_t: torch.Tensor,
-                     mask_enemies_t: torch.Tensor,
-                     mask_abilities_t: torch.Tensor,
-                     enemy_ids_np: np.ndarray) -> list[bg.AgentAction]:
+def opponent_action_arrays(pool: OpponentPool,
+                            opp_idx_per_env: np.ndarray,
+                            obs_t: torch.Tensor,
+                            mask_enemies_t: torch.Tensor,
+                            mask_abilities_t: torch.Tensor,
+                            enemy_ids_np: np.ndarray):
     """One forward pass per opponent network, then scatter the sampled
-    actions back into a per-env list."""
+    actions back and return the numpy tuple expected by apply_actions_raw."""
     n = obs_t.shape[0]
     move_buf    = torch.zeros((n, 2), device=obs_t.device)
     attack_buf  = torch.zeros((n,), dtype=torch.long, device=obs_t.device)
@@ -277,12 +286,7 @@ def opponent_actions(pool: OpponentPool,
         move_buf.index_copy_(0, idx_t, move)
         attack_buf.index_copy_(0, idx_t, attack)
         ability_buf.index_copy_(0, idx_t, ability)
-    return to_agent_actions(
-        move_buf.cpu().numpy(),
-        attack_buf.cpu().numpy(),
-        ability_buf.cpu().numpy(),
-        enemy_ids_np,
-    )
+    return slots_to_action_arrays(move_buf, attack_buf, ability_buf, enemy_ids_np)
 
 
 # ─── PPO update ─────────────────────────────────────────────────────────────
@@ -423,25 +427,25 @@ def main():
             logp_buf[t]    = logp
             value_buf[t]   = value
 
-            hero_actions = to_agent_actions(
-                move.cpu().numpy(),
-                attack.cpu().numpy(),
-                ability.cpu().numpy(),
-                hids_np,
+            h_move, h_target, h_ability = slots_to_action_arrays(
+                move, attack, ability, hids_np
             )
 
             oobs_t   = torch.from_numpy(oobs_np).to(DEVICE)
             oemask_t = torch.from_numpy(omask_np[:, :K_ENEMIES]).to(DEVICE)
             oamask_t = torch.from_numpy(omask_np[:, K_ENEMIES:]).to(DEVICE)
-            opp_acts = opponent_actions(pool, opp_idx,
-                                         oobs_t, oemask_t, oamask_t, oids_np)
+            o_move, o_target, o_ability = opponent_action_arrays(
+                pool, opp_idx, oobs_t, oemask_t, oamask_t, oids_np
+            )
 
             # Action persistence: repeat the same (hero, opp) action for K sim
             # ticks so each policy decision spans ACTION_REPEAT * SIM_DT seconds.
             # Reward accumulator drains the entire window in one rewards() call.
             for _k in range(ACTION_REPEAT):
-                vec.apply_actions(bg.VecSimulation.HERO_ID,     hero_actions)
-                vec.apply_actions(bg.VecSimulation.OPPONENT_ID, opp_acts)
+                vec.apply_actions_raw(bg.VecSimulation.HERO_ID,
+                                      h_move, h_target, h_ability)
+                vec.apply_actions_raw(bg.VecSimulation.OPPONENT_ID,
+                                      o_move, o_target, o_ability)
                 vec.step()
                 if recorder is not None:
                     sub_t = t * ACTION_REPEAT + _k
