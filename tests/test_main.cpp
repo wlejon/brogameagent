@@ -344,6 +344,238 @@ TEST(agent_clear_target_stops) {
     CHECK_NEAR(agent.x(), x1, 0.001f); // didn't move
 }
 
+// ─── Unit / World / Action / Observation ────────────────────────────────────
+
+TEST(unit_cooldowns_tick_down) {
+    Unit u;
+    u.attackCooldown = 1.0f;
+    u.abilityCooldowns[0] = 0.5f;
+    u.tickCooldowns(0.3f);
+    CHECK_NEAR(u.attackCooldown, 0.7f, 1e-4f);
+    CHECK_NEAR(u.abilityCooldowns[0], 0.2f, 1e-4f);
+    u.tickCooldowns(10.0f);
+    CHECK_NEAR(u.attackCooldown, 0.0f, 1e-4f);
+    CHECK_NEAR(u.abilityCooldowns[0], 0.0f, 1e-4f);
+}
+
+TEST(agent_applyAction_moves_in_local_frame) {
+    // yaw=0 means facing -Z. Local +Z = back, local -Z = forward.
+    // Pushing moveZ=-1 (forward) should move agent in -Z world direction.
+    Agent agent;
+    agent.setPosition(0, 0);
+    agent.unit().moveSpeed = 10.0f;
+
+    AgentAction act;
+    act.moveZ = -1.0f;
+    for (int i = 0; i < 60; i++) agent.applyAction(act, 1.0f / 60.0f);
+
+    CHECK(agent.z() < -5.0f); // moved forward (-Z)
+    CHECK_NEAR(agent.x(), 0.0f, 0.5f);
+}
+
+TEST(agent_maxAccel_clamps_velocity_change) {
+    Agent agent;
+    agent.setPosition(0, 0);
+    agent.unit().moveSpeed = 10.0f;
+    agent.setMaxAccel(2.0f); // 2 u/s^2
+
+    AgentAction act;
+    act.moveZ = -1.0f;
+    agent.applyAction(act, 1.0f); // 1 second, accel cap gives max |dv|=2
+    Vec2 v = agent.velocity();
+    float speed = std::sqrt(v.x * v.x + v.z * v.z);
+    CHECK(speed <= 2.01f); // clamped to maxAccel * dt
+}
+
+TEST(agent_maxTurnRate_clamps_yaw) {
+    Agent agent;
+    agent.setPosition(0, 0);
+    agent.unit().moveSpeed = 10.0f;
+    agent.setMaxTurnRate(static_cast<float>(M_PI / 4)); // 45 deg/sec
+
+    // Push to the right (+X local) — needs yaw to rotate by pi/2.
+    AgentAction act;
+    act.moveX = 1.0f;
+    agent.applyAction(act, 0.5f); // half a second, can only turn 22.5 deg
+
+    float turned = std::abs(agent.yaw());
+    CHECK(turned <= static_cast<float>(M_PI / 8) + 0.01f);
+}
+
+TEST(world_enemies_and_allies) {
+    World world;
+    Agent a1, a2, a3, a4;
+    a1.unit().id = 1; a1.unit().teamId = 0; a1.setPosition(0, 0);
+    a2.unit().id = 2; a2.unit().teamId = 0; a2.setPosition(1, 0);
+    a3.unit().id = 3; a3.unit().teamId = 1; a3.setPosition(5, 0);
+    a4.unit().id = 4; a4.unit().teamId = 1; a4.setPosition(2, 0);
+
+    world.addAgent(&a1);
+    world.addAgent(&a2);
+    world.addAgent(&a3);
+    world.addAgent(&a4);
+
+    auto enemies = world.enemiesOf(a1);
+    CHECK(enemies.size() == 2);
+
+    auto allies = world.alliesOf(a1);
+    CHECK(allies.size() == 1);
+    CHECK(allies[0]->unit().id == 2);
+
+    Agent* nearest = world.nearestEnemy(a1);
+    CHECK(nearest != nullptr);
+    CHECK(nearest->unit().id == 4); // a4 at dist 2 beats a3 at dist 5
+
+    auto inRange = world.enemiesInRange(a1, 3.0f);
+    CHECK(inRange.size() == 1);
+    CHECK(inRange[0]->unit().id == 4);
+}
+
+TEST(world_skips_dead_agents) {
+    World world;
+    Agent a, b;
+    a.unit().id = 1; a.unit().teamId = 0; a.setPosition(0, 0);
+    b.unit().id = 2; b.unit().teamId = 1; b.setPosition(1, 0);
+    world.addAgent(&a);
+    world.addAgent(&b);
+    b.unit().hp = 0;
+    CHECK(world.nearestEnemy(a) == nullptr);
+    CHECK(world.enemiesOf(a).empty());
+}
+
+TEST(world_tick_advances_cooldowns) {
+    World world;
+    Agent a;
+    a.unit().attackCooldown = 2.0f;
+    world.addAgent(&a);
+    world.tick(0.5f);
+    CHECK_NEAR(a.unit().attackCooldown, 1.5f, 1e-4f);
+}
+
+TEST(world_findById) {
+    World world;
+    Agent a, b;
+    a.unit().id = 42;
+    b.unit().id = 99;
+    world.addAgent(&a);
+    world.addAgent(&b);
+    CHECK(world.findById(42) == &a);
+    CHECK(world.findById(99) == &b);
+    CHECK(world.findById(7) == nullptr);
+}
+
+TEST(observation_total_size_nonzero) {
+    CHECK(observation::TOTAL > 0);
+    // SELF(8) + 5*6 + 4*5 = 58
+    CHECK(observation::TOTAL == 58);
+}
+
+TEST(observation_self_block_populated) {
+    World world;
+    Agent self;
+    self.unit().teamId = 0;
+    self.unit().hp = 50; self.unit().maxHp = 100;
+    self.unit().mana = 20; self.unit().maxMana = 100;
+    self.unit().attackCooldown = 5.0f;
+    self.setPosition(0, 0);
+    world.addAgent(&self);
+
+    float obs[observation::TOTAL];
+    observation::build(self, world, obs);
+
+    CHECK_NEAR(obs[0], 0.5f, 1e-4f);  // hp ratio
+    CHECK_NEAR(obs[1], 0.2f, 1e-4f);  // mana ratio
+    CHECK_NEAR(obs[2], 0.5f, 1e-4f);  // attack cd / 10
+}
+
+TEST(observation_enemies_sorted_and_local_frame) {
+    World world;
+    Agent self;
+    self.unit().id = 1; self.unit().teamId = 0;
+    self.unit().attackRange = 3.0f;
+    self.setPosition(0, 0);
+
+    Agent far_enemy, near_enemy;
+    far_enemy.unit().id = 2; far_enemy.unit().teamId = 1;
+    far_enemy.unit().hp = 100; far_enemy.unit().maxHp = 100;
+    far_enemy.setPosition(10, 0);
+
+    near_enemy.unit().id = 3; near_enemy.unit().teamId = 1;
+    near_enemy.unit().hp = 50; near_enemy.unit().maxHp = 100;
+    near_enemy.setPosition(2, 0);
+
+    world.addAgent(&self);
+    world.addAgent(&far_enemy);
+    world.addAgent(&near_enemy);
+
+    float obs[observation::TOTAL];
+    observation::build(self, world, obs);
+
+    int base0 = observation::SELF_FEATURES; // first enemy slot
+    int base1 = observation::SELF_FEATURES + observation::ENEMY_FEATURES;
+
+    // Nearest-first: slot 0 is the near_enemy
+    CHECK_NEAR(obs[base0 + 0], 1.0f, 1e-4f);        // valid
+    CHECK_NEAR(obs[base0 + 3], 2.0f / 50.0f, 1e-4f); // distance / OBS_RANGE
+    CHECK_NEAR(obs[base0 + 4], 0.5f, 1e-4f);         // hp ratio
+    CHECK_NEAR(obs[base0 + 5], 1.0f, 1e-4f);         // in attack range (2 <= 3)
+
+    // Slot 1 is the far_enemy; out of attack range.
+    CHECK_NEAR(obs[base1 + 0], 1.0f, 1e-4f);
+    CHECK_NEAR(obs[base1 + 5], 0.0f, 1e-4f);
+}
+
+TEST(observation_empty_slots_are_zero) {
+    World world;
+    Agent self;
+    self.unit().teamId = 0;
+    world.addAgent(&self);
+
+    float obs[observation::TOTAL];
+    observation::build(self, world, obs);
+
+    // Every enemy valid flag should be 0.
+    for (int k = 0; k < observation::K_ENEMIES; k++) {
+        int base = observation::SELF_FEATURES + k * observation::ENEMY_FEATURES;
+        CHECK_NEAR(obs[base + 0], 0.0f, 1e-6f);
+    }
+}
+
+TEST(observation_local_frame_rotates_with_yaw) {
+    // Place enemy at world +X (east). With yaw=0 (facing -Z/north), enemy is
+    // to the right, so local x > 0, local z ~ 0. After turning to face +X,
+    // the enemy should be straight ahead, meaning local x ~ 0, local z < 0.
+    World world;
+    Agent self;
+    self.unit().id = 1; self.unit().teamId = 0;
+    self.setPosition(0, 0);
+    Agent enemy;
+    enemy.unit().id = 2; enemy.unit().teamId = 1;
+    enemy.setPosition(10, 0);
+    world.addAgent(&self);
+    world.addAgent(&enemy);
+
+    float obs[observation::TOTAL];
+
+    // yaw = 0: enemy to the right (+X local)
+    self.unit().moveSpeed = 10.0f;
+    // We need to set yaw; the only public route is applyAction or scripted
+    // movement. Use applyAction with moveX=1 briefly then zero.
+    // Faster: run a quick applyAction that rotates facing to +X.
+    self.setMaxTurnRate(0.0f); // unlimited
+    AgentAction act;
+    act.moveX = 1.0f;
+    self.applyAction(act, 0.001f); // sets yaw toward +X
+    self.setPosition(0, 0);        // reset position drift
+    // velocity may be nonzero but doesn't matter for observation geometry
+
+    observation::build(self, world, obs);
+    int base = observation::SELF_FEATURES;
+    // Enemy is now "straight ahead" in local frame → -Z_local big, X_local ~ 0
+    CHECK(obs[base + 2] < -0.1f);              // lz/OBS_RANGE negative
+    CHECK(std::abs(obs[base + 1]) < 0.05f);    // lx ~ 0
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {

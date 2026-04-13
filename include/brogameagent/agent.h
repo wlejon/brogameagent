@@ -1,22 +1,58 @@
 #pragma once
 
 #include "types.h"
+#include "unit.h"
 #include <vector>
 
 namespace brogameagent {
 
 class NavGrid;
 
-/// A game agent that combines pathfinding with steering to navigate
-/// toward a target position. Call update(dt) each tick to advance.
+/// Continuous-control input for a NN policy (or any decision layer).
+/// moveX/moveZ are in the agent's local frame: +X = right, -Z = forward.
+/// Magnitude is clamped to [0, 1] — think of it as a joystick stick.
+/// aimYaw / aimPitch are in world frame (FPS convention: yaw=0 faces -Z).
+/// attackTargetId / useAbilityId default to -1 (no action).
+struct AgentAction {
+    float moveX = 0.0f;
+    float moveZ = 0.0f;
+    float aimYaw = 0.0f;
+    float aimPitch = 0.0f;
+    int   attackTargetId = -1;
+    int   useAbilityId = -1;
+};
+
+/// A game agent. Owns a Unit (combat stats), a 2D position, a velocity,
+/// a facing yaw (movement direction) and a separate aim yaw/pitch
+/// (where the bot is "looking" — decoupled from movement for FPS-style
+/// strafe-and-aim).
+///
+/// There are two ways to drive an Agent:
+///   1. Scripted: setTarget(x,z) + update(dt) — A*-pathed seek-and-arrive.
+///   2. Policy:   applyAction(action, dt) — continuous control, used by NN.
+/// Both routes pass through the same dynamics integrator (max accel + max
+/// turn rate) so behavior is physically consistent.
 class Agent {
 public:
     Agent();
 
     void setNavGrid(const NavGrid* grid);
     void setPosition(float x, float z);
+
+    /// Kinematic limits. maxAccel and maxTurnRate are applied inside
+    /// applyAction() and the path-following update(); they are a no-op when
+    /// <= 0 (treat as unlimited).
+    void setMaxAccel(float unitsPerSecSq);
+    void setMaxTurnRate(float radPerSec);
+
+    // Back-compat scripted API
     void setSpeed(float speed);
     void setRadius(float radius);
+
+    /// Combat / stat payload. Direct access is intentional — callers routinely
+    /// mutate HP, cooldowns, etc. and we don't want accessor boilerplate.
+    Unit& unit() { return unit_; }
+    const Unit& unit() const { return unit_; }
 
     /// Set the movement target. Recomputes path if target changed significantly.
     void setTarget(float x, float z);
@@ -24,44 +60,57 @@ public:
     /// Clear the current target. Agent stops moving.
     void clearTarget();
 
-    /// Advance the agent by dt seconds. Moves along the current path.
+    /// Scripted update: follow the A* path toward setTarget().
+    /// Does nothing if no target is set.
     void update(float dt);
+
+    /// Policy update: integrate a continuous-control action. Does not touch
+    /// the scripted path/target state. Use this from a NN inference loop.
+    void applyAction(const AgentAction& action, float dt);
 
     float x() const { return x_; }
     float z() const { return z_; }
 
-    /// Direction the agent is currently facing (from movement), in radians.
-    /// 0 = facing -Z, positive = clockwise (matches FPS yaw convention).
+    /// Movement facing (radians, FPS convention: 0 = -Z).
     float yaw() const { return yaw_; }
 
+    /// Aim direction — decoupled from movement, set by applyAction or aimAt.
+    float aimYaw() const { return aimYaw_; }
+    float aimPitch() const { return aimPitch_; }
+
     /// Compute aim yaw/pitch from agent's position to a 3D world point.
+    /// Does NOT mutate the agent's aim state — callers that want it latched
+    /// should write the result into applyAction.aimYaw/aimPitch.
     AimResult aimAt(float tx, float ty, float tz, float eyeHeight) const;
 
-    /// Whether the agent is currently moving toward a target.
     bool hasTarget() const { return hasTarget_; }
-
-    /// Whether the agent has reached its current target.
     bool atTarget() const;
 
-    /// Current smoothed path (empty when no target or unreachable).
     const std::vector<Vec2>& path() const { return path_; }
-
-    /// Index of the waypoint the agent is currently steering toward.
     int currentWaypoint() const { return waypointIdx_; }
-
-    /// World-space velocity from the most recent update() call.
-    /// Zero until the first update after a target is set.
     Vec2 velocity() const { return {vx_, vz_}; }
 
 private:
     void recomputePath();
 
+    /// Shared dynamics step: clamp to maxAccel, clamp facing rotation to
+    /// maxTurnRate, integrate position.
+    void integrate_(float desiredVx, float desiredVz, float dt);
+
     const NavGrid* navGrid_ = nullptr;
+    Unit unit_{};
+
     float x_ = 0, z_ = 0;
+    float vx_ = 0, vz_ = 0;
+    float yaw_ = 0;
+    float aimYaw_ = 0, aimPitch_ = 0;
+
+    // Legacy scripted-path speed; mirrors unit_.moveSpeed by default.
     float speed_ = 6.0f;
     float radius_ = 0.4f;
-    float yaw_ = 0;
-    float vx_ = 0, vz_ = 0;
+
+    float maxAccel_    = 0.0f; // <=0 = unlimited
+    float maxTurnRate_ = 0.0f; // <=0 = unlimited
 
     bool hasTarget_ = false;
     float targetX_ = 0, targetZ_ = 0;
@@ -69,9 +118,8 @@ private:
     std::vector<Vec2> path_;
     int waypointIdx_ = 0;
 
-    // Recompute path when target moves significantly
     float lastPathTargetX_ = 0, lastPathTargetZ_ = 0;
-    static constexpr float REPATH_DIST_SQ = 4.0f; // repath if target moved >2 units
+    static constexpr float REPATH_DIST_SQ = 4.0f;
     static constexpr float ARRIVE_DIST = 0.5f;
 };
 

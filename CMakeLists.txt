@@ -20,6 +20,8 @@ add_library(brogameagent STATIC
     src/steering.cpp
     src/agent.cpp
     src/perception.cpp
+    src/world.cpp
+    src/observation.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 
