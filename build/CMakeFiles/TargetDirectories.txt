@@ -1,0 +1,6 @@
+D:/projects/brogameagent/build/CMakeFiles/brogameagent.dir
+D:/projects/brogameagent/build/CMakeFiles/RUN_TESTS.dir
+D:/projects/brogameagent/build/CMakeFiles/ALL_BUILD.dir
+D:/projects/brogameagent/build/CMakeFiles/ZERO_CHECK.dir
+D:/projects/brogameagent/build/tests/CMakeFiles/brogameagent_test.dir
+D:/projects/brogameagent/build/tests/CMakeFiles/RUN_TESTS.dir

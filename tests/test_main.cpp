@@ -1,7 +1,9 @@
+#define _USE_MATH_DEFINES
+#include <cmath>
+
 #include <brogameagent/brogameagent.h>
 
 #include <cassert>
-#include <cmath>
 #include <cstdio>
 
 using namespace brogameagent;
