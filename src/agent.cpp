@@ -115,7 +115,8 @@ void Agent::applyAction(const AgentAction& action, float dt) {
     float worldDx = mx * c + mz * (-s);
     float worldDz = mx * s + mz * ( c);
 
-    integrate_(worldDx * unit_.moveSpeed, worldDz * unit_.moveSpeed, dt);
+    float ms = unit_.effectiveMoveSpeed();
+    integrate_(worldDx * ms, worldDz * ms, dt);
 
     aimYaw_ = wrapAngle(action.aimYaw);
     aimPitch_ = action.aimPitch;

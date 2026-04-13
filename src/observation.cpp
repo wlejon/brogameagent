@@ -48,8 +48,9 @@ void build(const Agent& self, const World& world, float* out) {
     out[i++] = norm01(u.hp, u.maxHp);
     out[i++] = norm01(u.mana, u.maxMana);
     out[i++] = norm01(u.attackCooldown, COOLDOWN_NORM_SEC);
-    out[i++] = norm01(u.abilityCooldowns[0], COOLDOWN_NORM_SEC);
-    out[i++] = norm01(u.abilityCooldowns[1], COOLDOWN_NORM_SEC);
+    for (int s = 0; s < Unit::MAX_ABILITIES; s++) {
+        out[i++] = norm01(u.abilityCooldowns[s], COOLDOWN_NORM_SEC);
+    }
 
     Vec2 v = self.velocity();
     float speed = std::sqrt(v.x * v.x + v.z * v.z);

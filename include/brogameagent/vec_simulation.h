@@ -37,6 +37,18 @@ public:
     static constexpr int HERO_ID     = 1;
     static constexpr int OPPONENT_ID = 2;
 
+    // Built-in ability ids (also the default slot bindings 0..7).
+    enum AbilityId : int {
+        ABILITY_FIREBALL  = 0,   // direct damage, ranged single-target
+        ABILITY_POISON    = 1,   // DoT, ranged single-target
+        ABILITY_HEAL      = 2,   // direct heal self
+        ABILITY_REGEN     = 3,   // HoT self
+        ABILITY_STONESKIN = 4,   // armor + magic resist buff self
+        ABILITY_FURY      = 5,   // damage multiplier buff self
+        ABILITY_HASTE     = 6,   // move-speed buff self
+        ABILITY_SHROUD    = 7,   // stealth (dodge chance) self
+    };
+
     struct Config {
         int     numEnvs            = 64;
         float   arenaHalfSize      = 12.0f;  // square arena: [-half, +half]
@@ -46,14 +58,16 @@ public:
         int     maxStepsPerEpisode = 600;           // sim ticks (~9.6 s of game time)
 
         // Stats applied to BOTH agents on reset (symmetric 1v1).
-        float   hp            = 100.0f;
-        float   damage        = 15.0f;
-        float   attackRange   = 2.5f;
-        float   attacksPerSec = 2.0f;
-        float   moveSpeed     = 6.0f;
-        float   maxAccel      = 40.0f;
-        float   maxTurnRate   = 6.2831853f * 1.5f; // 1.5 turns/sec
-        float   radius        = 0.4f;
+        float   hp                = 100.0f;
+        float   maxMana           = 100.0f;
+        float   manaRegenPerSec   = 1.0f;
+        float   damage            = 5.0f;       // basic attack damage
+        float   attackRange       = 2.5f;
+        float   attacksPerSec     = 2.0f;
+        float   moveSpeed         = 6.0f;
+        float   maxAccel          = 40.0f;
+        float   maxTurnRate       = 6.2831853f * 1.5f; // 1.5 turns/sec
+        float   radius            = 0.4f;
 
         // Reward shaping (same for both agents — symmetric).
         float   rewardDamageDealt    = 1.0f;

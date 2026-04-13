@@ -2,9 +2,124 @@
 #include "brogameagent/observation.h"
 #include "brogameagent/action_mask.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace brogameagent {
+
+namespace {
+
+// Register the 8 built-in abilities on a world.
+//
+// All durations are in seconds, costs in mana, ranges in world units.
+// Single-target damage/DoT abilities use the AgentAction::attackTargetId
+// as their target; self-cast abilities ignore the target argument.
+void registerBuiltinAbilities(World& w) {
+    using A = VecSimulation;
+
+    // Fireball — direct magical damage, single target.
+    {
+        AbilitySpec s;
+        s.cooldown = 4.0f; s.manaCost = 8.0f; s.range = 6.0f;
+        s.fn = [](Agent& caster, World& world, int targetId) {
+            Agent* tgt = world.findById(targetId);
+            if (!tgt || !tgt->unit().alive()) return;
+            world.dealDamage(caster, *tgt, 25.0f, DamageKind::Magical);
+        };
+        w.registerAbility(A::ABILITY_FIREBALL, std::move(s));
+    }
+
+    // Poison — magical damage-over-time, single target.
+    {
+        AbilitySpec s;
+        s.cooldown = 6.0f; s.manaCost = 8.0f; s.range = 5.0f;
+        s.fn = [](Agent& caster, World& world, int targetId) {
+            Agent* tgt = world.findById(targetId);
+            if (!tgt || !tgt->unit().alive()) return;
+            Unit& u = tgt->unit();
+            u.dotDps       = 5.0f;
+            u.dotRemaining = 4.0f;
+            u.dotKind      = DamageKind::Magical;
+            u.dotSourceId  = caster.unit().id;
+        };
+        w.registerAbility(A::ABILITY_POISON, std::move(s));
+    }
+
+    // Heal — direct self-heal.
+    {
+        AbilitySpec s;
+        s.cooldown = 5.0f; s.manaCost = 8.0f; s.range = 0.0f;
+        s.fn = [](Agent& caster, World&, int) {
+            Unit& u = caster.unit();
+            u.hp = std::min(u.hp + 25.0f, u.maxHp);
+        };
+        w.registerAbility(A::ABILITY_HEAL, std::move(s));
+    }
+
+    // Regen — heal-over-time on self.
+    {
+        AbilitySpec s;
+        s.cooldown = 8.0f; s.manaCost = 8.0f; s.range = 0.0f;
+        s.fn = [](Agent& caster, World&, int) {
+            Unit& u = caster.unit();
+            u.hotRate      = 5.0f;
+            u.hotRemaining = 5.0f;
+        };
+        w.registerAbility(A::ABILITY_REGEN, std::move(s));
+    }
+
+    // Stoneskin — additive armor + MR buff on self.
+    {
+        AbilitySpec s;
+        s.cooldown = 10.0f; s.manaCost = 10.0f; s.range = 0.0f;
+        s.fn = [](Agent& caster, World&, int) {
+            Unit& u = caster.unit();
+            u.armorBonus                  = 25.0f;
+            u.armorBonusRemaining         = 5.0f;
+            u.magicResistBonus            = 25.0f;
+            u.magicResistBonusRemaining   = 5.0f;
+        };
+        w.registerAbility(A::ABILITY_STONESKIN, std::move(s));
+    }
+
+    // Fury — multiplicative damage buff on self.
+    {
+        AbilitySpec s;
+        s.cooldown = 8.0f; s.manaCost = 10.0f; s.range = 0.0f;
+        s.fn = [](Agent& caster, World&, int) {
+            Unit& u = caster.unit();
+            u.damageMul          = 1.5f;
+            u.damageMulRemaining = 4.0f;
+        };
+        w.registerAbility(A::ABILITY_FURY, std::move(s));
+    }
+
+    // Haste — multiplicative move-speed buff on self.
+    {
+        AbilitySpec s;
+        s.cooldown = 8.0f; s.manaCost = 6.0f; s.range = 0.0f;
+        s.fn = [](Agent& caster, World&, int) {
+            Unit& u = caster.unit();
+            u.moveSpeedMul          = 1.5f;
+            u.moveSpeedMulRemaining = 4.0f;
+        };
+        w.registerAbility(A::ABILITY_HASTE, std::move(s));
+    }
+
+    // Shroud — stealth (dodge chance) on self.
+    {
+        AbilitySpec s;
+        s.cooldown = 12.0f; s.manaCost = 10.0f; s.range = 0.0f;
+        s.fn = [](Agent& caster, World&, int) {
+            Unit& u = caster.unit();
+            u.stealthChance          = 0.5f;
+            u.stealthChanceRemaining = 3.0f;
+        };
+        w.registerAbility(A::ABILITY_SHROUD, std::move(s));
+    }
+}
+
+} // namespace
 
 VecSimulation::VecSimulation(const Config& cfg) : cfg_(cfg) {
     envs_.reserve(static_cast<size_t>(cfg_.numEnvs));
@@ -25,17 +140,39 @@ void VecSimulation::initEnv_(EnvState& env) {
 
     env.world.addAgent(&env.hero);
     env.world.addAgent(&env.opponent);
+
+    // Per-world ability registry (cheap; abilities are stored in a hash map).
+    registerBuiltinAbilities(env.world);
 }
 
 static void applyStats(Agent& a, const VecSimulation::Config& cfg) {
-    a.unit().hp            = cfg.hp;
-    a.unit().maxHp         = cfg.hp;
-    a.unit().damage        = cfg.damage;
-    a.unit().attackRange   = cfg.attackRange;
-    a.unit().attacksPerSec = cfg.attacksPerSec;
-    a.unit().moveSpeed     = cfg.moveSpeed;
-    a.unit().radius        = cfg.radius;
-    a.unit().attackCooldown = 0.0f;
+    Unit& u = a.unit();
+    u.hp                = cfg.hp;
+    u.maxHp             = cfg.hp;
+    u.maxMana           = cfg.maxMana;
+    u.mana              = cfg.maxMana;
+    u.manaRegenPerSec   = cfg.manaRegenPerSec;
+    u.damage            = cfg.damage;
+    u.attackRange       = cfg.attackRange;
+    u.attacksPerSec     = cfg.attacksPerSec;
+    u.moveSpeed         = cfg.moveSpeed;
+    u.radius            = cfg.radius;
+    u.attackCooldown    = 0.0f;
+    for (int i = 0; i < Unit::MAX_ABILITIES; i++) {
+        u.abilityCooldowns[i] = 0.0f;
+        // Default binding: slot i holds ability id i (Fireball..Shroud).
+        u.abilitySlot[i] = (i < 8) ? i : -1;
+    }
+    // Clear all timed effects.
+    u.armorBonus = u.magicResistBonus = 0.0f;
+    u.armorBonusRemaining = u.magicResistBonusRemaining = 0.0f;
+    u.damageMul = u.attacksMul = u.moveSpeedMul = 1.0f;
+    u.damageMulRemaining = u.attacksMulRemaining = u.moveSpeedMulRemaining = 0.0f;
+    u.stealthChance = 0.0f; u.stealthChanceRemaining = 0.0f;
+    u.dotDps = u.dotRemaining = 0.0f;
+    u.dotSourceId = -1;
+    u.hotRate = u.hotRemaining = 0.0f;
+
     a.setSpeed(cfg.moveSpeed);
     a.setRadius(cfg.radius);
     a.setMaxAccel(cfg.maxAccel);
@@ -139,7 +276,10 @@ void VecSimulation::step() {
 
         // Advance projectiles and clean up dead ones. Agent cooldowns and
         // movement were already integrated by applyActions (Agent::applyAction
-        // ticks cooldowns internally).
+        // ticks cooldowns internally). DoT/HoT, however, must be ticked here
+        // because they emit events / mutate HP and aren't policy-driven.
+        e.world.applyDotHot(e.hero,     cfg_.dt);
+        e.world.applyDotHot(e.opponent, cfg_.dt);
         e.world.stepProjectiles(cfg_.dt);
         e.world.cullProjectiles();
         e.stepCount++;

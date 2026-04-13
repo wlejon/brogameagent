@@ -9,15 +9,14 @@ class World;
 ///
 /// Layout (all floats, all roughly in [-1, 1] unless noted):
 ///
-///   SELF block (SELF_FEATURES = 8):
-///     [0] hp / maxHp                          in [0,1]
-///     [1] mana / maxMana                      in [0,1] (0 if maxMana==0)
-///     [2] attackCooldown normalized           in [0,1]
-///     [3] abilityCooldowns[0] normalized      in [0,1]
-///     [4] abilityCooldowns[1] normalized      in [0,1]
-///     [5] speed / moveSpeed                   in [0,1]
-///     [6] sin(aimYaw - yaw)                   heading vs aim (strafe-aware)
-///     [7] cos(aimYaw - yaw)
+///   SELF block (SELF_FEATURES = 14):
+///     [0]      hp / maxHp                     in [0,1]
+///     [1]      mana / maxMana                 in [0,1] (0 if maxMana==0)
+///     [2]      attackCooldown normalized      in [0,1]
+///     [3..10]  abilityCooldowns[0..7] normalized   in [0,1]
+///     [11]     speed / moveSpeed              in [0,1]
+///     [12]     sin(aimYaw - yaw)              heading vs aim (strafe-aware)
+///     [13]     cos(aimYaw - yaw)
 ///
 ///   ENEMY block: K_ENEMIES * ENEMY_FEATURES, sorted nearest-first.
 ///   Absent slots are zeroed (valid flag=0).
@@ -38,7 +37,7 @@ namespace observation {
 
 constexpr int K_ENEMIES = 5;
 constexpr int K_ALLIES  = 4;
-constexpr int SELF_FEATURES  = 8;
+constexpr int SELF_FEATURES  = 14;
 constexpr int ENEMY_FEATURES = 6;
 constexpr int ALLY_FEATURES  = 5;
 

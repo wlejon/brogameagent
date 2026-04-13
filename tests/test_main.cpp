@@ -466,8 +466,8 @@ TEST(world_findById) {
 
 TEST(observation_total_size_nonzero) {
     CHECK(observation::TOTAL > 0);
-    // SELF(8) + 5*6 + 4*5 = 58
-    CHECK(observation::TOTAL == 58);
+    // SELF(14) + 5*6 + 4*5 = 64
+    CHECK(observation::TOTAL == 64);
 }
 
 TEST(observation_self_block_populated) {
@@ -1730,6 +1730,126 @@ TEST(replay_random_access_by_step) {
     CHECK_NEAR(frame3.agents[0].x, 3.0f, 1e-5f);
 
     std::remove(path.c_str());
+}
+
+// ─── Buffs / DoT / HoT / mana regen / stealth ───────────────────────────────
+
+TEST(unit_mana_regen_clamps_to_max) {
+    Unit u;
+    u.maxMana = 50.0f; u.mana = 49.0f;
+    u.manaRegenPerSec = 10.0f;
+    u.tickCooldowns(1.0f);     // would add 10 → clamp to maxMana
+    CHECK_NEAR(u.mana, 50.0f, 1e-4f);
+    u.mana = 0.0f;
+    u.tickCooldowns(0.5f);
+    CHECK_NEAR(u.mana, 5.0f, 1e-4f);
+}
+
+TEST(unit_buff_decays_and_resets) {
+    Unit u;
+    u.armorBonus = 25.0f; u.armorBonusRemaining = 1.0f;
+    u.damageMul  = 1.5f;  u.damageMulRemaining  = 1.0f;
+    u.tickCooldowns(0.5f);
+    CHECK_NEAR(u.armorBonusRemaining, 0.5f, 1e-4f);
+    CHECK_NEAR(u.armorBonus, 25.0f, 1e-4f);   // still active
+    u.tickCooldowns(0.6f);                     // crosses zero
+    CHECK_NEAR(u.armorBonusRemaining, 0.0f, 1e-4f);
+    CHECK_NEAR(u.armorBonus, 0.0f, 1e-4f);     // reset
+    CHECK_NEAR(u.damageMul, 1.0f, 1e-4f);      // reset to identity
+}
+
+TEST(world_dot_emits_events_and_can_kill) {
+    World world;
+    Agent attacker, victim;
+    attacker.unit().id = 1; attacker.unit().teamId = 0;
+    victim.unit().id = 2; victim.unit().teamId = 1;
+    victim.unit().hp = 10; victim.unit().maxHp = 100;
+    victim.unit().dotDps = 20.0f;
+    victim.unit().dotRemaining = 5.0f;
+    victim.unit().dotKind = DamageKind::Magical;
+    victim.unit().dotSourceId = attacker.unit().id;
+    world.addAgent(&attacker);
+    world.addAgent(&victim);
+
+    // 1.0s of DoT → 20 damage → kills 10-HP target.
+    world.applyDotHot(victim, 1.0f);
+    CHECK(!victim.unit().alive());
+    CHECK(world.events().size() == 1);
+    CHECK(world.events()[0].attackerId == 1);
+    CHECK(world.events()[0].targetId   == 2);
+    CHECK(world.events()[0].killed);
+}
+
+TEST(world_hot_heals_and_clamps) {
+    World world;
+    Agent ally;
+    ally.unit().id = 1;
+    ally.unit().hp = 50; ally.unit().maxHp = 100;
+    ally.unit().hotRate = 30.0f; ally.unit().hotRemaining = 1.0f;
+    world.addAgent(&ally);
+
+    world.applyDotHot(ally, 0.5f);
+    CHECK_NEAR(ally.unit().hp, 65.0f, 1e-3f);
+    world.applyDotHot(ally, 5.0f);  // would over-heal but timer shorter; clamp anyway
+    CHECK_NEAR(ally.unit().hp, 80.0f, 1e-3f); // 0.5s left * 30 dps = +15
+    CHECK(ally.unit().hotRemaining == 0.0f);
+}
+
+TEST(world_stealth_makes_attacks_miss) {
+    World world;
+    world.seed(123);
+    Agent attacker, target;
+    attacker.unit().id = 1; attacker.unit().teamId = 0;
+    attacker.unit().damage = 25; attacker.unit().attackRange = 5; attacker.unit().attacksPerSec = 1;
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.unit().hp = 100; target.unit().maxHp = 100;
+    target.unit().stealthChance = 1.0f;          // always dodge
+    target.unit().stealthChanceRemaining = 5.0f;
+    world.addAgent(&attacker);
+    world.addAgent(&target);
+
+    bool hit = world.resolveAttack(attacker, 2);
+    CHECK(!hit);                                 // returned false (missed)
+    CHECK_NEAR(target.unit().hp, 100.0f, 1e-3f); // no damage
+    CHECK(attacker.unit().attackCooldown > 0);    // cooldown still consumed
+}
+
+TEST(world_damage_buff_increases_dealt_damage) {
+    World world;
+    Agent atk, tgt;
+    atk.unit().id = 1; atk.unit().teamId = 0;
+    atk.unit().damage = 10; atk.unit().attackRange = 5; atk.unit().attacksPerSec = 1;
+    atk.unit().damageMul = 2.0f; atk.unit().damageMulRemaining = 5.0f;
+    tgt.unit().id = 2; tgt.unit().teamId = 1; tgt.unit().hp = 100; tgt.unit().maxHp = 100;
+    world.addAgent(&atk);
+    world.addAgent(&tgt);
+
+    world.resolveAttack(atk, 2);
+    CHECK_NEAR(tgt.unit().hp, 80.0f, 1e-3f);  // 10 * 2.0 = 20 damage
+}
+
+TEST(vecsim_ability_fireball_damages_via_action) {
+    VecSimulation::Config cfg;
+    cfg.numEnvs = 1;
+    cfg.minSpawnDist = 4.0f; cfg.maxSpawnDist = 4.5f;
+    cfg.attackRange = 0.0f;  // no auto-attacks
+    VecSimulation v(cfg);
+    v.seedAndReset(11);
+
+    int oppHp0 = static_cast<int>(v.opponent(0).unit().hp);
+
+    AgentAction nop;
+    AgentAction cast;
+    cast.useAbilityId    = 0;                            // slot 0 = Fireball
+    cast.attackTargetId  = VecSimulation::OPPONENT_ID;
+
+    std::vector<AgentAction> hAct(1, cast), oAct(1, nop);
+    v.applyActions(VecSimulation::HERO_ID,     hAct.data());
+    v.applyActions(VecSimulation::OPPONENT_ID, oAct.data());
+    v.step();
+
+    int oppHp1 = static_cast<int>(v.opponent(0).unit().hp);
+    CHECK(oppHp1 < oppHp0);                              // took damage
 }
 
 // ─── VecSimulation ──────────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ void World::tick(float dt) {
     for (Agent* a : agents_) {
         if (a->unit().alive()) a->update(dt);
         a->unit().tickCooldowns(dt);
+        applyDotHot(*a, dt);
     }
     stepProjectiles(dt);
     cullProjectiles();
@@ -118,10 +119,19 @@ bool World::resolveAttack(Agent& attacker, int targetId) {
     float r = attacker.unit().attackRange;
     if (dist2 > r * r) return false;
 
-    dealDamage(attacker, *target, attacker.unit().damage, attacker.unit().attackKind);
-    // attacksPerSec == 0 ⇒ no auto-attack cadence; guard against divide-by-zero.
-    float aps = attacker.unit().attacksPerSec;
+    // Effective attacks-per-sec drives cooldown regardless of hit/miss.
+    float aps = attacker.unit().effectiveAttacksPerSec();
     attacker.unit().attackCooldown = (aps > 0.0f) ? (1.0f / aps) : 0.0f;
+
+    // Stealth dodge: roll once per attack against the target's stealth chance.
+    float dodge = target->unit().stealthChance;
+    if (dodge > 0.0f && randFloat01() < dodge) {
+        return false;  // attack swung but missed; cooldown still consumed
+    }
+
+    dealDamage(attacker, *target,
+               attacker.unit().effectiveDamage(),
+               attacker.unit().attackKind);
     return true;
 }
 
@@ -138,6 +148,44 @@ float World::dealDamage(Agent& attacker, Agent& target, float amount, DamageKind
         });
     }
     return dealt;
+}
+
+void World::applyDotHot(Agent& target, float dt) {
+    Unit& u = target.unit();
+    // DoT first (can kill); HoT heals only living units.
+    if (u.alive() && u.dotRemaining > 0.0f && u.dotDps > 0.0f) {
+        float chunk = dt;
+        if (chunk > u.dotRemaining) chunk = u.dotRemaining;
+        float amount = u.dotDps * chunk;
+        bool wasAlive = u.alive();
+        float dealt = u.takeDamage(amount, u.dotKind);
+        if (dealt > 0.0f) {
+            events_.push_back(DamageEvent{
+                u.dotSourceId,
+                u.id,
+                dealt,
+                u.dotKind,
+                wasAlive && !u.alive()
+            });
+        }
+        u.dotRemaining -= dt;
+        if (u.dotRemaining <= 0.0f) {
+            u.dotRemaining = 0.0f;
+            u.dotDps = 0.0f;
+            u.dotSourceId = -1;
+        }
+    }
+    if (u.alive() && u.hotRemaining > 0.0f && u.hotRate > 0.0f) {
+        float chunk = dt;
+        if (chunk > u.hotRemaining) chunk = u.hotRemaining;
+        u.hp += u.hotRate * chunk;
+        if (u.hp > u.maxHp) u.hp = u.maxHp;
+        u.hotRemaining -= dt;
+        if (u.hotRemaining <= 0.0f) {
+            u.hotRemaining = 0.0f;
+            u.hotRate = 0.0f;
+        }
+    }
 }
 
 float World::dealEnvDamage(Agent& target, float amount, DamageKind kind) {

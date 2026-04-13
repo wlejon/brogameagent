@@ -125,6 +125,12 @@ public:
     /// Same as dealDamage but for environmental / untracked sources (no attacker).
     float dealEnvDamage(Agent& target, float amount, DamageKind kind);
 
+    /// Apply per-tick DoT/HoT to one agent for `dt` seconds. DoT damage is
+    /// logged as a DamageEvent attributed to Unit::dotSourceId. HoT heals
+    /// HP up to maxHp and is silent (no event). Caller responsible for
+    /// invoking this once per sim tick per agent.
+    void applyDotHot(Agent& target, float dt);
+
     /// Monotonic event log (appended, never reordered). Held until
     /// clearEvents() is called.
     const std::vector<DamageEvent>& events() const { return events_; }
