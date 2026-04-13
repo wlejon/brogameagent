@@ -78,31 +78,6 @@ if(BROGAMEAGENT_INSTALL)
     )
 endif()
 
-# Position-independent code so a static libbrogameagent can be linked
-# into the Python extension .so/.pyd on all platforms.
-set_property(TARGET brogameagent PROPERTY POSITION_INDEPENDENT_CODE ON)
-
-# --- Python bindings ---
-option(BROGAMEAGENT_PYTHON "Build Python bindings (requires pybind11)" OFF)
-if(BROGAMEAGENT_PYTHON)
-    find_package(pybind11 CONFIG REQUIRED)
-    pybind11_add_module(brogameagent_py python/bindings.cpp)
-    target_link_libraries(brogameagent_py PRIVATE brogameagent)
-    target_compile_features(brogameagent_py PRIVATE cxx_std_20)
-    # Output to python/ with module name brogameagent so `import brogameagent`
-    # works from that directory. Placed in its own subfolder so the .pyd's
-    # import lib doesn't collide with the static library's .lib on MSVC.
-    set_target_properties(brogameagent_py PROPERTIES
-        OUTPUT_NAME brogameagent
-        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/python"
-        RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_SOURCE_DIR}/python"
-        LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/python"
-        LIBRARY_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_SOURCE_DIR}/python"
-        ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/python_archive"
-        ARCHIVE_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}/python_archive"
-    )
-endif()
-
 # --- CLI tools ---
 option(BROGAMEAGENT_TOOLS "Build brogameagent CLI tools" ${PROJECT_IS_TOP_LEVEL})
 if(BROGAMEAGENT_TOOLS)
