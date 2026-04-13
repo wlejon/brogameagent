@@ -2,7 +2,9 @@
 
 #include "types.h"
 #include "unit.h"
+#include <cstdint>
 #include <functional>
+#include <random>
 #include <unordered_map>
 #include <vector>
 
@@ -11,6 +13,19 @@ namespace brogameagent {
 class Agent;
 class World;
 struct AgentAction;
+
+/// A damage event. Appended to World's event log whenever damage is dealt
+/// through World::dealDamage (or indirectly through resolveAttack).
+/// Event log is monotonically appended; use your consumed-index cursor
+/// to read new events, or call World::clearEvents() between ticks if you
+/// are the only consumer.
+struct DamageEvent {
+    int attackerId;  // Unit::id; may be -1 for world/environmental damage
+    int targetId;
+    float amount;    // actual HP lost (post-reduction)
+    DamageKind kind;
+    bool killed;     // true if this damage brought the target from alive to dead
+};
 
 /// Game-defined ability. Registered on the World and bound to a Unit slot
 /// by storing the ability id in Unit::abilitySlot[slot]. The fn is invoked
@@ -70,6 +85,10 @@ public:
     /// True if an ability id has been registered.
     bool hasAbility(int abilityId) const;
 
+    /// Pointer to the registered ability, or nullptr. Intended for mask
+    /// builders and debugging; do not mutate the returned spec.
+    const AbilitySpec* abilitySpec(int abilityId) const;
+
     /// Auto-attack resolution. Returns true iff the attack landed.
     /// Fails on: invalid target, dead target, same team, out of range,
     /// attack cooldown not ready, or attacker dead.
@@ -88,10 +107,51 @@ public:
     /// of the lower-level resolve* methods if you need that feedback.
     void applyAction(Agent& agent, const AgentAction& action, float dt);
 
+    // --- Damage logging ---
+
+    /// Deal damage through the world so it gets logged. Ability fns should
+    /// use this rather than calling Unit::takeDamage directly if they want
+    /// the hit to show up in reward tracking / training telemetry.
+    /// Returns the actual HP lost.
+    float dealDamage(Agent& attacker, Agent& target, float amount, DamageKind kind);
+
+    /// Same as dealDamage but for environmental / untracked sources (no attacker).
+    float dealEnvDamage(Agent& target, float amount, DamageKind kind);
+
+    /// Monotonic event log (appended, never reordered). Held until
+    /// clearEvents() is called.
+    const std::vector<DamageEvent>& events() const { return events_; }
+    void clearEvents();
+
+    // --- Deterministic RNG ---
+
+    /// Seed the per-world PRNG. Use the same seed to reproduce a rollout.
+    void seed(uint64_t s);
+
+    /// Access the underlying engine for library code / custom distributions.
+    std::mt19937_64& rng() { return engine_; }
+
+    /// Portable [0,1) float draw (does not use std::uniform_real_distribution,
+    /// which is implementation-defined across stdlibs).
+    float randFloat01();
+
+    /// Uniform float in [lo, hi).
+    float randRange(float lo, float hi);
+
+    /// Uniform int in [lo, hi] inclusive.
+    int randInt(int lo, int hi);
+
+    /// True with probability p.
+    bool chance(float p);
+
 private:
     std::vector<Agent*> agents_;
     std::vector<AABB> obstacles_;
     std::unordered_map<int, AbilitySpec> abilities_;
+
+    std::vector<DamageEvent> events_;
+
+    std::mt19937_64 engine_{0xC0FFEEULL};
 };
 
 } // namespace brogameagent

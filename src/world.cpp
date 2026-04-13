@@ -97,6 +97,11 @@ bool World::hasAbility(int abilityId) const {
     return abilities_.find(abilityId) != abilities_.end();
 }
 
+const AbilitySpec* World::abilitySpec(int abilityId) const {
+    auto it = abilities_.find(abilityId);
+    return (it == abilities_.end()) ? nullptr : &it->second;
+}
+
 bool World::resolveAttack(Agent& attacker, int targetId) {
     if (!attacker.unit().alive()) return false;
     if (attacker.unit().attackCooldown > 0.0f) return false;
@@ -110,12 +115,69 @@ bool World::resolveAttack(Agent& attacker, int targetId) {
     float r = attacker.unit().attackRange;
     if (dist2 > r * r) return false;
 
-    target->unit().takeDamage(attacker.unit().damage, attacker.unit().attackKind);
-    // attacksPerSec == 0 ⇒ no auto-attack (cooldown stays 0, but this resolve still
-    // deals damage; guard against divide-by-zero).
+    dealDamage(attacker, *target, attacker.unit().damage, attacker.unit().attackKind);
+    // attacksPerSec == 0 ⇒ no auto-attack cadence; guard against divide-by-zero.
     float aps = attacker.unit().attacksPerSec;
     attacker.unit().attackCooldown = (aps > 0.0f) ? (1.0f / aps) : 0.0f;
     return true;
+}
+
+float World::dealDamage(Agent& attacker, Agent& target, float amount, DamageKind kind) {
+    bool wasAlive = target.unit().alive();
+    float dealt = target.unit().takeDamage(amount, kind);
+    if (dealt > 0.0f) {
+        events_.push_back(DamageEvent{
+            attacker.unit().id,
+            target.unit().id,
+            dealt,
+            kind,
+            wasAlive && !target.unit().alive()
+        });
+    }
+    return dealt;
+}
+
+float World::dealEnvDamage(Agent& target, float amount, DamageKind kind) {
+    bool wasAlive = target.unit().alive();
+    float dealt = target.unit().takeDamage(amount, kind);
+    if (dealt > 0.0f) {
+        events_.push_back(DamageEvent{
+            -1,
+            target.unit().id,
+            dealt,
+            kind,
+            wasAlive && !target.unit().alive()
+        });
+    }
+    return dealt;
+}
+
+void World::clearEvents() {
+    events_.clear();
+}
+
+void World::seed(uint64_t s) {
+    engine_.seed(s);
+}
+
+float World::randFloat01() {
+    // Top 24 bits of the 64-bit engine output mapped to [0,1).
+    uint64_t r = engine_();
+    return static_cast<float>(r >> 40) * (1.0f / 16777216.0f);
+}
+
+float World::randRange(float lo, float hi) {
+    return lo + (hi - lo) * randFloat01();
+}
+
+int World::randInt(int lo, int hi) {
+    if (hi <= lo) return lo;
+    uint64_t span = static_cast<uint64_t>(hi - lo + 1);
+    return lo + static_cast<int>(engine_() % span);
+}
+
+bool World::chance(float p) {
+    return randFloat01() < p;
 }
 
 bool World::resolveAbility(Agent& caster, int slot, int targetId) {

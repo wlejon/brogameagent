@@ -788,6 +788,222 @@ TEST(world_applyAction_runs_attack_then_movement) {
     CHECK(shooter.z() < 0); // moved forward
 }
 
+// ─── RNG / event log / action mask / reward ─────────────────────────────────
+
+TEST(rng_deterministic_with_seed) {
+    World w1, w2;
+    w1.seed(12345);
+    w2.seed(12345);
+    for (int i = 0; i < 100; i++) {
+        CHECK(w1.randFloat01() == w2.randFloat01());
+    }
+}
+
+TEST(rng_randRange_and_chance) {
+    World w;
+    w.seed(42);
+    int hits = 0;
+    int samples = 2000;
+    for (int i = 0; i < samples; i++) {
+        float v = w.randRange(10.0f, 20.0f);
+        CHECK(v >= 10.0f);
+        CHECK(v < 20.0f);
+        if (w.chance(0.3f)) hits++;
+    }
+    // rough sanity: 2000 * 0.3 ~= 600 with plenty of slack
+    CHECK(hits > 450);
+    CHECK(hits < 750);
+}
+
+TEST(rng_randInt_inclusive) {
+    World w;
+    w.seed(7);
+    for (int i = 0; i < 200; i++) {
+        int v = w.randInt(5, 7);
+        CHECK(v >= 5);
+        CHECK(v <= 7);
+    }
+}
+
+TEST(events_logged_by_resolveAttack) {
+    World world;
+    Agent a, b;
+    a.unit().id = 1; a.unit().teamId = 0;
+    a.unit().damage = 50; a.unit().attackRange = 5; a.unit().attacksPerSec = 1;
+    b.unit().id = 2; b.unit().teamId = 1;
+    b.unit().hp = 100; b.unit().maxHp = 100;
+    a.setPosition(0, 0); b.setPosition(2, 0);
+    world.addAgent(&a);
+    world.addAgent(&b);
+
+    world.resolveAttack(a, 2);
+    CHECK(world.events().size() == 1);
+    CHECK(world.events()[0].attackerId == 1);
+    CHECK(world.events()[0].targetId == 2);
+    CHECK_NEAR(world.events()[0].amount, 50.0f, 1e-3f);
+    CHECK(!world.events()[0].killed);
+
+    // Finish it off.
+    a.unit().attackCooldown = 0;
+    world.resolveAttack(a, 2);
+    a.unit().attackCooldown = 0;
+    world.resolveAttack(a, 2);
+    // b hp was 100 -> 50 -> 0, last hit is the kill.
+    bool sawKill = false;
+    for (const auto& e : world.events()) if (e.killed) sawKill = true;
+    CHECK(sawKill);
+}
+
+TEST(events_cleared) {
+    World w;
+    Agent a, b;
+    a.unit().id = 1; a.unit().teamId = 0;
+    a.unit().damage = 10; a.unit().attackRange = 5; a.unit().attacksPerSec = 1;
+    b.unit().id = 2; b.unit().teamId = 1; b.unit().maxHp = 100; b.unit().hp = 100;
+    w.addAgent(&a); w.addAgent(&b);
+    w.resolveAttack(a, 2);
+    CHECK(w.events().size() == 1);
+    w.clearEvents();
+    CHECK(w.events().empty());
+}
+
+TEST(action_mask_enemy_slots_match_obs_order) {
+    World world;
+    Agent self;
+    self.unit().id = 1; self.unit().teamId = 0;
+    self.unit().attackRange = 3;
+    self.unit().attacksPerSec = 1;
+    self.setPosition(0, 0);
+
+    Agent near_enemy, far_enemy;
+    near_enemy.unit().id = 2; near_enemy.unit().teamId = 1;
+    near_enemy.unit().maxHp = 100; near_enemy.unit().hp = 100;
+    near_enemy.setPosition(2, 0); // in range
+    far_enemy.unit().id = 3; far_enemy.unit().teamId = 1;
+    far_enemy.unit().maxHp = 100; far_enemy.unit().hp = 100;
+    far_enemy.setPosition(10, 0); // out of range
+
+    world.addAgent(&self);
+    world.addAgent(&near_enemy);
+    world.addAgent(&far_enemy);
+
+    float mask[action_mask::TOTAL];
+    int ids[action_mask::N_ENEMY_SLOTS];
+    action_mask::build(self, world, mask, ids);
+
+    CHECK(ids[0] == 2);                  // nearest first
+    CHECK(ids[1] == 3);
+    CHECK_NEAR(mask[0], 1.0f, 1e-6f);    // near is attackable
+    CHECK_NEAR(mask[1], 0.0f, 1e-6f);    // far is out of range
+}
+
+TEST(action_mask_cooldown_blocks_attack) {
+    World world;
+    Agent self, enemy;
+    self.unit().id = 1; self.unit().teamId = 0;
+    self.unit().attackRange = 5; self.unit().attacksPerSec = 1;
+    self.unit().attackCooldown = 0.5f; // not ready
+    enemy.unit().id = 2; enemy.unit().teamId = 1;
+    enemy.unit().maxHp = 100; enemy.unit().hp = 100;
+    enemy.setPosition(2, 0);
+    world.addAgent(&self);
+    world.addAgent(&enemy);
+
+    float mask[action_mask::TOTAL];
+    int ids[action_mask::N_ENEMY_SLOTS];
+    action_mask::build(self, world, mask, ids);
+    CHECK_NEAR(mask[0], 0.0f, 1e-6f);
+}
+
+TEST(action_mask_ability_gates) {
+    World world;
+    Agent self;
+    self.unit().id = 1; self.unit().teamId = 0;
+    self.unit().mana = 40; self.unit().maxMana = 100;
+    self.unit().abilitySlot[0] = 100; // mana ok, cd ready
+    self.unit().abilitySlot[1] = 101; // mana low
+    self.unit().abilitySlot[2] = 102; // cd not ready
+    self.unit().abilityCooldowns[2] = 3.0f;
+    // slot 3 left empty
+    world.addAgent(&self);
+
+    AbilitySpec s0; s0.manaCost = 20; s0.fn = [](Agent&, World&, int) {};
+    AbilitySpec s1; s1.manaCost = 80; s1.fn = [](Agent&, World&, int) {};
+    AbilitySpec s2; s2.manaCost = 0;  s2.fn = [](Agent&, World&, int) {};
+    world.registerAbility(100, s0);
+    world.registerAbility(101, s1);
+    world.registerAbility(102, s2);
+
+    float mask[action_mask::TOTAL];
+    int ids[action_mask::N_ENEMY_SLOTS];
+    action_mask::build(self, world, mask, ids);
+
+    int base = action_mask::N_ENEMY_SLOTS;
+    CHECK_NEAR(mask[base + 0], 1.0f, 1e-6f);
+    CHECK_NEAR(mask[base + 1], 0.0f, 1e-6f); // mana low
+    CHECK_NEAR(mask[base + 2], 0.0f, 1e-6f); // cd
+    CHECK_NEAR(mask[base + 3], 0.0f, 1e-6f); // empty slot
+}
+
+TEST(reward_tracker_accumulates_deltas) {
+    World world;
+    Agent hero, target;
+    hero.unit().id = 1; hero.unit().teamId = 0;
+    hero.unit().damage = 30; hero.unit().attackRange = 5;
+    hero.unit().attacksPerSec = 1;
+    hero.setPosition(0, 0);
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.unit().maxHp = 100; target.unit().hp = 100;
+    target.setPosition(2, 0);
+    world.addAgent(&hero);
+    world.addAgent(&target);
+
+    RewardTracker rt;
+    rt.reset(hero, world);
+
+    world.resolveAttack(hero, 2); // 30 dmg
+    hero.setPosition(1, 0);       // travelled 1 unit
+
+    auto d1 = rt.consume(hero, world);
+    CHECK_NEAR(d1.damageDealt, 30.0f, 1e-3f);
+    CHECK_NEAR(d1.damageTaken, 0.0f, 1e-6f);
+    CHECK(d1.kills == 0);
+    CHECK(d1.deaths == 0);
+    CHECK_NEAR(d1.distanceTravelled, 1.0f, 1e-3f);
+
+    // Kill it off over two more hits.
+    hero.unit().attackCooldown = 0;
+    world.resolveAttack(hero, 2);
+    hero.unit().attackCooldown = 0;
+    world.resolveAttack(hero, 2);
+    hero.unit().attackCooldown = 0;
+    world.resolveAttack(hero, 2); // target now at 100-30-30-30-30 = -20 → 0
+
+    auto d2 = rt.consume(hero, world);
+    CHECK(d2.kills == 1);
+}
+
+TEST(reward_tracker_records_death) {
+    World world;
+    Agent hero, enemy;
+    hero.unit().id = 1; hero.unit().teamId = 0;
+    hero.unit().maxHp = 50; hero.unit().hp = 50;
+    enemy.unit().id = 2; enemy.unit().teamId = 1;
+    enemy.unit().damage = 100; enemy.unit().attackRange = 5;
+    enemy.unit().attacksPerSec = 1;
+    hero.setPosition(0, 0); enemy.setPosition(1, 0);
+    world.addAgent(&hero);
+    world.addAgent(&enemy);
+
+    RewardTracker rt;
+    rt.reset(hero, world);
+    world.resolveAttack(enemy, 1); // hero dies
+
+    auto d = rt.consume(hero, world);
+    CHECK_NEAR(d.damageTaken, 50.0f, 1e-3f);
+    CHECK(d.deaths == 1);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {

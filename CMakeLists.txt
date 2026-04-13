@@ -22,6 +22,8 @@ add_library(brogameagent STATIC
     src/perception.cpp
     src/world.cpp
     src/observation.cpp
+    src/action_mask.cpp
+    src/reward.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 
