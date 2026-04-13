@@ -89,4 +89,69 @@ Agent* World::findById(int id) const {
     return nullptr;
 }
 
+void World::registerAbility(int abilityId, AbilitySpec spec) {
+    abilities_[abilityId] = std::move(spec);
+}
+
+bool World::hasAbility(int abilityId) const {
+    return abilities_.find(abilityId) != abilities_.end();
+}
+
+bool World::resolveAttack(Agent& attacker, int targetId) {
+    if (!attacker.unit().alive()) return false;
+    if (attacker.unit().attackCooldown > 0.0f) return false;
+    Agent* target = findById(targetId);
+    if (!target || !target->unit().alive()) return false;
+    if (target->unit().teamId == attacker.unit().teamId) return false;
+
+    float dx = target->x() - attacker.x();
+    float dz = target->z() - attacker.z();
+    float dist2 = dx * dx + dz * dz;
+    float r = attacker.unit().attackRange;
+    if (dist2 > r * r) return false;
+
+    target->unit().takeDamage(attacker.unit().damage, attacker.unit().attackKind);
+    // attacksPerSec == 0 ⇒ no auto-attack (cooldown stays 0, but this resolve still
+    // deals damage; guard against divide-by-zero).
+    float aps = attacker.unit().attacksPerSec;
+    attacker.unit().attackCooldown = (aps > 0.0f) ? (1.0f / aps) : 0.0f;
+    return true;
+}
+
+bool World::resolveAbility(Agent& caster, int slot, int targetId) {
+    if (!caster.unit().alive()) return false;
+    if (slot < 0 || slot >= Unit::MAX_ABILITIES) return false;
+    int abilityId = caster.unit().abilitySlot[slot];
+    if (abilityId < 0) return false;
+    auto it = abilities_.find(abilityId);
+    if (it == abilities_.end()) return false;
+    const AbilitySpec& spec = it->second;
+
+    if (caster.unit().abilityCooldowns[slot] > 0.0f) return false;
+    if (caster.unit().mana < spec.manaCost) return false;
+
+    if (spec.range > 0.0f && targetId >= 0) {
+        Agent* target = findById(targetId);
+        if (!target) return false;
+        float dx = target->x() - caster.x();
+        float dz = target->z() - caster.z();
+        if (dx * dx + dz * dz > spec.range * spec.range) return false;
+    }
+
+    caster.unit().mana -= spec.manaCost;
+    caster.unit().abilityCooldowns[slot] = spec.cooldown;
+    if (spec.fn) spec.fn(caster, *this, targetId);
+    return true;
+}
+
+void World::applyAction(Agent& agent, const AgentAction& action, float dt) {
+    agent.applyAction(action, dt);
+    if (action.attackTargetId >= 0) {
+        resolveAttack(agent, action.attackTargetId);
+    }
+    if (action.useAbilityId >= 0) {
+        resolveAbility(agent, action.useAbilityId, action.attackTargetId);
+    }
+}
+
 } // namespace brogameagent

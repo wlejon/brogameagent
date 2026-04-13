@@ -576,6 +576,218 @@ TEST(observation_local_frame_rotates_with_yaw) {
     CHECK(std::abs(obs[base + 1]) < 0.05f);    // lx ~ 0
 }
 
+// ─── Combat ──────────────────────────────────────────────────────────────────
+
+TEST(unit_takeDamage_physical_reduced_by_armor) {
+    Unit u;
+    u.maxHp = 1000; u.hp = 1000; u.armor = 100;
+    // 100 damage × 100/(100+100) = 50 dealt
+    float dealt = u.takeDamage(100.0f, DamageKind::Physical);
+    CHECK_NEAR(dealt, 50.0f, 1e-3f);
+    CHECK_NEAR(u.hp, 950.0f, 1e-3f);
+}
+
+TEST(unit_takeDamage_magical_reduced_by_mr) {
+    Unit u;
+    u.maxHp = 1000; u.hp = 1000; u.magicResist = 50;
+    // 150 × 100/150 = 100
+    float dealt = u.takeDamage(150.0f, DamageKind::Magical);
+    CHECK_NEAR(dealt, 100.0f, 1e-3f);
+}
+
+TEST(unit_takeDamage_true_ignores_armor) {
+    Unit u;
+    u.maxHp = 500; u.hp = 500; u.armor = 100; u.magicResist = 100;
+    float dealt = u.takeDamage(120.0f, DamageKind::True);
+    CHECK_NEAR(dealt, 120.0f, 1e-3f);
+    CHECK_NEAR(u.hp, 380.0f, 1e-3f);
+}
+
+TEST(unit_takeDamage_clamps_to_zero_and_kills) {
+    Unit u;
+    u.maxHp = 100; u.hp = 30;
+    float dealt = u.takeDamage(200.0f, DamageKind::True);
+    CHECK_NEAR(dealt, 30.0f, 1e-3f);
+    CHECK(!u.alive());
+    // Further damage on a dead unit does nothing.
+    float more = u.takeDamage(50.0f, DamageKind::True);
+    CHECK_NEAR(more, 0.0f, 1e-6f);
+}
+
+TEST(world_resolveAttack_in_range_deals_damage) {
+    World world;
+    Agent attacker, target;
+    attacker.unit().id = 1; attacker.unit().teamId = 0;
+    attacker.unit().damage = 50; attacker.unit().attackRange = 5;
+    attacker.unit().attacksPerSec = 2.0f;
+    attacker.setPosition(0, 0);
+
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.unit().maxHp = 200; target.unit().hp = 200; target.unit().armor = 0;
+    target.setPosition(3, 0);
+
+    world.addAgent(&attacker);
+    world.addAgent(&target);
+
+    CHECK(world.resolveAttack(attacker, 2));
+    CHECK_NEAR(target.unit().hp, 150.0f, 1e-3f);
+    CHECK_NEAR(attacker.unit().attackCooldown, 0.5f, 1e-4f);
+
+    // Second attack fails — cooldown not ready.
+    CHECK(!world.resolveAttack(attacker, 2));
+    CHECK_NEAR(target.unit().hp, 150.0f, 1e-3f);
+}
+
+TEST(world_resolveAttack_out_of_range_fails) {
+    World world;
+    Agent a, b;
+    a.unit().id = 1; a.unit().teamId = 0;
+    a.unit().damage = 50; a.unit().attackRange = 3; a.unit().attacksPerSec = 1;
+    a.setPosition(0, 0);
+    b.unit().id = 2; b.unit().teamId = 1;
+    b.unit().hp = 100; b.unit().maxHp = 100;
+    b.setPosition(10, 0);
+    world.addAgent(&a);
+    world.addAgent(&b);
+
+    CHECK(!world.resolveAttack(a, 2));
+    CHECK_NEAR(b.unit().hp, 100.0f, 1e-3f);
+}
+
+TEST(world_resolveAttack_same_team_fails) {
+    World world;
+    Agent a, b;
+    a.unit().id = 1; a.unit().teamId = 0;
+    a.unit().damage = 50; a.unit().attackRange = 5; a.unit().attacksPerSec = 1;
+    a.setPosition(0, 0);
+    b.unit().id = 2; b.unit().teamId = 0;
+    b.unit().hp = 100; b.unit().maxHp = 100;
+    b.setPosition(2, 0);
+    world.addAgent(&a);
+    world.addAgent(&b);
+
+    CHECK(!world.resolveAttack(a, 2));
+}
+
+TEST(world_resolveAttack_dead_target_fails) {
+    World world;
+    Agent a, b;
+    a.unit().id = 1; a.unit().teamId = 0;
+    a.unit().damage = 50; a.unit().attackRange = 5; a.unit().attacksPerSec = 1;
+    b.unit().id = 2; b.unit().teamId = 1;
+    b.unit().hp = 0; b.unit().maxHp = 100;
+    world.addAgent(&a);
+    world.addAgent(&b);
+    CHECK(!world.resolveAttack(a, 2));
+}
+
+TEST(world_resolveAbility_invokes_fn_and_spends_resources) {
+    World world;
+    Agent caster, target;
+    caster.unit().id = 1; caster.unit().teamId = 0;
+    caster.unit().mana = 100; caster.unit().maxMana = 100;
+    caster.unit().abilitySlot[0] = 42;
+    caster.setPosition(0, 0);
+
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.unit().hp = 200; target.unit().maxHp = 200;
+    target.setPosition(3, 0);
+
+    world.addAgent(&caster);
+    world.addAgent(&target);
+
+    int callsMade = 0;
+    AbilitySpec spec;
+    spec.cooldown = 4.0f;
+    spec.manaCost = 30.0f;
+    spec.range = 5.0f;
+    spec.fn = [&](Agent& c, World& w, int tid) {
+        callsMade++;
+        Agent* t = w.findById(tid);
+        if (t) t->unit().takeDamage(80.0f, DamageKind::Magical);
+        (void)c;
+    };
+    world.registerAbility(42, spec);
+
+    CHECK(world.resolveAbility(caster, 0, 2));
+    CHECK(callsMade == 1);
+    CHECK_NEAR(target.unit().hp, 120.0f, 1e-3f); // 80 magic, MR=0
+    CHECK_NEAR(caster.unit().mana, 70.0f, 1e-4f);
+    CHECK_NEAR(caster.unit().abilityCooldowns[0], 4.0f, 1e-4f);
+
+    // Cooldown blocks re-cast.
+    CHECK(!world.resolveAbility(caster, 0, 2));
+    CHECK(callsMade == 1);
+}
+
+TEST(world_resolveAbility_out_of_range_fails) {
+    World world;
+    Agent caster, target;
+    caster.unit().id = 1; caster.unit().teamId = 0;
+    caster.unit().mana = 100; caster.unit().abilitySlot[0] = 7;
+    caster.setPosition(0, 0);
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.setPosition(20, 0);
+    world.addAgent(&caster);
+    world.addAgent(&target);
+
+    AbilitySpec spec;
+    spec.range = 5.0f;
+    spec.fn = [](Agent&, World&, int) {};
+    world.registerAbility(7, spec);
+
+    CHECK(!world.resolveAbility(caster, 0, 2));
+    CHECK_NEAR(caster.unit().mana, 100.0f, 1e-4f); // nothing spent
+}
+
+TEST(world_resolveAbility_not_enough_mana) {
+    World world;
+    Agent caster;
+    caster.unit().id = 1;
+    caster.unit().mana = 10; caster.unit().abilitySlot[0] = 3;
+    world.addAgent(&caster);
+
+    AbilitySpec spec;
+    spec.manaCost = 50;
+    spec.fn = [](Agent&, World&, int) {};
+    world.registerAbility(3, spec);
+
+    CHECK(!world.resolveAbility(caster, 0, -1));
+}
+
+TEST(world_resolveAbility_empty_slot_fails) {
+    World world;
+    Agent caster;
+    caster.unit().id = 1;
+    world.addAgent(&caster);
+    // abilitySlot[0] stays -1 by default
+    CHECK(!world.resolveAbility(caster, 0, -1));
+}
+
+TEST(world_applyAction_runs_attack_then_movement) {
+    World world;
+    Agent shooter, target;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    shooter.unit().damage = 25; shooter.unit().attackRange = 10;
+    shooter.unit().attacksPerSec = 1; shooter.unit().moveSpeed = 5;
+    shooter.setPosition(0, 0);
+
+    target.unit().id = 2; target.unit().teamId = 1;
+    target.unit().hp = 100; target.unit().maxHp = 100;
+    target.setPosition(5, 0);
+
+    world.addAgent(&shooter);
+    world.addAgent(&target);
+
+    AgentAction act;
+    act.moveZ = -1.0f;
+    act.attackTargetId = 2;
+    world.applyAction(shooter, act, 0.1f);
+
+    CHECK_NEAR(target.unit().hp, 75.0f, 1e-3f);
+    CHECK(shooter.z() < 0); // moved forward
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
