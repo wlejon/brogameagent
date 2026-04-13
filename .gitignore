@@ -10,3 +10,8 @@ python/*.so
 python/*.exp
 python/*.lib
 python/__pycache__/
+
+# Replay recordings (binary, may be large)
+*.bgar
+replays/
+replays_selfplay/
