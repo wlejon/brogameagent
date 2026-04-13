@@ -21,8 +21,12 @@ add_library(brogameagent STATIC
     src/agent.cpp
     src/perception.cpp
 )
+add_library(brogameagent::brogameagent ALIAS brogameagent)
 
-target_include_directories(brogameagent PUBLIC include)
+target_include_directories(brogameagent PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
 target_include_directories(brogameagent PRIVATE src)
 target_compile_features(brogameagent PUBLIC cxx_std_20)
 
@@ -30,6 +34,40 @@ if(MSVC)
     target_compile_options(brogameagent PRIVATE /W4)
 else()
     target_compile_options(brogameagent PRIVATE -Wall -Wextra)
+endif()
+
+# --- Install / export ---
+option(BROGAMEAGENT_INSTALL "Generate install targets for brogameagent" ${PROJECT_IS_TOP_LEVEL})
+if(BROGAMEAGENT_INSTALL)
+    include(GNUInstallDirs)
+    include(CMakePackageConfigHelpers)
+
+    install(TARGETS brogameagent
+        EXPORT brogameagentTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+    install(EXPORT brogameagentTargets
+        FILE brogameagentTargets.cmake
+        NAMESPACE brogameagent::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/brogameagent
+    )
+
+    set(_cfg_in "${CMAKE_CURRENT_BINARY_DIR}/brogameagentConfig.cmake.in")
+    file(WRITE "${_cfg_in}"
+        "@PACKAGE_INIT@\n"
+        "include(\"\${CMAKE_CURRENT_LIST_DIR}/brogameagentTargets.cmake\")\n"
+    )
+    configure_package_config_file("${_cfg_in}"
+        "${CMAKE_CURRENT_BINARY_DIR}/brogameagentConfig.cmake"
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/brogameagent
+    )
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/brogameagentConfig.cmake"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/brogameagent
+    )
 endif()
 
 # Tests

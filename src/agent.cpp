@@ -41,25 +41,21 @@ bool Agent::atTarget() const {
 }
 
 void Agent::update(float dt) {
+    vx_ = 0;
+    vz_ = 0;
     if (!hasTarget_ || path_.empty()) return;
 
     Vec2 pos{x_, z_};
     SteeringOutput steer = followPath(pos, path_, waypointIdx_, radius_ * 2.0f);
 
-    float len = std::sqrt(steer.fx * steer.fx + steer.fz * steer.fz);
-    if (len > 0.001f) {
-        x_ += (steer.fx / len) * speed_ * dt * len; // len acts as speed scale (arrive)
-        z_ += (steer.fz / len) * speed_ * dt * len;
-
-        // Update yaw from movement direction
+    // followPath returns a vector whose magnitude already encodes the arrive
+    // slowdown (0..1), so we apply it directly as a velocity scale.
+    if (steer.fx * steer.fx + steer.fz * steer.fz > 1e-6f) {
+        vx_ = steer.fx * speed_;
+        vz_ = steer.fz * speed_;
+        x_ += vx_ * dt;
+        z_ += vz_ * dt;
         yaw_ = std::atan2(steer.fx, -steer.fz);
-    }
-
-    // Repath periodically if target is moving
-    float dx = targetX_ - lastPathTargetX_;
-    float dz = targetZ_ - lastPathTargetZ_;
-    if ((dx * dx + dz * dz) > REPATH_DIST_SQ) {
-        recomputePath();
     }
 }
 

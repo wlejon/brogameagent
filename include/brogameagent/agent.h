@@ -43,6 +43,16 @@ public:
     /// Whether the agent has reached its current target.
     bool atTarget() const;
 
+    /// Current smoothed path (empty when no target or unreachable).
+    const std::vector<Vec2>& path() const { return path_; }
+
+    /// Index of the waypoint the agent is currently steering toward.
+    int currentWaypoint() const { return waypointIdx_; }
+
+    /// World-space velocity from the most recent update() call.
+    /// Zero until the first update after a target is set.
+    Vec2 velocity() const { return {vx_, vz_}; }
+
 private:
     void recomputePath();
 
@@ -51,6 +61,7 @@ private:
     float speed_ = 6.0f;
     float radius_ = 0.4f;
     float yaw_ = 0;
+    float vx_ = 0, vz_ = 0;
 
     bool hasTarget_ = false;
     float targetX_ = 0, targetZ_ = 0;

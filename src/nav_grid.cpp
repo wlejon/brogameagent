@@ -69,8 +69,10 @@ std::vector<Vec2> NavGrid::findPath(Vec2 from, Vec2 to) const {
     if (sx == gx && sz == gz) return {to};
 
     const int N = width_ * height_;
-    std::vector<float> gScore(N, 1e18f);
-    std::vector<int> cameFrom(N, -1);
+    gScoreScratch_.assign(N, 1e18f);
+    cameFromScratch_.assign(N, -1);
+    auto& gScore = gScoreScratch_;
+    auto& cameFrom = cameFromScratch_;
 
     auto idx = [&](int x, int z) { return z * width_ + x; };
     auto heuristic = [&](int x, int z) {

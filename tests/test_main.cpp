@@ -5,27 +5,24 @@
 
 #include <cassert>
 #include <cstdio>
+#include <vector>
 
 using namespace brogameagent;
 
-static int tests_run = 0;
-static int tests_passed = 0;
+struct TestEntry {
+    const char* name;
+    void (*fn)();
+};
+
+static std::vector<TestEntry>& registry() {
+    static std::vector<TestEntry> r;
+    return r;
+}
 
 #define TEST(name) \
     static void test_##name(); \
-    struct Register_##name { Register_##name() { run(#name, test_##name); } } reg_##name; \
+    struct Register_##name { Register_##name() { registry().push_back({#name, test_##name}); } } reg_##name; \
     static void test_##name()
-
-static void run(const char* name, void (*fn)()) {
-    tests_run++;
-    try {
-        fn();
-        tests_passed++;
-        printf("  PASS  %s\n", name);
-    } catch (...) {
-        printf("  FAIL  %s\n", name);
-    }
-}
 
 static void check(bool cond, const char* msg, int line) {
     if (!cond) {
@@ -33,6 +30,7 @@ static void check(bool cond, const char* msg, int line) {
         throw 0;
     }
 }
+
 #define CHECK(cond) check(cond, #cond, __LINE__)
 #define CHECK_NEAR(a, b, eps) check(std::abs((a) - (b)) < (eps), #a " ~= " #b, __LINE__)
 
@@ -229,6 +227,108 @@ TEST(agent_aim_at) {
     CHECK_NEAR(aim.pitch, 0.0f, 0.05f);
 }
 
+// ─── New helpers ────────────────────────────────────────────────────────────
+
+TEST(angle_wrap) {
+    CHECK_NEAR(wrapAngle(0.0f), 0.0f, 1e-5f);
+    // π and -π are the same angle; wrap returns either edge. Test values
+    // strictly inside the range instead.
+    CHECK_NEAR(wrapAngle(1.0f), 1.0f, 1e-5f);
+    CHECK_NEAR(wrapAngle(1.0f + static_cast<float>(2 * M_PI)), 1.0f, 1e-4f);
+    CHECK_NEAR(wrapAngle(-1.0f - static_cast<float>(2 * M_PI)), -1.0f, 1e-4f);
+}
+
+TEST(angle_delta_shortest) {
+    // From +170° to -170° should be +20°, not -340°
+    float from = 170.0f * static_cast<float>(M_PI) / 180.0f;
+    float to   = -170.0f * static_cast<float>(M_PI) / 180.0f;
+    float d = angleDelta(from, to);
+    CHECK_NEAR(d, 20.0f * static_cast<float>(M_PI) / 180.0f, 1e-4f);
+}
+
+TEST(steering_pursue_leads_target) {
+    // Target moving in +x at (5,0), moving fast in +x. Pursue from origin
+    // should steer toward a point ahead of the target (more +x than 5).
+    auto s = pursue({0, 0}, {5, 0}, {10, 0}, 5.0f);
+    // Direct seek would give fx ~= 1, fz ~= 0. Pursue still mostly +x.
+    CHECK(s.fx > 0.9f);
+}
+
+TEST(steering_evade_runs_from_predicted) {
+    auto s = evade({0, 0}, {5, 0}, {10, 0}, 5.0f);
+    CHECK(s.fx < -0.9f); // flees in -x direction
+}
+
+TEST(lead_aim_stationary_matches_direct) {
+    auto lead = computeLeadAim(0, 0, 0, 0, 0, -10, 0, 0, 0, 50.0f);
+    CHECK(lead.valid);
+    CHECK_NEAR(lead.aim.yaw, 0.0f, 0.01f);
+    CHECK_NEAR(lead.aim.pitch, 0.0f, 0.01f);
+}
+
+TEST(lead_aim_moving_crossways) {
+    // Target at (10,0,0), moving +z at 10 m/s. Projectile 50 m/s.
+    // Intercept point should be somewhere at +x with some +z offset, so yaw
+    // between "right" (+pi/2) and "right-and-back" — larger yaw than direct.
+    auto direct = computeAim(0, 0, 0, 10, 0, 0);
+    auto lead = computeLeadAim(0, 0, 0, 10, 0, 0, 0, 0, 10, 50.0f);
+    CHECK(lead.valid);
+    CHECK(lead.timeToHit > 0);
+    // The intercept is offset along +z from target pos, so yaw should differ.
+    CHECK(std::abs(lead.aim.yaw - direct.yaw) > 0.01f);
+}
+
+TEST(lead_aim_unreachable_target) {
+    // Target moving faster than projectile, directly away.
+    auto lead = computeLeadAim(0, 0, 0, 10, 0, 0, 100, 0, 0, 10.0f);
+    CHECK(!lead.valid);
+}
+
+TEST(canSee_out_of_range) {
+    CHECK(!canSee({0, 0}, {100, 0}, static_cast<float>(M_PI / 2), static_cast<float>(M_PI), 10.0f, nullptr, 0));
+}
+
+TEST(canSee_outside_fov) {
+    // Facing -Z (yaw=0), target at +x is 90° off axis. FOV 60° (±30°) rejects.
+    float fov60 = 60.0f * static_cast<float>(M_PI) / 180.0f;
+    CHECK(!canSee({0, 0}, {10, 0}, 0.0f, fov60, 100.0f, nullptr, 0));
+}
+
+TEST(canSee_in_fov_and_los) {
+    float fov120 = 120.0f * static_cast<float>(M_PI) / 180.0f;
+    CHECK(canSee({0, 0}, {10, 0}, static_cast<float>(M_PI / 2), fov120, 100.0f, nullptr, 0));
+}
+
+TEST(canSee_blocked_by_obstacle) {
+    AABB obs[] = {{5, 0, 1, 1}};
+    float fov120 = 120.0f * static_cast<float>(M_PI) / 180.0f;
+    CHECK(!canSee({0, 0}, {10, 0}, static_cast<float>(M_PI / 2), fov120, 100.0f, obs, 1));
+}
+
+TEST(agent_accessors_reflect_state) {
+    NavGrid grid(-20, -20, 20, 20, 0.5f);
+    Agent agent;
+    agent.setNavGrid(&grid);
+    agent.setPosition(0, 0);
+    agent.setSpeed(6.0f);
+
+    CHECK(agent.path().empty());
+    CHECK(agent.currentWaypoint() == 0);
+
+    agent.setTarget(5, 0);
+    CHECK(!agent.path().empty());
+
+    agent.update(1.0f / 60.0f);
+    Vec2 v = agent.velocity();
+    CHECK(v.x > 0.0f);
+    CHECK_NEAR(v.z, 0.0f, 0.5f);
+
+    agent.clearTarget();
+    agent.update(1.0f / 60.0f);
+    CHECK_NEAR(agent.velocity().x, 0.0f, 1e-4f);
+    CHECK_NEAR(agent.velocity().z, 0.0f, 1e-4f);
+}
+
 TEST(agent_clear_target_stops) {
     Agent agent;
     agent.setPosition(0, 0);
@@ -249,7 +349,19 @@ TEST(agent_clear_target_stops) {
 int main() {
     printf("brogameagent tests\n");
     printf("==================\n");
-    // Tests auto-register via static constructors above
-    printf("\n%d/%d tests passed\n", tests_passed, tests_run);
-    return (tests_passed == tests_run) ? 0 : 1;
+
+    int passed = 0;
+    for (const auto& t : registry()) {
+        try {
+            t.fn();
+            passed++;
+            printf("  PASS  %s\n", t.name);
+        } catch (...) {
+            printf("  FAIL  %s\n", t.name);
+        }
+    }
+
+    int total = static_cast<int>(registry().size());
+    printf("\n%d/%d tests passed\n", passed, total);
+    return (passed == total) ? 0 : 1;
 }

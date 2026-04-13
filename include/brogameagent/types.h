@@ -34,4 +34,18 @@ struct AimResult {
     float pitch;
 };
 
+/// Wrap an angle (radians) into [-pi, pi].
+inline float wrapAngle(float a) {
+    constexpr float TWO_PI = 6.28318530717958647692f;
+    constexpr float PI     = 3.14159265358979323846f;
+    a = std::fmod(a + PI, TWO_PI);
+    if (a < 0) a += TWO_PI;
+    return a - PI;
+}
+
+/// Shortest signed delta from `from` to `to`, in [-pi, pi].
+inline float angleDelta(float from, float to) {
+    return wrapAngle(to - from);
+}
+
 } // namespace brogameagent
