@@ -9,6 +9,7 @@
 #include "world.h"
 #include "observation.h"
 #include "projectile.h"
+#include "snapshot.h"
 #include "action_mask.h"
 #include "reward.h"
 #include "simulation.h"

@@ -8,6 +8,16 @@ enum class DamageKind {
     True      // unreduced
 };
 
+/// A damage event. Appended to World's event log whenever damage is dealt
+/// through World::dealDamage, resolveAttack, or projectile impact.
+struct DamageEvent {
+    int attackerId;  // Unit::id; may be -1 for world/environmental damage
+    int targetId;
+    float amount;    // actual HP lost (post-reduction)
+    DamageKind kind;
+    bool killed;     // true if this damage brought the target from alive to dead
+};
+
 /// Combat / stat payload attached to every Agent. Plain-old-data so it can be
 /// copied, reset, and flattened into observation vectors cheaply.
 ///

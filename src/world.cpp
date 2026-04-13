@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 
 namespace brogameagent {
 
@@ -219,29 +220,135 @@ void World::stepProjectiles(float dt) {
             continue;
         }
 
-        // Collision: first enemy whose disk overlaps the projectile disk.
-        for (Agent* a : agents_) {
-            if (!a->unit().alive()) continue;
-            if (a->unit().teamId == p.teamId) continue;
-            float dx = a->x() - p.x;
-            float dz = a->z() - p.z;
-            float hitR = p.radius + a->unit().radius;
-            if (dx * dx + dz * dz <= hitR * hitR) {
-                bool wasAlive = a->unit().alive();
-                float dealt = a->unit().takeDamage(p.damage, p.kind);
-                if (dealt > 0.0f) {
-                    events_.push_back(DamageEvent{
-                        p.ownerId,
-                        a->unit().id,
-                        dealt,
-                        p.kind,
-                        wasAlive && !a->unit().alive()
-                    });
+        // Resolve collisions based on mode.
+        switch (p.mode) {
+            case ProjectileMode::Single: {
+                for (Agent* a : agents_) {
+                    if (!a->unit().alive()) continue;
+                    if (a->unit().teamId == p.teamId) continue;
+                    float dx = a->x() - p.x;
+                    float dz = a->z() - p.z;
+                    float hitR = p.radius + a->unit().radius;
+                    if (dx * dx + dz * dz <= hitR * hitR) {
+                        applyProjectileHit_(p, *a);
+                        p.alive = false;
+                        break;
+                    }
                 }
-                p.alive = false;
+                break;
+            }
+            case ProjectileMode::Pierce: {
+                for (Agent* a : agents_) {
+                    if (!a->unit().alive()) continue;
+                    if (a->unit().teamId == p.teamId) continue;
+                    if (pierceAlreadyHit_(p, a->unit().id)) continue;
+                    float dx = a->x() - p.x;
+                    float dz = a->z() - p.z;
+                    float hitR = p.radius + a->unit().radius;
+                    if (dx * dx + dz * dz > hitR * hitR) continue;
+
+                    applyProjectileHit_(p, *a);
+                    pierceRemember_(p, a->unit().id);
+
+                    if (p.maxHits > 0 && p.hitCount >= p.maxHits) {
+                        p.alive = false;
+                        break;
+                    }
+                }
+                break;
+            }
+            case ProjectileMode::AoE: {
+                Agent* impact = nullptr;
+                for (Agent* a : agents_) {
+                    if (!a->unit().alive()) continue;
+                    if (a->unit().teamId == p.teamId) continue;
+                    float dx = a->x() - p.x;
+                    float dz = a->z() - p.z;
+                    float hitR = p.radius + a->unit().radius;
+                    if (dx * dx + dz * dz <= hitR * hitR) { impact = a; break; }
+                }
+                if (impact) {
+                    float ex = impact->x();
+                    float ez = impact->z();
+                    float r2 = p.splashRadius * p.splashRadius;
+                    for (Agent* a : agents_) {
+                        if (!a->unit().alive()) continue;
+                        if (a->unit().teamId == p.teamId) continue;
+                        float dx = a->x() - ex;
+                        float dz = a->z() - ez;
+                        if (dx * dx + dz * dz <= r2) {
+                            applyProjectileHit_(p, *a);
+                        }
+                    }
+                    p.alive = false;
+                }
                 break;
             }
         }
+    }
+}
+
+bool World::pierceAlreadyHit_(const Projectile& p, int unitId) {
+    for (int i = 0; i < p.hitCount; i++) {
+        if (p.hitIds[i] == unitId) return true;
+    }
+    return false;
+}
+
+void World::pierceRemember_(Projectile& p, int unitId) {
+    if (p.hitCount < Projectile::MAX_PIERCE_MEMORY) {
+        p.hitIds[p.hitCount++] = unitId;
+    } else {
+        for (int i = 1; i < Projectile::MAX_PIERCE_MEMORY; i++)
+            p.hitIds[i - 1] = p.hitIds[i];
+        p.hitIds[Projectile::MAX_PIERCE_MEMORY - 1] = unitId;
+    }
+}
+
+WorldSnapshot World::snapshot() const {
+    WorldSnapshot s;
+    s.agents.reserve(agents_.size());
+    for (Agent* a : agents_) s.agents.push_back(a->captureSnapshot());
+    s.projectiles = projectiles_;
+    s.nextProjectileId = nextProjectileId_;
+    s.events = events_;
+    std::ostringstream os;
+    os << engine_;
+    s.rngState = os.str();
+    return s;
+}
+
+void World::restore(const WorldSnapshot& snap) {
+    // Index live agents by Unit::id for matching.
+    std::unordered_map<int, Agent*> byId;
+    byId.reserve(agents_.size());
+    for (Agent* a : agents_) byId[a->unit().id] = a;
+
+    for (const AgentSnapshot& as : snap.agents) {
+        auto it = byId.find(as.id);
+        if (it != byId.end()) it->second->applySnapshot(as);
+    }
+
+    projectiles_ = snap.projectiles;
+    nextProjectileId_ = snap.nextProjectileId;
+    events_ = snap.events;
+    if (!snap.rngState.empty()) {
+        std::istringstream is(snap.rngState);
+        is >> engine_;
+    }
+}
+
+void World::applyProjectileHit_(const Projectile& p, Agent& target) {
+    bool wasAlive = target.unit().alive();
+    float dealt = target.unit().takeDamage(p.damage, p.kind);
+    if (dealt > 0.0f) {
+        events_.push_back(DamageEvent{
+            p.ownerId,
+            target.unit().id,
+            dealt,
+            p.kind,
+            wasAlive && !target.unit().alive()
+        });
     }
 }
 

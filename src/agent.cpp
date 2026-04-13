@@ -127,6 +127,36 @@ AimResult Agent::aimAt(float tx, float ty, float tz, float eyeHeight) const {
     return computeAim(x_, eyeHeight, z_, tx, ty, tz);
 }
 
+AgentSnapshot Agent::captureSnapshot() const {
+    AgentSnapshot s;
+    s.id = unit_.id;
+    s.x = x_; s.z = z_;
+    s.vx = vx_; s.vz = vz_;
+    s.yaw = yaw_; s.aimYaw = aimYaw_; s.aimPitch = aimPitch_;
+    s.speed = speed_; s.radius = radius_;
+    s.maxAccel = maxAccel_; s.maxTurnRate = maxTurnRate_;
+    s.unit = unit_;
+    s.hasTarget = hasTarget_;
+    s.targetX = targetX_; s.targetZ = targetZ_;
+    return s;
+}
+
+void Agent::applySnapshot(const AgentSnapshot& s) {
+    x_ = s.x; z_ = s.z;
+    vx_ = s.vx; vz_ = s.vz;
+    yaw_ = s.yaw; aimYaw_ = s.aimYaw; aimPitch_ = s.aimPitch;
+    speed_ = s.speed; radius_ = s.radius;
+    maxAccel_ = s.maxAccel; maxTurnRate_ = s.maxTurnRate;
+    unit_ = s.unit;
+    hasTarget_ = s.hasTarget;
+    targetX_ = s.targetX; targetZ_ = s.targetZ;
+    path_.clear();
+    waypointIdx_ = 0;
+    lastPathTargetX_ = 0;
+    lastPathTargetZ_ = 0;
+    if (hasTarget_) recomputePath();
+}
+
 void Agent::recomputePath() {
     if (!navGrid_) {
         path_ = {Vec2{targetX_, targetZ_}};

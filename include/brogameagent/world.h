@@ -3,6 +3,7 @@
 #include "types.h"
 #include "unit.h"
 #include "projectile.h"
+#include "snapshot.h"
 #include <cstdint>
 #include <functional>
 #include <random>
@@ -15,18 +16,7 @@ class Agent;
 class World;
 struct AgentAction;
 
-/// A damage event. Appended to World's event log whenever damage is dealt
-/// through World::dealDamage (or indirectly through resolveAttack).
-/// Event log is monotonically appended; use your consumed-index cursor
-/// to read new events, or call World::clearEvents() between ticks if you
-/// are the only consumer.
-struct DamageEvent {
-    int attackerId;  // Unit::id; may be -1 for world/environmental damage
-    int targetId;
-    float amount;    // actual HP lost (post-reduction)
-    DamageKind kind;
-    bool killed;     // true if this damage brought the target from alive to dead
-};
+// DamageEvent lives in unit.h (needed by snapshot headers too).
 
 /// Game-defined ability. Registered on the World and bound to a Unit slot
 /// by storing the ability id in Unit::abilitySlot[slot]. The fn is invoked
@@ -161,7 +151,22 @@ public:
     /// True with probability p.
     bool chance(float p);
 
+    // --- Snapshot / restore ---
+
+    /// Capture all resettable state (agents, projectiles, events, RNG,
+    /// projectile id counter) into a WorldSnapshot.
+    WorldSnapshot snapshot() const;
+
+    /// Apply a snapshot to this world. Agents are matched by Unit::id; any
+    /// agent present in the live world whose id also appears in the snapshot
+    /// is rewound. Obstacles and registered abilities are untouched.
+    void restore(const WorldSnapshot& snap);
+
 private:
+    static bool pierceAlreadyHit_(const Projectile& p, int unitId);
+    static void pierceRemember_(Projectile& p, int unitId);
+    void applyProjectileHit_(const Projectile& p, Agent& target);
+
     std::vector<Agent*> agents_;
     std::vector<AABB> obstacles_;
     std::unordered_map<int, AbilitySpec> abilities_;

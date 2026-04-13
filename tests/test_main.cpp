@@ -1227,6 +1227,245 @@ TEST(simulation_deterministic_with_seed) {
     CHECK(r1.second == r2.second);
 }
 
+// ─── Projectile modes / Snapshot ────────────────────────────────────────────
+
+TEST(projectile_pierce_hits_multiple) {
+    World world;
+    Agent shooter, e1, e2, e3;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    e1.unit().id = 2; e1.unit().teamId = 1; e1.unit().maxHp = 200; e1.unit().hp = 200;
+    e2.unit().id = 3; e2.unit().teamId = 1; e2.unit().maxHp = 200; e2.unit().hp = 200;
+    e3.unit().id = 4; e3.unit().teamId = 1; e3.unit().maxHp = 200; e3.unit().hp = 200;
+    e1.unit().radius = 0.5f; e2.unit().radius = 0.5f; e3.unit().radius = 0.5f;
+    shooter.setPosition(0, 0);
+    e1.setPosition(3, 0);
+    e2.setPosition(6, 0);
+    e3.setPosition(9, 0);
+    world.addAgent(&shooter);
+    world.addAgent(&e1); world.addAgent(&e2); world.addAgent(&e3);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0;
+    p.mode = ProjectileMode::Pierce;
+    p.vx = 20; p.vz = 0; p.speed = 20;
+    p.damage = 30; p.remainingLife = 2.0f;
+    world.spawnProjectile(p);
+
+    for (int i = 0; i < 60; i++) world.tick(1.0f / 60.0f);
+
+    CHECK_NEAR(e1.unit().hp, 170.0f, 1e-3f);
+    CHECK_NEAR(e2.unit().hp, 170.0f, 1e-3f);
+    CHECK_NEAR(e3.unit().hp, 170.0f, 1e-3f);
+}
+
+TEST(projectile_pierce_capped_by_maxHits) {
+    World world;
+    Agent shooter, e1, e2, e3;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    e1.unit().id = 2; e1.unit().teamId = 1; e1.unit().maxHp = 200; e1.unit().hp = 200;
+    e2.unit().id = 3; e2.unit().teamId = 1; e2.unit().maxHp = 200; e2.unit().hp = 200;
+    e3.unit().id = 4; e3.unit().teamId = 1; e3.unit().maxHp = 200; e3.unit().hp = 200;
+    e1.unit().radius = 0.5f; e2.unit().radius = 0.5f; e3.unit().radius = 0.5f;
+    shooter.setPosition(0, 0);
+    e1.setPosition(3, 0); e2.setPosition(6, 0); e3.setPosition(9, 0);
+    world.addAgent(&shooter);
+    world.addAgent(&e1); world.addAgent(&e2); world.addAgent(&e3);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0;
+    p.mode = ProjectileMode::Pierce;
+    p.maxHits = 2;
+    p.vx = 20; p.vz = 0; p.speed = 20;
+    p.damage = 30; p.remainingLife = 2.0f;
+    world.spawnProjectile(p);
+
+    for (int i = 0; i < 60; i++) world.tick(1.0f / 60.0f);
+
+    CHECK(e1.unit().hp < 200.0f);
+    CHECK(e2.unit().hp < 200.0f);
+    CHECK_NEAR(e3.unit().hp, 200.0f, 1e-3f); // beyond cap
+}
+
+TEST(projectile_aoe_splashes_near_impact) {
+    World world;
+    Agent shooter, primary, bystander, far;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    primary.unit().id = 2; primary.unit().teamId = 1;
+    primary.unit().maxHp = 200; primary.unit().hp = 200; primary.unit().radius = 0.5f;
+    bystander.unit().id = 3; bystander.unit().teamId = 1;
+    bystander.unit().maxHp = 200; bystander.unit().hp = 200;
+    far.unit().id = 4; far.unit().teamId = 1;
+    far.unit().maxHp = 200; far.unit().hp = 200;
+
+    shooter.setPosition(0, 0);
+    primary.setPosition(5, 0);
+    bystander.setPosition(5.5f, 1.0f); // ~1.12 units from impact
+    far.setPosition(5, 10);             // way outside splash
+
+    world.addAgent(&shooter);
+    world.addAgent(&primary);
+    world.addAgent(&bystander);
+    world.addAgent(&far);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0;
+    p.mode = ProjectileMode::AoE;
+    p.splashRadius = 2.0f;
+    p.vx = 20; p.vz = 0; p.speed = 20;
+    p.damage = 40; p.remainingLife = 1.0f;
+    world.spawnProjectile(p);
+
+    for (int i = 0; i < 30; i++) world.tick(1.0f / 60.0f);
+
+    CHECK_NEAR(primary.unit().hp, 160.0f, 1e-3f);
+    CHECK_NEAR(bystander.unit().hp, 160.0f, 1e-3f);
+    CHECK_NEAR(far.unit().hp, 200.0f, 1e-3f);
+}
+
+TEST(projectile_aoe_respects_team) {
+    World world;
+    Agent shooter, enemy, ally;
+    shooter.unit().id = 1; shooter.unit().teamId = 0;
+    enemy.unit().id = 2; enemy.unit().teamId = 1;
+    enemy.unit().maxHp = 200; enemy.unit().hp = 200; enemy.unit().radius = 0.5f;
+    ally.unit().id = 3; ally.unit().teamId = 0;
+    ally.unit().maxHp = 200; ally.unit().hp = 200;
+
+    shooter.setPosition(0, 0);
+    enemy.setPosition(5, 0);
+    ally.setPosition(5, 0.5f); // right next to splash origin
+    world.addAgent(&shooter);
+    world.addAgent(&enemy);
+    world.addAgent(&ally);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0;
+    p.mode = ProjectileMode::AoE;
+    p.splashRadius = 3.0f;
+    p.vx = 20; p.vz = 0; p.speed = 20;
+    p.damage = 40; p.remainingLife = 1.0f;
+    world.spawnProjectile(p);
+
+    for (int i = 0; i < 30; i++) world.tick(1.0f / 60.0f);
+
+    CHECK(enemy.unit().hp < 200.0f);
+    CHECK_NEAR(ally.unit().hp, 200.0f, 1e-3f); // same team — untouched
+}
+
+TEST(snapshot_roundtrip_restores_agent_state) {
+    World w;
+    Agent a;
+    a.unit().id = 1; a.unit().teamId = 0;
+    a.unit().hp = 80; a.unit().maxHp = 100;
+    a.unit().attackCooldown = 1.25f;
+    a.setPosition(5.5f, -2.0f);
+    w.addAgent(&a);
+
+    WorldSnapshot s = w.snapshot();
+
+    // Mutate.
+    a.unit().hp = 10;
+    a.unit().attackCooldown = 0.0f;
+    a.setPosition(100, 100);
+
+    w.restore(s);
+    CHECK_NEAR(a.unit().hp, 80.0f, 1e-4f);
+    CHECK_NEAR(a.unit().attackCooldown, 1.25f, 1e-4f);
+    CHECK_NEAR(a.x(), 5.5f, 1e-4f);
+    CHECK_NEAR(a.z(), -2.0f, 1e-4f);
+}
+
+TEST(snapshot_restores_projectiles_and_events) {
+    World w;
+    Agent s, t;
+    s.unit().id = 1; s.unit().teamId = 0;
+    t.unit().id = 2; t.unit().teamId = 1; t.unit().maxHp = 100; t.unit().hp = 100;
+    s.setPosition(0, 0); t.setPosition(5, 0);
+    w.addAgent(&s); w.addAgent(&t);
+
+    Projectile p;
+    p.ownerId = 1; p.teamId = 0; p.vx = 10; p.vz = 0; p.speed = 10;
+    p.damage = 25; p.remainingLife = 2.0f;
+    w.spawnProjectile(p);
+
+    // Advance halfway — projectile mid-flight, no hit yet.
+    for (int i = 0; i < 6; i++) w.tick(1.0f / 60.0f);
+    CHECK(w.projectiles().size() == 1);
+    CHECK(w.events().empty());
+
+    WorldSnapshot snap = w.snapshot();
+
+    // Advance to impact.
+    for (int i = 0; i < 60; i++) w.tick(1.0f / 60.0f);
+    CHECK(w.projectiles().empty());
+    CHECK(!w.events().empty());
+
+    // Rewind and compare.
+    w.restore(snap);
+    CHECK(w.projectiles().size() == 1);
+    CHECK(w.events().empty());
+    CHECK_NEAR(t.unit().hp, 100.0f, 1e-4f);
+}
+
+TEST(snapshot_restores_rng_for_deterministic_replay) {
+    World w;
+    w.seed(12345);
+    Agent a;
+    a.unit().id = 1; a.unit().moveSpeed = 6.0f;
+    a.setPosition(0, 0);
+    w.addAgent(&a);
+
+    // Draw a few numbers to advance state, then snapshot.
+    for (int i = 0; i < 20; i++) w.randFloat01();
+    WorldSnapshot s = w.snapshot();
+
+    float seqA[50];
+    for (int i = 0; i < 50; i++) seqA[i] = w.randFloat01();
+
+    w.restore(s);
+    for (int i = 0; i < 50; i++) {
+        float v = w.randFloat01();
+        CHECK(v == seqA[i]);
+    }
+}
+
+TEST(snapshot_restore_in_simulation_reproduces_rollout) {
+    // Run 30 steps, snapshot, continue 30 steps. Restore and re-run; the
+    // final state of the second half must match exactly.
+    World w;
+    w.seed(777);
+    Agent a;
+    a.unit().id = 1; a.unit().moveSpeed = 6.0f;
+    a.setPosition(0, 0);
+    w.addAgent(&a);
+
+    Simulation sim(w);
+    sim.addPolicy(1, [](Agent& self, const World& world) {
+        AgentAction act;
+        float r = const_cast<World&>(world).randFloat01();
+        act.moveX = (r < 0.5f) ? -1.0f : 1.0f;
+        (void)self;
+        return act;
+    });
+
+    sim.runSteps(1.0f / 60.0f, 30);
+    WorldSnapshot snap = w.snapshot();
+    int snapSteps = sim.steps();
+
+    sim.runSteps(1.0f / 60.0f, 30);
+    float x1 = a.x(), z1 = a.z();
+
+    w.restore(snap);
+    // Counters are not part of the world snapshot — reset manually.
+    sim.resetCounters();
+    CHECK(sim.steps() == 0);
+    (void)snapSteps;
+
+    sim.runSteps(1.0f / 60.0f, 30);
+    CHECK(a.x() == x1);
+    CHECK(a.z() == z1);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {

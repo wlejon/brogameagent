@@ -2,6 +2,7 @@
 
 #include "types.h"
 #include "unit.h"
+#include "snapshot.h"
 #include <vector>
 
 namespace brogameagent {
@@ -89,6 +90,13 @@ public:
     const std::vector<Vec2>& path() const { return path_; }
     int currentWaypoint() const { return waypointIdx_; }
     Vec2 velocity() const { return {vx_, vz_}; }
+
+    /// Capture full resettable agent state into a snapshot.
+    AgentSnapshot captureSnapshot() const;
+
+    /// Restore agent state from a snapshot. If hasTarget, repaths against
+    /// the current navgrid binding (not captured in the snapshot).
+    void applySnapshot(const AgentSnapshot& s);
 
 private:
     void recomputePath();
