@@ -933,6 +933,315 @@ void TeamMcts::advance_root(const JointAction& committed) {
 }
 
 
+// ─── Tactic layer (hierarchical team MCTS) ────────────────────────────────
+
+namespace {
+
+Agent* lowest_hp_enemy(const Agent& self, const World& world) {
+    Agent* best = nullptr;
+    float  best_hp = std::numeric_limits<float>::infinity();
+    for (Agent* a : world.agents()) {
+        if (a == &self) continue;
+        if (!a->unit().alive()) continue;
+        if (a->unit().teamId == self.unit().teamId) continue;
+        if (a->unit().hp < best_hp) { best_hp = a->unit().hp; best = a; }
+    }
+    return best;
+}
+
+// Given a target enemy id, find its slot index in the hero's action_mask
+// enemy ordering. -1 if not present or not attackable.
+int enemy_slot_of_id(const Agent& self, const World& world, int enemy_id) {
+    if (enemy_id < 0) return -1;
+    float mask[action_mask::TOTAL];
+    int   enemy_ids[action_mask::N_ENEMY_SLOTS];
+    action_mask::build(self, world, mask, enemy_ids);
+    for (int k = 0; k < action_mask::N_ENEMY_SLOTS; k++) {
+        if (enemy_ids[k] == enemy_id) {
+            return mask[k] > 0.0f ? k : -1;  // only if legal to attack
+        }
+    }
+    return -1;
+}
+
+// Standalone "apply joint team actions for one decision window" — shared by
+// TacticMcts and used during rollout. Mirrors TeamMcts::step_joint_.
+void step_team_window(World& world,
+                      const std::vector<Agent*>& heroes,
+                      const std::vector<CombatAction>& hero_actions,
+                      const OpponentPolicy& opponent,
+                      float dt, int action_repeat,
+                      int team_id) {
+    std::vector<std::pair<Agent*, CombatAction>> enemy_acts;
+    for (Agent* a : world.agents()) {
+        bool is_hero = false;
+        for (Agent* h : heroes) if (a == h) { is_hero = true; break; }
+        if (is_hero) continue;
+        if (a->unit().teamId == team_id) continue;
+        CombatAction act{};
+        if (a->unit().alive() && opponent) act = opponent(*a, world);
+        enemy_acts.emplace_back(a, act);
+    }
+    for (int t = 0; t < action_repeat; t++) {
+        for (size_t i = 0; i < heroes.size(); i++) {
+            mcts::apply(*heroes[i], world, hero_actions[i], dt);
+        }
+        for (auto& [a, act] : enemy_acts) {
+            mcts::apply(*a, world, act, dt);
+        }
+        world.stepProjectiles(dt);
+        world.cullProjectiles();
+    }
+}
+
+bool team_terminal(const World& world, int team_id) {
+    bool team_alive = false, enemy_alive = false;
+    for (Agent* a : world.agents()) {
+        if (!a->unit().alive()) continue;
+        if (a->unit().teamId == team_id) team_alive = true;
+        else                              enemy_alive = true;
+    }
+    return !team_alive || !enemy_alive;
+}
+
+} // namespace
+
+CombatAction tactic_to_action(const Tactic& t, const Agent& hero, const World& world) {
+    if (!hero.unit().alive()) return {};
+    CombatAction a;
+    a.move_dir = MoveDir::Hold;
+    a.attack_slot = -1;
+    a.ability_slot = -1;
+
+    switch (t.kind) {
+        case TacticKind::Hold: {
+            // Try to auto-attack any in-range enemy (slot 0 = nearest).
+            float mask[action_mask::TOTAL];
+            int   enemy_ids[action_mask::N_ENEMY_SLOTS];
+            action_mask::build(hero, world, mask, enemy_ids);
+            for (int k = 0; k < action_mask::N_ENEMY_SLOTS; k++) {
+                if (mask[k] > 0.0f) { a.attack_slot = static_cast<int8_t>(k); break; }
+            }
+            break;
+        }
+        case TacticKind::FocusLowestHp: {
+            Agent* target = lowest_hp_enemy(hero, world);
+            if (!target) break;
+            int slot = enemy_slot_of_id(hero, world, target->unit().id);
+            if (slot >= 0) {
+                a.attack_slot = static_cast<int8_t>(slot);
+                a.move_dir = MoveDir::Hold;   // in range — stop and shoot
+            } else {
+                a.move_dir = MoveDir::N;      // out of range — close the gap
+                // Aim handled inside mcts::apply via nearest-enemy fallback;
+                // to be truly robust we'd aim at `target` explicitly. That
+                // requires threading the enemy_id through apply — leaving
+                // that for a future tactic-targeting refactor.
+            }
+            break;
+        }
+        case TacticKind::Scatter: {
+            // Attack nearest in-range (slot 0), close otherwise.
+            float mask[action_mask::TOTAL];
+            int   enemy_ids[action_mask::N_ENEMY_SLOTS];
+            action_mask::build(hero, world, mask, enemy_ids);
+            if (mask[0] > 0.0f) {
+                a.attack_slot = 0;
+            } else if (enemy_ids[0] >= 0) {
+                a.move_dir = MoveDir::N;
+            }
+            break;
+        }
+        case TacticKind::Retreat: {
+            // mcts::apply aims the agent at the nearest enemy, so local -Z
+            // (N) is toward them and +Z (S) is away. No attacks.
+            a.move_dir = MoveDir::S;
+            break;
+        }
+        default: break;
+    }
+    return a;
+}
+
+std::vector<Tactic> legal_tactics(const std::vector<Agent*>& /*heroes*/,
+                                   const World& /*world*/) {
+    std::vector<Tactic> out;
+    out.reserve(static_cast<size_t>(TacticKind::COUNT));
+    for (int k = 0; k < static_cast<int>(TacticKind::COUNT); k++) {
+        out.push_back({ static_cast<TacticKind>(k) });
+    }
+    return out;
+}
+
+namespace {
+
+TacticMcts::TNode* tmcts_best_uct_child(TacticMcts::TNode* node, float c) {
+    TacticMcts::TNode* best = nullptr;
+    float best_score = -std::numeric_limits<float>::infinity();
+    const float ln_n = std::log(static_cast<float>(std::max(1, node->visits)));
+    for (auto& up : node->children) {
+        auto* ch = up.get();
+        if (ch->visits == 0) return ch;
+        float exploit = ch->mean();
+        float explore = c * std::sqrt(ln_n / static_cast<float>(ch->visits));
+        float score = exploit + explore;
+        if (score > best_score) { best_score = score; best = ch; }
+    }
+    return best;
+}
+
+int tmcts_count_tree(const TacticMcts::TNode* n) {
+    if (!n) return 0;
+    int total = 1;
+    for (const auto& ch : n->children) total += tmcts_count_tree(ch.get());
+    return total;
+}
+
+} // namespace
+
+void TacticMcts::step_tactic_(World& world, const std::vector<Agent*>& heroes,
+                               const Tactic& tactic) {
+    if (heroes.empty()) return;
+    const int team_id = heroes.front()->unit().teamId;
+    for (int w = 0; w < cfg_.tactic_window_decisions; w++) {
+        std::vector<CombatAction> hero_actions(heroes.size());
+        for (size_t i = 0; i < heroes.size(); i++) {
+            hero_actions[i] = tactic_to_action(tactic, *heroes[i], world);
+        }
+        step_team_window(world, heroes, hero_actions, opponent_,
+                         cfg_.sim_dt, cfg_.action_repeat, team_id);
+        if (team_terminal(world, team_id)) break;
+    }
+}
+
+TacticMcts::TNode* TacticMcts::select_(TNode* node, World& world,
+                                        const std::vector<Agent*>& heroes) {
+    const int team_id = heroes.front()->unit().teamId;
+    while (node->fully_expanded() && !node->is_leaf()) {
+        if (team_terminal(world, team_id)) return node;
+        TNode* next = tmcts_best_uct_child(node, cfg_.uct_c);
+        if (!next) return node;
+        step_tactic_(world, heroes, next->action);
+        node = next;
+    }
+    return node;
+}
+
+TacticMcts::TNode* TacticMcts::expand_(TNode* node, World& world,
+                                        const std::vector<Agent*>& heroes) {
+    const int team_id = heroes.front()->unit().teamId;
+    if (team_terminal(world, team_id) || node->untried.empty()) return node;
+
+    Tactic t = node->untried.back();
+    node->untried.pop_back();
+
+    step_tactic_(world, heroes, t);
+
+    auto child = std::make_unique<TNode>();
+    child->action = t;
+    child->parent = node;
+    child->untried = legal_tactics(heroes, world);
+    TNode* raw = child.get();
+    node->children.push_back(std::move(child));
+    return raw;
+}
+
+float TacticMcts::rollout_(World& world, const std::vector<Agent*>& heroes, int team_id) {
+    int steps = 0;
+    while (steps < cfg_.rollout_horizon && !team_terminal(world, team_id)) {
+        auto tactics = legal_tactics(heroes, world);
+        if (tactics.empty()) break;
+        int i = world.randInt(0, static_cast<int>(tactics.size()) - 1);
+        step_tactic_(world, heroes, tactics[static_cast<size_t>(i)]);
+        steps++;
+    }
+    return evaluator_
+        ? evaluator_->evaluate(world, team_id)
+        : TeamHpDeltaEvaluator{}.evaluate(world, team_id);
+}
+
+Tactic TacticMcts::search(World& world, const std::vector<Agent*>& heroes) {
+    using clock = std::chrono::steady_clock;
+    const auto t_start = clock::now();
+
+    if (heroes.empty()) return {};
+    const int team_id = heroes.front()->unit().teamId;
+
+    WorldSnapshot saved = world.snapshot();
+
+    bool reused = false;
+    if (root_) {
+        reused = true;
+    } else {
+        root_ = std::make_unique<TNode>();
+        root_->untried = legal_tactics(heroes, world);
+    }
+
+    const int  iter_cap = cfg_.iterations > 0 ? cfg_.iterations
+                                              : std::numeric_limits<int>::max();
+    const bool time_cap = cfg_.budget_ms > 0;
+
+    int it = 0;
+    for (; it < iter_cap; it++) {
+        if (time_cap) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                clock::now() - t_start).count();
+            if (elapsed >= cfg_.budget_ms) break;
+        }
+        world.restore(saved);
+        world.seed(cfg_.seed
+                   + static_cast<uint64_t>(it)
+                   + static_cast<uint64_t>(root_->visits) * 7919ull);
+
+        TNode* leaf  = select_(root_.get(), world, heroes);
+        TNode* child = expand_(leaf, world, heroes);
+        float  value = rollout_(world, heroes, team_id);
+
+        // Backprop.
+        TNode* node = child;
+        while (node) {
+            node->visits++;
+            node->total_value += value;
+            node = node->parent;
+        }
+    }
+
+    world.restore(saved);
+
+    TNode* best = nullptr;
+    int best_visits = -1;
+    for (auto& up : root_->children) {
+        if (up->visits > best_visits) { best_visits = up->visits; best = up.get(); }
+    }
+
+    const auto t_end = clock::now();
+    stats_.iterations    = it;
+    stats_.root_children = static_cast<int>(root_->children.size());
+    stats_.tree_size     = tmcts_count_tree(root_.get());
+    stats_.best_mean     = best ? best->mean() : 0.0f;
+    stats_.best_visits   = best ? best->visits : 0;
+    stats_.elapsed_ms    = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count());
+    stats_.reused_root   = reused;
+
+    return best ? best->action : Tactic{};
+}
+
+void TacticMcts::advance_root(const Tactic& committed) {
+    if (!root_) return;
+    std::unique_ptr<TNode> promoted;
+    for (auto& up : root_->children) {
+        if (up->action == committed) { promoted = std::move(up); break; }
+    }
+    if (promoted) {
+        promoted->parent = nullptr;
+        root_ = std::move(promoted);
+    } else {
+        root_.reset();
+    }
+}
+
+
 // ─── Root-parallel search ──────────────────────────────────────────────────
 
 namespace {

@@ -171,6 +171,12 @@ struct MctsConfig {
     int   action_repeat = 4;          // sim ticks per MCTS decision
     float uct_c = 1.41421356f;        // √2 — exploration constant
     uint64_t seed = 0xC0FFEEULL;      // rollout RNG seed (per search() call)
+
+    // TacticMcts only: how many decision windows a committed tactic runs for
+    // before the planner re-chooses. A window of 4 × action_repeat(4) × 16ms
+    // ≈ 256 ms of game time per tactic — coarse enough to matter, fine
+    // enough to respond to new threats.
+    int   tactic_window_decisions = 4;
 };
 
 struct SearchStats {
@@ -400,6 +406,98 @@ private:
     MctsConfig                       cfg_{};
     std::shared_ptr<ITeamEvaluator>  evaluator_;
     std::shared_ptr<IRolloutPolicy>  rollout_policy_;
+    OpponentPolicy                   opponent_;
+    std::unique_ptr<TNode>           root_;
+    SearchStats                      stats_{};
+};
+
+
+// ─── Hierarchical tactic layer ─────────────────────────────────────────────
+//
+// Above the raw-action layer, TacticMcts plans at the granularity of named
+// team tactics — "hold", "focus-fire the weakest enemy", "scatter and
+// attack nearest", "retreat". This is how MOBA/RTS AIs typically organise:
+// a small discrete set of coordinated plays at a coarse cadence, with
+// per-unit execution handled by a scripted interpreter of the chosen play.
+//
+// Branching: ~COUNT tactics per node, vs. the flat team's 18^N joint space.
+// That makes tactic search *much* shallower/wider, so it's the right tool
+// for long-horizon coordination (several seconds into the future).
+//
+// TeamMcts and TacticMcts compose: a real game AI can run tactic planning
+// at 4 Hz and fine-grained per-hero planning at 16 Hz, layered.
+
+enum class TacticKind : int {
+    Hold          = 0,   // stay put; auto-attack anything in range
+    FocusLowestHp = 1,   // all heroes pile on the weakest enemy
+    Scatter       = 2,   // each hero attacks their nearest enemy
+    Retreat       = 3,   // move away from nearest enemy; no attacks
+    COUNT
+};
+
+struct Tactic {
+    TacticKind kind = TacticKind::Hold;
+    bool operator==(const Tactic&) const = default;
+};
+
+/// Convert a team tactic into a concrete per-hero CombatAction for the
+/// current world state. Stateless — same (tactic, hero, world) always
+/// produces the same action. Heroes not alive get a no-op.
+CombatAction tactic_to_action(const Tactic& t, const Agent& hero, const World& world);
+
+/// Tactics currently available to the team. Today returns all TacticKind
+/// variants; future versions will prune contextually (e.g. no Retreat if
+/// already beyond escape range, no FocusLowestHp if no enemies).
+std::vector<Tactic> legal_tactics(const std::vector<Agent*>& heroes, const World& world);
+
+class TacticMcts {
+public:
+    struct TNode {
+        Tactic  action{};            // tactic that produced this node from parent
+        TNode*  parent = nullptr;
+        std::vector<std::unique_ptr<TNode>> children;
+        std::vector<Tactic> untried;
+        int     visits = 0;
+        float   total_value = 0.0f;
+
+        float mean() const { return visits > 0 ? total_value / static_cast<float>(visits) : 0.0f; }
+        bool  is_leaf() const { return children.empty(); }
+        bool  fully_expanded() const { return untried.empty(); }
+    };
+
+    TacticMcts() = default;
+    explicit TacticMcts(MctsConfig cfg) : cfg_(cfg) {}
+
+    void set_config(const MctsConfig& cfg) { cfg_ = cfg; }
+    const MctsConfig& config() const { return cfg_; }
+
+    void set_evaluator(std::shared_ptr<ITeamEvaluator> ev)      { evaluator_ = std::move(ev); }
+    void set_opponent_policy(OpponentPolicy p)                  { opponent_ = std::move(p); }
+
+    /// Search for the best tactic for the team. The returned Tactic is the
+    /// most-visited root child; caller commits it by executing
+    /// tactic_to_action per hero for cfg.tactic_window_decisions windows.
+    Tactic search(World& world, const std::vector<Agent*>& heroes);
+
+    void advance_root(const Tactic& committed);
+    void reset_tree() { root_.reset(); }
+
+    const SearchStats& last_stats() const { return stats_; }
+    const TNode* last_root() const { return root_.get(); }
+
+private:
+    TNode* select_(TNode* node, World& world, const std::vector<Agent*>& heroes);
+    TNode* expand_(TNode* node, World& world, const std::vector<Agent*>& heroes);
+    float  rollout_(World& world, const std::vector<Agent*>& heroes, int team_id);
+
+    // Execute `tactic` for cfg_.tactic_window_decisions windows. Each window
+    // applies tactic_to_action per hero and opponent_ per non-hero, repeated
+    // cfg_.action_repeat sim ticks per window. Early-exits on terminal.
+    void step_tactic_(World& world, const std::vector<Agent*>& heroes,
+                       const Tactic& tactic);
+
+    MctsConfig                       cfg_{};
+    std::shared_ptr<ITeamEvaluator>  evaluator_;
     OpponentPolicy                   opponent_;
     std::unique_ptr<TNode>           root_;
     SearchStats                      stats_{};

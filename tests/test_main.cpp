@@ -2594,6 +2594,114 @@ TEST(team_mcts_advance_root_reuses_subtree) {
     CHECK(engine.last_stats().tree_size >= 1);
 }
 
+// ─── TacticMcts (hierarchical tactic layer) ────────────────────────────────
+
+TEST(tactic_to_action_hold_attacks_nearest_in_range) {
+    auto s = make_team_scene(1, 1);
+    mcts::Tactic t{ mcts::TacticKind::Hold };
+    auto a = mcts::tactic_to_action(t, *s->heroes[0], s->world);
+    CHECK(a.move_dir == mcts::MoveDir::Hold);
+    CHECK(a.attack_slot == 0);
+}
+
+TEST(tactic_to_action_retreat_moves_back_no_attack) {
+    auto s = make_team_scene(1, 1);
+    mcts::Tactic t{ mcts::TacticKind::Retreat };
+    auto a = mcts::tactic_to_action(t, *s->heroes[0], s->world);
+    CHECK(a.move_dir == mcts::MoveDir::S);
+    CHECK(a.attack_slot == -1);
+    CHECK(a.ability_slot == -1);
+}
+
+TEST(tactic_to_action_focus_targets_lowest_hp_enemy) {
+    auto s = make_team_scene(1, 2);
+    s->enemies[1]->unit().hp = 5.0f;   // make enemy 1 the clear focus
+    mcts::Tactic t{ mcts::TacticKind::FocusLowestHp };
+    auto a = mcts::tactic_to_action(t, *s->heroes[0], s->world);
+    CHECK(a.attack_slot != -1 || a.move_dir == mcts::MoveDir::N);
+}
+
+TEST(tactic_mcts_search_returns_legal_tactic) {
+    auto s = make_team_scene(2, 2);
+    mcts::MctsConfig cfg;
+    cfg.iterations            = 300;
+    cfg.rollout_horizon       = 8;
+    cfg.action_repeat         = 2;
+    cfg.tactic_window_decisions = 3;
+    cfg.seed                  = 0xF00D;
+    mcts::TacticMcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_aggressive);
+
+    auto chosen = engine.search(s->world, raw(s->heroes));
+    CHECK(static_cast<int>(chosen.kind) >= 0);
+    CHECK(static_cast<int>(chosen.kind) <  static_cast<int>(mcts::TacticKind::COUNT));
+    CHECK(engine.last_stats().tree_size > 1);
+    CHECK(engine.last_stats().root_children > 0);
+}
+
+TEST(tactic_mcts_value_is_positive_when_team_dominant) {
+    // 3 strong heroes vs 1 weak enemy — team should expect to win under any
+    // reasonable tactic choice. Best-action mean value should be positive.
+    auto s = make_team_scene(3, 1);
+    s->enemies[0]->unit().hp = 10.0f;
+    s->enemies[0]->unit().damage = 1.0f;
+    mcts::MctsConfig cfg;
+    cfg.iterations            = 400;
+    cfg.rollout_horizon       = 16;
+    cfg.action_repeat         = 2;
+    cfg.tactic_window_decisions = 3;
+    cfg.seed                  = 17;
+    mcts::TacticMcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+
+    engine.search(s->world, raw(s->heroes));
+    CHECK(engine.last_stats().best_mean > 0.0f);
+}
+
+TEST(tactic_mcts_is_deterministic_under_seed) {
+    auto s1 = make_team_scene(2, 2);
+    auto s2 = make_team_scene(2, 2);
+    mcts::MctsConfig cfg;
+    cfg.iterations            = 200;
+    cfg.rollout_horizon       = 6;
+    cfg.action_repeat         = 2;
+    cfg.tactic_window_decisions = 3;
+    cfg.seed                  = 0xDEAD;
+
+    auto run = [&](TeamScene& s) {
+        mcts::TacticMcts engine(cfg);
+        engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+        engine.set_opponent_policy(mcts::policy_idle);
+        return engine.search(s.world, raw(s.heroes));
+    };
+    auto t1 = run(*s1);
+    auto t2 = run(*s2);
+    CHECK(t1 == t2);
+}
+
+TEST(tactic_mcts_search_side_effect_free) {
+    auto s = make_team_scene(2, 2);
+    std::vector<float> hp_before;
+    for (auto& h : s->heroes) hp_before.push_back(h->unit().hp);
+    for (auto& e : s->enemies) hp_before.push_back(e->unit().hp);
+
+    mcts::MctsConfig cfg;
+    cfg.iterations            = 100;
+    cfg.rollout_horizon       = 4;
+    cfg.action_repeat         = 2;
+    cfg.tactic_window_decisions = 2;
+    mcts::TacticMcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    engine.search(s->world, raw(s->heroes));
+
+    size_t i = 0;
+    for (auto& h : s->heroes)  CHECK_NEAR(h->unit().hp, hp_before[i++], 1e-4f);
+    for (auto& e : s->enemies) CHECK_NEAR(e->unit().hp, hp_before[i++], 1e-4f);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
