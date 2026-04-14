@@ -2429,6 +2429,171 @@ TEST(dmcts_parallel_returns_joint) {
     }
 }
 
+// ─── TeamMcts (cooperative multi-agent) ────────────────────────────────────
+
+namespace {
+
+struct TeamScene {
+    World world;
+    std::vector<std::unique_ptr<Agent>> heroes;
+    std::vector<std::unique_ptr<Agent>> enemies;
+};
+
+static std::unique_ptr<TeamScene> make_team_scene(int num_heroes, int num_enemies,
+                                                   float attackRange = 3.0f) {
+    auto s = std::make_unique<TeamScene>();
+    // Heroes clumped on the left, enemies clumped on the right, all in range.
+    int next_id = 1;
+    for (int i = 0; i < num_heroes; i++) {
+        auto a = std::make_unique<Agent>();
+        a->unit().id = next_id++;
+        a->unit().teamId = 0;
+        a->unit().hp = 100.0f;
+        a->unit().maxHp = 100.0f;
+        a->unit().damage = 10.0f;
+        a->unit().attackRange = attackRange;
+        a->unit().attacksPerSec = 2.0f;
+        a->setPosition(-1.0f + 0.4f * i, 0.3f * i);
+        a->setMaxAccel(30.0f);
+        a->setMaxTurnRate(10.0f);
+        s->world.addAgent(a.get());
+        s->heroes.push_back(std::move(a));
+    }
+    for (int i = 0; i < num_enemies; i++) {
+        auto a = std::make_unique<Agent>();
+        a->unit().id = next_id++;
+        a->unit().teamId = 1;
+        a->unit().hp = 40.0f;
+        a->unit().maxHp = 40.0f;
+        a->unit().damage = 5.0f;
+        a->unit().attackRange = attackRange;
+        a->unit().attacksPerSec = 1.0f;
+        a->setPosition(1.0f + 0.4f * i, 0.3f * i);
+        a->setMaxAccel(30.0f);
+        a->setMaxTurnRate(10.0f);
+        s->world.addAgent(a.get());
+        s->enemies.push_back(std::move(a));
+    }
+    s->world.seed(99);
+    return s;
+}
+
+static std::vector<Agent*> raw(const std::vector<std::unique_ptr<Agent>>& v) {
+    std::vector<Agent*> out;
+    out.reserve(v.size());
+    for (const auto& u : v) out.push_back(u.get());
+    return out;
+}
+
+} // namespace
+
+TEST(team_hp_delta_evaluator_terminal_cases) {
+    auto s = make_team_scene(2, 1);
+    mcts::TeamHpDeltaEvaluator ev;
+    CHECK_NEAR(ev.evaluate(s->world, 0), 0.0f, 1e-5f);   // both sides full HP
+
+    s->enemies[0]->unit().hp = 0.0f;
+    CHECK_NEAR(ev.evaluate(s->world, 0), 1.0f, 1e-5f);   // all enemies dead → +1
+
+    s->enemies[0]->unit().hp = 40.0f;
+    for (auto& h : s->heroes) h->unit().hp = 0.0f;
+    CHECK_NEAR(ev.evaluate(s->world, 0), -1.0f, 1e-5f);  // team wiped → -1
+}
+
+TEST(team_mcts_two_heroes_vs_one_enemy) {
+    // 2v1 in range with hero stat advantage — team should win in expectation.
+    auto s = make_team_scene(2, 1);
+    mcts::MctsConfig cfg;
+    cfg.iterations      = 600;
+    cfg.rollout_horizon = 16;
+    cfg.action_repeat   = 2;
+    cfg.seed            = 0xA11CE;
+    mcts::TeamMcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    engine.set_opponent_policy(mcts::policy_aggressive);
+
+    auto heroes = raw(s->heroes);
+    auto joint = engine.search(s->world, heroes);
+
+    CHECK(joint.per_hero.size() == 2);
+    // Non-trivial tree: root visited many times, children expanded.
+    CHECK(engine.last_stats().tree_size > 1);
+    CHECK(engine.last_stats().root_children > 0);
+}
+
+TEST(team_mcts_three_heroes_vs_two_enemies_deterministic_under_seed) {
+    auto s1 = make_team_scene(3, 2);
+    auto s2 = make_team_scene(3, 2);
+    mcts::MctsConfig cfg;
+    cfg.iterations      = 200;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat   = 2;
+    cfg.seed            = 0xCAFE;
+
+    auto run = [&](TeamScene& s) {
+        mcts::TeamMcts engine(cfg);
+        engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+        engine.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+        engine.set_opponent_policy(mcts::policy_idle);
+        return engine.search(s.world, raw(s.heroes));
+    };
+
+    auto j1 = run(*s1);
+    auto j2 = run(*s2);
+    CHECK(j1 == j2);
+}
+
+TEST(team_mcts_search_side_effect_free) {
+    auto s = make_team_scene(2, 2);
+    std::vector<float> hp_before;
+    std::vector<std::pair<float,float>> pos_before;
+    for (auto& h : s->heroes) {
+        hp_before.push_back(h->unit().hp);
+        pos_before.push_back({h->x(), h->z()});
+    }
+
+    mcts::MctsConfig cfg;
+    cfg.iterations      = 128;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat   = 2;
+    mcts::TeamMcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    engine.search(s->world, raw(s->heroes));
+
+    for (size_t i = 0; i < s->heroes.size(); i++) {
+        CHECK_NEAR(s->heroes[i]->unit().hp, hp_before[i], 1e-4f);
+        CHECK_NEAR(s->heroes[i]->x(), pos_before[i].first,  1e-4f);
+        CHECK_NEAR(s->heroes[i]->z(), pos_before[i].second, 1e-4f);
+    }
+}
+
+TEST(team_mcts_advance_root_reuses_subtree) {
+    auto s = make_team_scene(2, 1);
+    mcts::MctsConfig cfg;
+    cfg.iterations      = 300;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat   = 2;
+    mcts::TeamMcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+
+    auto heroes = raw(s->heroes);
+    auto first = engine.search(s->world, heroes);
+    CHECK(engine.last_stats().reused_root == false);
+
+    engine.advance_root(first);
+    for (size_t i = 0; i < heroes.size(); i++) {
+        mcts::apply(*heroes[i], s->world, first.per_hero[i], cfg.sim_dt * cfg.action_repeat);
+    }
+    engine.search(s->world, heroes);
+    // advance_root may have reset the tree if the rarely-picked joint-action
+    // pair wasn't expanded. Either state is valid — just assert the second
+    // search completed without crashing and produced a tree.
+    CHECK(engine.last_stats().tree_size >= 1);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {

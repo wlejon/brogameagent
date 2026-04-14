@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -98,6 +99,25 @@ public:
 class HpDeltaEvaluator : public IEvaluator {
 public:
     float evaluate(const World& world, int heroId) const override;
+};
+
+
+// ─── Team evaluator ────────────────────────────────────────────────────────
+//
+// Team-scoped companion to IEvaluator. Used by TeamMcts: the value at the
+// root is a single scalar representing "how well did this team do", not
+// per-hero credit assignment. That matches coop-MCTS literature — individual
+// heroes share a reward so the search optimises coordinated play.
+
+class ITeamEvaluator {
+public:
+    virtual ~ITeamEvaluator() = default;
+    virtual float evaluate(const World& world, int team_id) const = 0;
+};
+
+class TeamHpDeltaEvaluator : public ITeamEvaluator {
+public:
+    float evaluate(const World& world, int team_id) const override;
 };
 
 
@@ -305,6 +325,84 @@ private:
     std::shared_ptr<IRolloutPolicy> rollout_policy_;
     std::unique_ptr<DNode>          root_;
     SearchStats                     stats_{};
+};
+
+
+// ─── TeamMcts (cooperative multi-agent) ────────────────────────────────────
+//
+// Plans joint actions for a team of N heroes cooperating against scripted
+// opponents. Uses multi-agent Decoupled UCT: at every node, each hero
+// maintains independent action stats; selection picks one action per hero
+// (all maximising the shared team value); joint actions index sparse
+// children. Enemies (and any non-team agents) are driven by OpponentPolicy
+// during expansion and rollout.
+//
+// Target scenario: MOBA-style "intelligent heroes vs heavy PvE pressure".
+// Use DecoupledMcts instead when two sides are simultaneously planning
+// against each other (1v1 or symmetric PvP).
+
+class TeamMcts {
+public:
+    struct JointAction {
+        std::vector<CombatAction> per_hero;
+        bool operator==(const JointAction&) const = default;
+    };
+
+    struct PlayerStats {
+        std::vector<CombatAction> actions;
+        std::vector<int>          visits;
+        std::vector<float>        total_value;
+    };
+
+    struct TNode {
+        std::vector<PlayerStats> per_hero;          // size = heroes.size()
+        std::map<std::vector<int>, std::unique_ptr<TNode>> children;
+        int   visits = 0;
+        TNode* parent = nullptr;
+        std::vector<int> parent_action_idx;         // size = heroes.size()
+    };
+
+    TeamMcts() = default;
+    explicit TeamMcts(MctsConfig cfg) : cfg_(cfg) {}
+
+    void set_config(const MctsConfig& cfg) { cfg_ = cfg; }
+    const MctsConfig& config() const { return cfg_; }
+
+    void set_evaluator(std::shared_ptr<ITeamEvaluator> ev)      { evaluator_ = std::move(ev); }
+    void set_rollout_policy(std::shared_ptr<IRolloutPolicy> p)  { rollout_policy_ = std::move(p); }
+    void set_opponent_policy(OpponentPolicy p)                  { opponent_ = std::move(p); }
+
+    /// Search the best joint action for the team. All heroes are treated as
+    /// cooperating (shared value). The returned JointAction has one entry
+    /// per input hero, in the same order as `heroes`.
+    JointAction search(World& world, const std::vector<Agent*>& heroes);
+
+    /// Promote the subtree corresponding to the committed joint action.
+    /// Size of committed.per_hero must match the team at the last search.
+    void advance_root(const JointAction& committed);
+
+    void reset_tree() { root_.reset(); }
+
+    const SearchStats& last_stats() const { return stats_; }
+    const TNode* last_root() const { return root_.get(); }
+
+private:
+    static PlayerStats build_stats_(const Agent& self, const World& world);
+
+    int  pick_action_idx_(const PlayerStats& stats, int node_visits, float c) const;
+
+    void step_joint_(World& world,
+                     const std::vector<Agent*>& heroes,
+                     const std::vector<CombatAction>& hero_actions);
+
+    float rollout_(World& world, const std::vector<Agent*>& heroes, int team_id);
+
+    MctsConfig                       cfg_{};
+    std::shared_ptr<ITeamEvaluator>  evaluator_;
+    std::shared_ptr<IRolloutPolicy>  rollout_policy_;
+    OpponentPolicy                   opponent_;
+    std::unique_ptr<TNode>           root_;
+    SearchStats                      stats_{};
 };
 
 

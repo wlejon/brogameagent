@@ -657,6 +657,282 @@ void Mcts::advance_root(const CombatAction& committed) {
     }
 }
 
+// ─── TeamHpDeltaEvaluator ──────────────────────────────────────────────────
+
+float TeamHpDeltaEvaluator::evaluate(const World& world, int team_id) const {
+    float team_sum = 0.0f;  int team_count = 0;
+    float enemy_sum = 0.0f; int enemy_count = 0;
+    bool  any_team_alive  = false;
+    bool  any_enemy_alive = false;
+    for (Agent* a : world.agents()) {
+        bool alive = a->unit().alive();
+        float frac = alive ? a->unit().hp / std::max(1e-6f, a->unit().maxHp) : 0.0f;
+        if (a->unit().teamId == team_id) {
+            team_count++;
+            team_sum += frac;
+            if (alive) any_team_alive = true;
+        } else {
+            enemy_count++;
+            enemy_sum += frac;
+            if (alive) any_enemy_alive = true;
+        }
+    }
+    if (!any_team_alive)  return -1.0f;
+    if (!any_enemy_alive) return  1.0f;
+
+    float team_avg  = team_count  > 0 ? team_sum  / static_cast<float>(team_count)  : 0.0f;
+    float enemy_avg = enemy_count > 0 ? enemy_sum / static_cast<float>(enemy_count) : 0.0f;
+    float delta = team_avg - enemy_avg;
+    if (delta < -1.0f) delta = -1.0f;
+    if (delta >  1.0f) delta =  1.0f;
+    return delta;
+}
+
+
+// ─── TeamMcts ──────────────────────────────────────────────────────────────
+
+TeamMcts::PlayerStats TeamMcts::build_stats_(const Agent& self, const World& world) {
+    PlayerStats s;
+    s.actions = legal_actions(self, world);
+    s.visits.assign(s.actions.size(), 0);
+    s.total_value.assign(s.actions.size(), 0.0f);
+    return s;
+}
+
+int TeamMcts::pick_action_idx_(const PlayerStats& stats, int node_visits, float c) const {
+    for (size_t i = 0; i < stats.visits.size(); i++) {
+        if (stats.visits[i] == 0) return static_cast<int>(i);
+    }
+    const float ln_n = std::log(static_cast<float>(std::max(1, node_visits)));
+    int   best = 0;
+    float best_score = -std::numeric_limits<float>::infinity();
+    for (size_t i = 0; i < stats.visits.size(); i++) {
+        float mean    = stats.total_value[i] / static_cast<float>(stats.visits[i]);
+        float explore = c * std::sqrt(ln_n / static_cast<float>(stats.visits[i]));
+        float score   = mean + explore;   // all heroes maximise (cooperative)
+        if (score > best_score) { best_score = score; best = static_cast<int>(i); }
+    }
+    return best;
+}
+
+void TeamMcts::step_joint_(World& world,
+                            const std::vector<Agent*>& heroes,
+                            const std::vector<CombatAction>& hero_actions) {
+    // Opponents get one action per decision window, held across sub-ticks —
+    // mirrors the hero action-persistence contract.
+    std::vector<std::pair<Agent*, CombatAction>> enemy_acts;
+    int team_id = heroes.empty() ? 0 : heroes.front()->unit().teamId;
+    for (Agent* a : world.agents()) {
+        bool is_hero = false;
+        for (Agent* h : heroes) if (a == h) { is_hero = true; break; }
+        if (is_hero) continue;
+        if (a->unit().teamId == team_id) continue; // ally not in search
+        CombatAction act{};
+        if (a->unit().alive() && opponent_) act = opponent_(*a, world);
+        enemy_acts.emplace_back(a, act);
+    }
+
+    const float dt = cfg_.sim_dt;
+    for (int t = 0; t < cfg_.action_repeat; t++) {
+        for (size_t i = 0; i < heroes.size(); i++) {
+            mcts::apply(*heroes[i], world, hero_actions[i], dt);
+        }
+        for (auto& [a, act] : enemy_acts) {
+            mcts::apply(*a, world, act, dt);
+        }
+        world.stepProjectiles(dt);
+        world.cullProjectiles();
+
+        bool any_team_alive  = false;
+        bool any_enemy_alive = false;
+        for (Agent* a : world.agents()) {
+            if (!a->unit().alive()) continue;
+            if (a->unit().teamId == team_id) any_team_alive  = true;
+            else                              any_enemy_alive = true;
+        }
+        if (!any_team_alive || !any_enemy_alive) break;
+    }
+}
+
+float TeamMcts::rollout_(World& world, const std::vector<Agent*>& heroes, int team_id) {
+    IRolloutPolicy* policy = rollout_policy_.get();
+    RandomRollout fallback;
+    if (!policy) policy = &fallback;
+
+    int steps = 0;
+    while (steps < cfg_.rollout_horizon) {
+        bool any_team_alive = false, any_enemy_alive = false;
+        for (Agent* a : world.agents()) {
+            if (!a->unit().alive()) continue;
+            if (a->unit().teamId == team_id) any_team_alive = true;
+            else                              any_enemy_alive = true;
+        }
+        if (!any_team_alive || !any_enemy_alive) break;
+
+        std::vector<CombatAction> hero_actions(heroes.size());
+        for (size_t i = 0; i < heroes.size(); i++) {
+            hero_actions[i] = heroes[i]->unit().alive()
+                ? policy->choose(*heroes[i], world)
+                : CombatAction{};
+        }
+        step_joint_(world, heroes, hero_actions);
+        steps++;
+    }
+    return evaluator_
+        ? evaluator_->evaluate(world, team_id)
+        : TeamHpDeltaEvaluator{}.evaluate(world, team_id);
+}
+
+TeamMcts::JointAction TeamMcts::search(World& world, const std::vector<Agent*>& heroes) {
+    using clock = std::chrono::steady_clock;
+    const auto t_start = clock::now();
+
+    JointAction out;
+    out.per_hero.resize(heroes.size());
+    if (heroes.empty()) return out;
+    const int team_id = heroes.front()->unit().teamId;
+
+    WorldSnapshot saved = world.snapshot();
+
+    bool reused = false;
+    if (root_ && root_->per_hero.size() == heroes.size()) {
+        reused = true;
+    } else {
+        root_ = std::make_unique<TNode>();
+        root_->per_hero.reserve(heroes.size());
+        for (Agent* h : heroes) root_->per_hero.push_back(build_stats_(*h, world));
+    }
+
+    const int  iter_cap = cfg_.iterations > 0 ? cfg_.iterations
+                                              : std::numeric_limits<int>::max();
+    const bool time_cap = cfg_.budget_ms > 0;
+
+    int it = 0;
+    for (; it < iter_cap; it++) {
+        if (time_cap) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                clock::now() - t_start).count();
+            if (elapsed >= cfg_.budget_ms) break;
+        }
+        world.restore(saved);
+        world.seed(cfg_.seed
+                   + static_cast<uint64_t>(it)
+                   + static_cast<uint64_t>(root_->visits) * 7919ull);
+
+        // Descend and (possibly) expand.
+        TNode* node = root_.get();
+        while (true) {
+            // Terminal check before deciding.
+            bool any_team_alive = false, any_enemy_alive = false;
+            for (Agent* a : world.agents()) {
+                if (!a->unit().alive()) continue;
+                if (a->unit().teamId == team_id) any_team_alive = true;
+                else                              any_enemy_alive = true;
+            }
+            if (!any_team_alive || !any_enemy_alive) break;
+
+            std::vector<int> idxs(heroes.size());
+            bool any_legal = false;
+            for (size_t h = 0; h < heroes.size(); h++) {
+                if (node->per_hero[h].actions.empty()) { idxs[h] = -1; continue; }
+                idxs[h] = pick_action_idx_(node->per_hero[h], node->visits, cfg_.uct_c);
+                any_legal = true;
+            }
+            if (!any_legal) break;
+
+            std::vector<CombatAction> hero_actions(heroes.size());
+            for (size_t h = 0; h < heroes.size(); h++) {
+                hero_actions[h] = idxs[h] >= 0
+                    ? node->per_hero[h].actions[idxs[h]]
+                    : CombatAction{};
+            }
+            step_joint_(world, heroes, hero_actions);
+
+            auto it_child = node->children.find(idxs);
+            if (it_child != node->children.end()) {
+                node = it_child->second.get();
+                continue;
+            }
+            auto child = std::make_unique<TNode>();
+            child->parent = node;
+            child->parent_action_idx = idxs;
+            child->per_hero.reserve(heroes.size());
+            for (Agent* h : heroes) child->per_hero.push_back(build_stats_(*h, world));
+            TNode* raw = child.get();
+            node->children.emplace(std::move(idxs), std::move(child));
+            node = raw;
+            break;
+        }
+
+        float value = rollout_(world, heroes, team_id);
+
+        node->visits++;
+        while (node->parent) {
+            TNode* p = node->parent;
+            for (size_t h = 0; h < heroes.size(); h++) {
+                int ai = node->parent_action_idx[h];
+                if (ai < 0) continue;
+                p->per_hero[h].visits[ai]++;
+                p->per_hero[h].total_value[ai] += value;
+            }
+            p->visits++;
+            node = p;
+        }
+    }
+
+    world.restore(saved);
+
+    // Pick each hero's most-visited root action.
+    for (size_t h = 0; h < heroes.size(); h++) {
+        const auto& st = root_->per_hero[h];
+        int best_v = -1, best_i = -1;
+        for (size_t i = 0; i < st.visits.size(); i++) {
+            if (st.visits[i] > best_v) { best_v = st.visits[i]; best_i = static_cast<int>(i); }
+        }
+        out.per_hero[h] = best_i >= 0 ? st.actions[best_i] : CombatAction{};
+    }
+
+    // Tree-size walk.
+    auto count_t = [](auto& self_ref, const TNode* n) -> int {
+        if (!n) return 0;
+        int total = 1;
+        for (const auto& [k, ch] : n->children) total += self_ref(self_ref, ch.get());
+        return total;
+    };
+    const auto t_end = clock::now();
+    stats_.iterations    = it;
+    stats_.root_children = static_cast<int>(root_->children.size());
+    stats_.tree_size     = count_t(count_t, root_.get());
+    stats_.best_visits   = root_->visits;
+    stats_.best_mean     = 0.0f;  // team mean is not well-defined across per-hero stats
+    stats_.elapsed_ms    = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count());
+    stats_.reused_root   = reused;
+    return out;
+}
+
+void TeamMcts::advance_root(const JointAction& committed) {
+    if (!root_) return;
+    if (committed.per_hero.size() != root_->per_hero.size()) { root_.reset(); return; }
+
+    std::vector<int> idxs(committed.per_hero.size(), -1);
+    for (size_t h = 0; h < committed.per_hero.size(); h++) {
+        const auto& st = root_->per_hero[h];
+        for (size_t i = 0; i < st.actions.size(); i++) {
+            if (st.actions[i] == committed.per_hero[h]) { idxs[h] = static_cast<int>(i); break; }
+        }
+        if (idxs[h] < 0) { root_.reset(); return; }
+    }
+    auto it = root_->children.find(idxs);
+    if (it == root_->children.end()) { root_.reset(); return; }
+
+    std::unique_ptr<TNode> promoted = std::move(it->second);
+    promoted->parent = nullptr;
+    promoted->parent_action_idx.clear();
+    root_ = std::move(promoted);
+}
+
+
 // ─── Root-parallel search ──────────────────────────────────────────────────
 
 namespace {
