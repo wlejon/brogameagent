@@ -25,58 +25,8 @@ void World::tick(float dt) {
         a->unit().tickCooldowns(dt);
         applyDotHot(*a, dt);
     }
-    resolveAgentSeparation();
     stepProjectiles(dt);
     cullProjectiles();
-}
-
-// Push overlapping agents apart so two settled units can't occupy the
-// same cell — but let moving units pass through each other so low-HP
-// ralliers aren't blocked by the line of agents between them and safety.
-// Only pairs where BOTH agents are effectively at rest are separated;
-// if either is moving faster than MOVE_EPS, we phase through this tick.
-// Two relaxation iterations is plenty for 8v8-scale agent counts.
-void World::resolveAgentSeparation() {
-    constexpr float MOVE_EPS = 0.5f;           // m/s, "at rest" threshold
-    constexpr float MOVE_EPS2 = MOVE_EPS * MOVE_EPS;
-    for (int iter = 0; iter < 2; ++iter) {
-        for (size_t i = 0; i < agents_.size(); ++i) {
-            Agent* a = agents_[i];
-            if (!a->unit().alive()) continue;
-            auto av = a->velocity();
-            bool aMoving = (av.x * av.x + av.z * av.z) > MOVE_EPS2;
-            for (size_t j = i + 1; j < agents_.size(); ++j) {
-                Agent* b = agents_[j];
-                if (!b->unit().alive()) continue;
-                auto bv = b->velocity();
-                bool bMoving = (bv.x * bv.x + bv.z * bv.z) > MOVE_EPS2;
-                if (aMoving || bMoving) continue;  // pass through while moving
-                float dx = b->x() - a->x();
-                float dz = b->z() - a->z();
-                float minD = a->unit().radius + b->unit().radius;
-                float d2 = dx * dx + dz * dz;
-                if (d2 >= minD * minD) continue;
-                float d = std::sqrt(d2);
-                float push;
-                float nx, nz;
-                if (d < 1e-4f) {
-                    // Exact coincidence — pick an arbitrary axis so we
-                    // don't divide by zero. Alternating by index keeps
-                    // stacked agents from being pushed along the same
-                    // line and stalling.
-                    nx = (i & 1) ? 1.0f : 0.0f;
-                    nz = (i & 1) ? 0.0f : 1.0f;
-                    push = minD * 0.5f;
-                } else {
-                    nx = dx / d;
-                    nz = dz / d;
-                    push = (minD - d) * 0.5f;
-                }
-                a->setPosition(a->x() - nx * push, a->z() - nz * push);
-                b->setPosition(b->x() + nx * push, b->z() + nz * push);
-            }
-        }
-    }
 }
 
 std::vector<Agent*> World::enemiesOf(const Agent& self) const {

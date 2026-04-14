@@ -65,11 +65,6 @@ public:
     /// Remove all dead (!alive) projectiles. Called automatically by tick().
     void cullProjectiles();
 
-    /// Push overlapping agents apart so two units don't occupy the same
-    /// cell. Called automatically by tick(); exposed for caller-managed
-    /// step orders and for testing.
-    void resolveAgentSeparation();
-
     const std::vector<Agent*>& agents() const { return agents_; }
     const std::vector<AABB>& obstacles() const { return obstacles_; }
 
