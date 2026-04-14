@@ -28,6 +28,7 @@ add_library(brogameagent STATIC
     src/recorder.cpp
     src/replay_reader.cpp
     src/vec_simulation.cpp
+    src/mcts.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 

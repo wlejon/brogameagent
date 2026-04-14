@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 using namespace brogameagent;
@@ -2015,6 +2016,182 @@ TEST(vecsim_reward_accumulates_then_drains) {
     // Reward accumulator must drain to zero on read.
     v.rewards(rh.data(), ro.data());
     CHECK(rh[0] == 0.0f);
+}
+
+// ─── MCTS ──────────────────────────────────────────────────────────────────
+
+namespace {
+
+struct McstScene {
+    World world;
+    Agent hero;
+    Agent enemy;
+};
+
+static std::unique_ptr<McstScene> make_duel_scene(float heroX, float heroZ,
+                                                   float enemyX, float enemyZ,
+                                                   float attackRange = 2.0f) {
+    auto s = std::make_unique<McstScene>();
+    s->hero.unit().id      = 1;
+    s->hero.unit().teamId  = 0;
+    s->hero.unit().hp      = 100.0f;
+    s->hero.unit().maxHp   = 100.0f;
+    s->hero.unit().damage  = 10.0f;
+    s->hero.unit().attackRange  = attackRange;
+    s->hero.unit().attacksPerSec = 2.0f;
+    s->hero.setPosition(heroX, heroZ);
+    s->hero.setMaxAccel(30.0f);
+    s->hero.setMaxTurnRate(10.0f);
+
+    s->enemy.unit().id     = 2;
+    s->enemy.unit().teamId = 1;
+    s->enemy.unit().hp     = 50.0f;
+    s->enemy.unit().maxHp  = 50.0f;
+    s->enemy.unit().damage = 5.0f;
+    s->enemy.unit().attackRange  = attackRange;
+    s->enemy.unit().attacksPerSec = 1.0f;
+    s->enemy.setPosition(enemyX, enemyZ);
+    s->enemy.setMaxAccel(30.0f);
+    s->enemy.setMaxTurnRate(10.0f);
+
+    s->world.addAgent(&s->hero);
+    s->world.addAgent(&s->enemy);
+    s->world.seed(42);
+    return s;
+}
+
+} // namespace
+
+TEST(mcts_legal_actions_includes_move_only_when_no_combat_legal) {
+    // Out of range + cooldown-cleared but nothing else happening.
+    auto s = make_duel_scene(0, 0, 20, 0);
+    auto acts = mcts::legal_actions(s->hero, s->world);
+
+    // Expect 9 move dirs × 1 attack option (-1 only) × 1 ability option (-1)
+    // since enemy is far away and no abilities are registered.
+    CHECK(acts.size() == 9);
+    for (const auto& a : acts) {
+        CHECK(a.attack_slot == -1);
+        CHECK(a.ability_slot == -1);
+    }
+}
+
+TEST(mcts_legal_actions_exposes_attack_slot_when_in_range) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    auto acts = mcts::legal_actions(s->hero, s->world);
+
+    // 9 moves × (2 attack opts: -1 and slot 0) × 1 ability opt
+    CHECK(acts.size() == 18);
+    bool saw_attack = false;
+    for (const auto& a : acts) {
+        if (a.attack_slot == 0) saw_attack = true;
+    }
+    CHECK(saw_attack);
+}
+
+TEST(mcts_apply_routes_attack_to_correct_enemy) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    float before = s->enemy.unit().hp;
+
+    mcts::CombatAction a;
+    a.move_dir    = mcts::MoveDir::Hold;
+    a.attack_slot = 0;
+    a.ability_slot = -1;
+    mcts::apply(s->hero, s->world, a, 0.5f);
+
+    CHECK(s->enemy.unit().hp < before);
+}
+
+TEST(mcts_search_is_side_effect_free_on_world) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+
+    float hero_hp_before  = s->hero.unit().hp;
+    float enemy_hp_before = s->enemy.unit().hp;
+    float heroX_before = s->hero.x(), heroZ_before = s->hero.z();
+
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 64;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat  = 2;
+    mcts::Mcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    engine.set_opponent_policy(mcts::policy_idle);
+
+    mcts::CombatAction picked = engine.search(s->world, s->hero);
+    (void)picked;
+
+    CHECK_NEAR(s->hero.unit().hp, hero_hp_before, 1e-4f);
+    CHECK_NEAR(s->enemy.unit().hp, enemy_hp_before, 1e-4f);
+    CHECK_NEAR(s->hero.x(), heroX_before, 1e-4f);
+    CHECK_NEAR(s->hero.z(), heroZ_before, 1e-4f);
+}
+
+TEST(mcts_search_prefers_attack_when_in_range_vs_idle_opponent) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 400;
+    cfg.rollout_horizon = 16;
+    cfg.action_repeat  = 4;
+    cfg.seed           = 7;
+    mcts::Mcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    engine.set_opponent_policy(mcts::policy_idle);
+
+    mcts::CombatAction picked = engine.search(s->world, s->hero);
+
+    // In-range + idle opponent → optimal first move must include auto-attack.
+    CHECK(picked.attack_slot == 0);
+}
+
+TEST(mcts_search_is_deterministic_under_seed) {
+    auto s1 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    auto s2 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 128;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xBEEF;
+
+    mcts::Mcts e1(cfg), e2(cfg);
+    for (auto* e : {&e1, &e2}) {
+        e->set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+        e->set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+        e->set_opponent_policy(mcts::policy_idle);
+    }
+
+    mcts::CombatAction a1 = e1.search(s1->world, s1->hero);
+    mcts::CombatAction a2 = e2.search(s2->world, s2->hero);
+
+    CHECK(a1 == a2);
+    CHECK(e1.last_stats().tree_size == e2.last_stats().tree_size);
+    CHECK(e1.last_stats().best_visits == e2.last_stats().best_visits);
+}
+
+TEST(mcts_hp_delta_evaluator_terminal_win_loss) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0);
+    mcts::HpDeltaEvaluator ev;
+
+    // Baseline: both at full HP (different max) → zero delta in fraction space.
+    float baseline = ev.evaluate(s->world, s->hero.unit().id);
+    CHECK_NEAR(baseline, 0.0f, 1e-5f);
+
+    // Half-damage the enemy → hero fraction ahead → positive delta.
+    s->enemy.unit().hp = 25.0f;
+    CHECK(ev.evaluate(s->world, s->hero.unit().id) > 0.0f);
+    s->enemy.unit().hp = 50.0f;
+
+    // Kill enemy → terminal +1.
+    s->enemy.unit().hp = 0.0f;
+    CHECK_NEAR(ev.evaluate(s->world, s->hero.unit().id), 1.0f, 1e-5f);
+
+    // Kill hero → terminal -1.
+    s->enemy.unit().hp = 50.0f;
+    s->hero.unit().hp  = 0.0f;
+    CHECK_NEAR(ev.evaluate(s->world, s->hero.unit().id), -1.0f, 1e-5f);
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────

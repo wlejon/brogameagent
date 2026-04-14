@@ -16,3 +16,4 @@
 #include "recorder.h"
 #include "replay_reader.h"
 #include "vec_simulation.h"
+#include "mcts.h"
