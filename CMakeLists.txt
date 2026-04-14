@@ -29,6 +29,9 @@ add_library(brogameagent STATIC
     src/replay_reader.cpp
     src/vec_simulation.cpp
     src/mcts.cpp
+    src/capability_set.cpp
+    src/capabilities.cpp
+    src/scripted_minion_policy.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 

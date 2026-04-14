@@ -11,6 +11,7 @@ set(_brogameagent_examples
     10_layered_planner
     11_root_parallel
     12_record_and_read
+    13_capabilities_demo
 )
 
 foreach(ex IN LISTS _brogameagent_examples)

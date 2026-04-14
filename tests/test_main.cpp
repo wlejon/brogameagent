@@ -3161,6 +3161,223 @@ TEST(layered_planner_reset_forces_next_replan) {
     CHECK(planner.last_stats().replanned_this_call == true);
 }
 
+// ─── Capability layer ──────────────────────────────────────────────────────
+
+// Helper: construct a minimal CapContext for a given agent + world.
+static CapContext makeCapCtx(Agent& a, World& w, CapabilitySet& set) {
+    CapContext c;
+    c.self = &a;
+    c.unit = &a.unit();
+    c.world = &w;
+    c.caps = &set;
+    c.now = 0;
+    return c;
+}
+
+TEST(cap_move_to_sets_target_and_completes) {
+    NavGrid grid(-10, -10, 10, 10, 0.5f);
+    Agent bot; bot.setNavGrid(&grid); bot.setPosition(0, 0); bot.setSpeed(5);
+    bot.unit().id = 1;
+    World w; w.addAgent(&bot);
+
+    CapabilitySet set; addAllBuiltinCapabilities(set);
+    CapContext ctx = makeCapCtx(bot, w, set);
+
+    Action a; a.capId = kCapMoveTo; a.fx = 5; a.fz = 0;
+    set.get(kCapMoveTo)->start(ctx, a);
+    CHECK(a.done);
+    CHECK(bot.hasTarget());
+
+    // World tick should move bot toward target.
+    for (int i = 0; i < 100 && !bot.atTarget(); i++) w.tick(1.0f/60.0f);
+    CHECK(bot.atTarget());
+    CHECK_NEAR(bot.x(), 5.0f, 1.0f);
+}
+
+TEST(cap_lane_walk_advances_waypoints) {
+    NavGrid grid(-20, -20, 20, 20, 0.5f);
+    Agent bot; bot.setNavGrid(&grid); bot.setPosition(-10, 0); bot.setSpeed(8);
+    bot.unit().id = 1;
+    World w; w.addAgent(&bot);
+
+    CapabilitySet set; addAllBuiltinCapabilities(set);
+    set.setLaneWaypoints({{-5, 0}, {0, 0}, {5, 0}, {10, 0}});
+    CHECK(set.laneIndex() == 0);
+
+    CapContext ctx = makeCapCtx(bot, w, set);
+
+    // First decision: target the first waypoint.
+    Action a; a.capId = kCapLaneWalk;
+    set.get(kCapLaneWalk)->start(ctx, a);
+    CHECK(a.done);
+    CHECK(bot.hasTarget());
+
+    // Simulate walking + periodic re-decision (think rate ~10Hz).
+    int lastIdx = set.laneIndex();
+    for (int frame = 0; frame < 600; frame++) {
+        w.tick(1.0f/60.0f);
+        if (frame % 6 == 0) {
+            Action aa; aa.capId = kCapLaneWalk;
+            set.get(kCapLaneWalk)->start(ctx, aa);
+            lastIdx = set.laneIndex();
+        }
+        if (lastIdx >= static_cast<int>(set.laneWaypoints().size()) - 1
+            && bot.atTarget()) break;
+    }
+    CHECK(set.laneIndex() == static_cast<int>(set.laneWaypoints().size()) - 1);
+    CHECK_NEAR(bot.x(), 10.0f, 1.5f);
+}
+
+TEST(cap_basic_attack_resolves_and_blocks_for_swing) {
+    NavGrid grid(-10, -10, 10, 10, 0.5f);
+    Agent hero; hero.setNavGrid(&grid); hero.setPosition(0, 0);
+    hero.unit().id = 1; hero.unit().teamId = 0;
+    hero.unit().damage = 20; hero.unit().attackRange = 5;
+    hero.unit().attacksPerSec = 2.0f; // swing time 0.5s
+    Agent enemy; enemy.setPosition(2, 0);
+    enemy.unit().id = 2; enemy.unit().teamId = 1; enemy.unit().hp = 100;
+    World w; w.addAgent(&hero); w.addAgent(&enemy);
+
+    CapabilitySet set; addAllBuiltinCapabilities(set);
+    CapContext ctx = makeCapCtx(hero, w, set);
+
+    CHECK(set.get(kCapBasicAttack)->gate(ctx));
+    Action a; a.capId = kCapBasicAttack; a.i0 = 2;
+    set.get(kCapBasicAttack)->start(ctx, a);
+    CHECK(!a.done);
+    CHECK_NEAR(a.dur, 0.5f, 0.001f);
+    CHECK(enemy.unit().hp < 100);
+
+    // Advance < swing time — still blocking.
+    set.get(kCapBasicAttack)->advance(ctx, a, 0.3f);
+    CHECK(!a.done);
+    // Advance past swing time — completes.
+    set.get(kCapBasicAttack)->advance(ctx, a, 0.3f);
+    CHECK(a.done);
+
+    // Cooldown gate blocks next attack until unit tick clears it.
+    CHECK(!set.get(kCapBasicAttack)->gate(ctx));
+}
+
+TEST(cap_cast_ability_invokes_world_resolveAbility) {
+    NavGrid grid(-10, -10, 10, 10, 0.5f);
+    Agent caster; caster.setNavGrid(&grid); caster.setPosition(0, 0);
+    caster.unit().id = 1; caster.unit().teamId = 0;
+    caster.unit().mana = 50; caster.unit().maxMana = 100;
+    Agent target; target.setPosition(3, 0);
+    target.unit().id = 2; target.unit().teamId = 1; target.unit().hp = 100;
+    World w; w.addAgent(&caster); w.addAgent(&target);
+
+    // Register a tiny ability: deal 25 magic damage.
+    int hits = 0;
+    w.registerAbility(42, AbilitySpec{
+        /*cooldown*/ 5.0f, /*manaCost*/ 20.0f, /*range*/ 10.0f,
+        [&](Agent& c, World& ww, int tid) {
+            if (Agent* t = ww.findById(tid)) {
+                ww.dealDamage(c, *t, 25.0f, DamageKind::Magical);
+                hits++;
+            }
+        },
+    });
+    caster.unit().abilitySlot[0] = 42;
+
+    CapabilitySet set; addAllBuiltinCapabilities(set);
+    CapContext ctx = makeCapCtx(caster, w, set);
+
+    CHECK(set.get(kCapCastAbility)->gate(ctx));
+    Action a; a.capId = kCapCastAbility; a.i0 = 0 /*slot*/; a.i1 = 2 /*targetId*/;
+    set.get(kCapCastAbility)->start(ctx, a);
+    CHECK(hits == 1);
+    CHECK(target.unit().hp < 100);
+    CHECK(caster.unit().mana < 50);
+    CHECK(!a.done); // blocks for cast time
+    set.get(kCapCastAbility)->advance(ctx, a, 1.0f);
+    CHECK(a.done);
+}
+
+TEST(cap_flee_points_away_from_nearest_enemy) {
+    NavGrid grid(-20, -20, 20, 20, 0.5f);
+    Agent bot; bot.setNavGrid(&grid); bot.setPosition(0, 0);
+    bot.unit().id = 1; bot.unit().teamId = 0;
+    Agent threat; threat.setPosition(3, 0);
+    threat.unit().id = 2; threat.unit().teamId = 1;
+    World w; w.addAgent(&bot); w.addAgent(&threat);
+
+    CapabilitySet set; addAllBuiltinCapabilities(set);
+    CapContext ctx = makeCapCtx(bot, w, set);
+
+    Action a; a.capId = kCapFlee;
+    set.get(kCapFlee)->start(ctx, a);
+    CHECK(a.done);
+    // Retreat point should be on the negative-X side (away from threat at +3,0).
+    CHECK(a.fx < 0);
+    CHECK(bot.hasTarget());
+}
+
+TEST(capset_builtin_mask_reflects_gate) {
+    NavGrid grid(-10, -10, 10, 10, 0.5f);
+    Agent bot; bot.setNavGrid(&grid); bot.setPosition(0, 0);
+    bot.unit().id = 1; bot.unit().attackCooldown = 0;
+    World w; w.addAgent(&bot);
+    CapabilitySet set; addAllBuiltinCapabilities(set);
+    CapContext ctx = makeCapCtx(bot, w, set);
+
+    uint32_t mask = set.buildBuiltinMask(ctx);
+    CHECK((mask & (1u << kCapMoveTo)) != 0);
+    CHECK((mask & (1u << kCapBasicAttack)) != 0);
+    CHECK((mask & (1u << kCapCastAbility)) == 0); // no ability slots bound
+
+    // Bind ability -> mask flips on.
+    w.registerAbility(7, AbilitySpec{1.0f, 0.0f, 5.0f, [](Agent&, World&, int){}});
+    bot.unit().abilitySlot[0] = 7;
+    mask = set.buildBuiltinMask(ctx);
+    CHECK((mask & (1u << kCapCastAbility)) != 0);
+
+    // Attack on cooldown -> mask flips off.
+    bot.unit().attackCooldown = 1.0f;
+    mask = set.buildBuiltinMask(ctx);
+    CHECK((mask & (1u << kCapBasicAttack)) == 0);
+}
+
+TEST(policy_scripted_minion_attacks_when_in_range) {
+    NavGrid grid(-20, -20, 20, 20, 0.5f);
+    Agent minion; minion.setNavGrid(&grid); minion.setPosition(0, 0);
+    minion.unit().id = 1; minion.unit().teamId = 0;
+    minion.unit().attackRange = 5; minion.unit().damage = 10;
+    Agent enemy; enemy.setPosition(2, 0);
+    enemy.unit().id = 2; enemy.unit().teamId = 1; enemy.unit().hp = 100;
+    World w; w.addAgent(&minion); w.addAgent(&enemy);
+
+    CapabilitySet set; addAllBuiltinCapabilities(set);
+    set.setLaneWaypoints({{10, 0}});
+    CapContext ctx = makeCapCtx(minion, w, set);
+
+    auto policy = makeScriptedMinionPolicy();
+    Action out;
+    CHECK(policy->decide(ctx, set, out));
+    CHECK(out.capId == kCapBasicAttack);
+    CHECK(out.i0 == 2);
+}
+
+TEST(policy_scripted_minion_lanewalks_when_no_enemy_in_range) {
+    NavGrid grid(-20, -20, 20, 20, 0.5f);
+    Agent minion; minion.setNavGrid(&grid); minion.setPosition(0, 0);
+    minion.unit().id = 1; minion.unit().teamId = 0;
+    minion.unit().attackRange = 3;
+    Agent faraway; faraway.setPosition(15, 0);
+    faraway.unit().id = 2; faraway.unit().teamId = 1;
+    World w; w.addAgent(&minion); w.addAgent(&faraway);
+
+    CapabilitySet set; addAllBuiltinCapabilities(set);
+    set.setLaneWaypoints({{10, 0}});
+    CapContext ctx = makeCapCtx(minion, w, set);
+
+    auto policy = makeScriptedMinionPolicy();
+    Action out;
+    CHECK(policy->decide(ctx, set, out));
+    CHECK(out.capId == kCapLaneWalk);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {

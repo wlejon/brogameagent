@@ -17,3 +17,5 @@
 #include "replay_reader.h"
 #include "vec_simulation.h"
 #include "mcts.h"
+#include "capability.h"
+#include "policy.h"
