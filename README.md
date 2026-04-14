@@ -10,12 +10,6 @@ snapshot the current world, fork N hypothetical futures under different AI
 responses, step forward, score, commit the winning action. `VecSimulation`
 makes the fork-and-step loop cheap enough to do per-frame at runtime.
 
-Visualization lives in the sibling **`bro`** repo, which consumes the
-`.bgar` replay files this project writes. The contract between the two is
-a single header, `replay_format.h`, containing only packed POD structs and
-`<cstdint>`. Any schema change is a build-time mismatch on the `bro` side,
-never silent corruption.
-
 ## Repository layout
 
 ```
@@ -149,9 +143,9 @@ IndexEntry[indexCount]    (stepIdx, offset)
 Footer                    (indexOffset, indexCount)   # last 16 bytes
 ```
 
-All records are packed POD, little-endian, native alignment. `bro` should
-include `include/brogameagent/replay_format.h` directly so any schema
-evolution is a compile error on its side.
+All records are packed POD, little-endian, native alignment. Consumers
+should include `include/brogameagent/replay_format.h` directly so any
+schema evolution is a compile error at the boundary.
 
 ## Test coverage
 
