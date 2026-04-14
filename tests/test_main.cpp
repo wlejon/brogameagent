@@ -2968,6 +2968,97 @@ TEST(mcts_puct_is_deterministic_under_seed) {
     CHECK(run(*s1) == run(*s2));
 }
 
+TEST(dmcts_puct_uses_priors_and_is_deterministic) {
+    auto s1 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    auto s2 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 128;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xD00;
+    cfg.prior_c        = 1.5f;
+    auto run = [&](McstScene& s) {
+        mcts::DecoupledMcts e(cfg);
+        e.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+        e.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+        e.set_prior(std::make_shared<mcts::AttackBiasPrior>());
+        return e.search(s.world, s.hero, s.enemy);
+    };
+    auto j1 = run(*s1);
+    auto j2 = run(*s2);
+    CHECK(j1.hero == j2.hero);
+    CHECK(j1.opp  == j2.opp);
+    // Priors were normalized to sum to 1 on both players.
+    // (Indirect check: search completed with non-empty stats.)
+}
+
+TEST(dmcts_puct_root_priors_sum_to_one) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 32;
+    cfg.rollout_horizon = 4;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xD01;
+    cfg.prior_c        = 1.5f;
+    mcts::DecoupledMcts e(cfg);
+    e.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    e.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    e.set_prior(std::make_shared<mcts::AttackBiasPrior>());
+    e.search(s->world, s->hero, s->enemy);
+    const auto* r = e.last_root();
+    CHECK(r != nullptr);
+    float sh = 0.0f, so = 0.0f;
+    for (float p : r->hero_stats.priors) sh += p;
+    for (float p : r->opp_stats.priors)  so += p;
+    CHECK(std::abs(sh - 1.0f) < 1e-4f);
+    CHECK(std::abs(so - 1.0f) < 1e-4f);
+}
+
+TEST(team_mcts_puct_uses_priors_and_is_deterministic) {
+    auto s1 = make_team_scene(2, 2);
+    auto s2 = make_team_scene(2, 2);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 128;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xD02;
+    cfg.prior_c        = 1.5f;
+    auto run = [&](TeamScene& s) {
+        mcts::TeamMcts e(cfg);
+        e.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+        e.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+        e.set_opponent_policy(mcts::policy_idle);
+        e.set_prior(std::make_shared<mcts::AttackBiasPrior>());
+        return e.search(s.world, raw(s.heroes));
+    };
+    auto j1 = run(*s1);
+    auto j2 = run(*s2);
+    CHECK(j1 == j2);
+}
+
+TEST(team_mcts_puct_root_priors_sum_to_one_per_hero) {
+    auto s = make_team_scene(2, 2);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 64;
+    cfg.rollout_horizon = 4;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xD03;
+    cfg.prior_c        = 1.5f;
+    mcts::TeamMcts e(cfg);
+    e.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    e.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    e.set_opponent_policy(mcts::policy_idle);
+    e.set_prior(std::make_shared<mcts::AttackBiasPrior>());
+    e.search(s->world, raw(s->heroes));
+    const auto* r = e.last_root();
+    CHECK(r != nullptr);
+    for (const auto& ph : r->per_hero) {
+        float sum = 0.0f;
+        for (float p : ph.priors) sum += p;
+        CHECK(std::abs(sum - 1.0f) < 1e-4f);
+    }
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {

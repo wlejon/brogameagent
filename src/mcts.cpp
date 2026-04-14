@@ -534,29 +534,55 @@ CombatAction Mcts::search(World& world, Agent& hero) {
 
 // ─── DecoupledMcts ─────────────────────────────────────────────────────────
 
-DecoupledMcts::PlayerStats DecoupledMcts::build_stats_(const Agent& self, const World& world) {
+DecoupledMcts::PlayerStats DecoupledMcts::build_stats_(const Agent& self, const World& world) const {
     PlayerStats s;
     s.actions = legal_actions(self, world);
     s.visits.assign(s.actions.size(), 0);
     s.total_value.assign(s.actions.size(), 0.0f);
+    s.priors = compute_priors(prior_.get(), self, world, s.actions);
     return s;
 }
 
 int DecoupledMcts::pick_action_idx_(const PlayerStats& stats, int node_visits,
-                                     float c, bool minimize) const {
-    // Unvisited-first rule: any action with visits=0 is tried before any
-    // UCT evaluation. Ensures each action on each side gets at least one
-    // sample before we start optimising.
-    for (size_t i = 0; i < stats.visits.size(); i++) {
-        if (stats.visits[i] == 0) return static_cast<int>(i);
+                                     bool minimize) const {
+    const bool use_puct = cfg_.prior_c > 0.0f;
+
+    if (!use_puct) {
+        // Unvisited-first rule: any action with visits=0 is tried before any
+        // UCT evaluation. Ensures each action on each side gets at least one
+        // sample before we start optimising.
+        for (size_t i = 0; i < stats.visits.size(); i++) {
+            if (stats.visits[i] == 0) return static_cast<int>(i);
+        }
+        const float ln_n = std::log(static_cast<float>(std::max(1, node_visits)));
+        int   best = 0;
+        float best_score = -std::numeric_limits<float>::infinity();
+        const float c = cfg_.uct_c;
+        for (size_t i = 0; i < stats.visits.size(); i++) {
+            float mean    = stats.total_value[i] / static_cast<float>(stats.visits[i]);
+            float exploit = minimize ? -mean : mean;
+            float explore = c * std::sqrt(ln_n / static_cast<float>(stats.visits[i]));
+            float score   = exploit + explore;
+            if (score > best_score) { best_score = score; best = static_cast<int>(i); }
+        }
+        return best;
     }
-    const float ln_n = std::log(static_cast<float>(std::max(1, node_visits)));
+
+    // PUCT path: prior P already encodes which actions to prefer when
+    // unvisited, so we don't need the unvisited-first rule.
+    const float sqrt_N = std::sqrt(static_cast<float>(std::max(1, node_visits)));
+    const float c = cfg_.prior_c;
     int   best = 0;
     float best_score = -std::numeric_limits<float>::infinity();
     for (size_t i = 0; i < stats.visits.size(); i++) {
-        float mean    = stats.total_value[i] / static_cast<float>(stats.visits[i]);
+        float mean = stats.visits[i] > 0
+            ? stats.total_value[i] / static_cast<float>(stats.visits[i])
+            : 0.0f;
         float exploit = minimize ? -mean : mean;
-        float explore = c * std::sqrt(ln_n / static_cast<float>(stats.visits[i]));
+        float p = (i < stats.priors.size())
+            ? stats.priors[i]
+            : 1.0f / static_cast<float>(stats.actions.size());
+        float explore = c * p * sqrt_N / (1.0f + static_cast<float>(stats.visits[i]));
         float score   = exploit + explore;
         if (score > best_score) { best_score = score; best = static_cast<int>(i); }
     }
@@ -631,8 +657,8 @@ DecoupledMcts::Joint DecoupledMcts::search(World& world, Agent& hero, Agent& opp
             if (is_terminal_for(hero, world)) break;
             if (node->hero_stats.actions.empty() || node->opp_stats.actions.empty()) break;
 
-            int h_idx = pick_action_idx_(node->hero_stats, node->visits, cfg_.uct_c, false);
-            int o_idx = pick_action_idx_(node->opp_stats,  node->visits, cfg_.uct_c, true);
+            int h_idx = pick_action_idx_(node->hero_stats, node->visits, false);
+            int o_idx = pick_action_idx_(node->opp_stats,  node->visits, true);
             CombatAction h_act = node->hero_stats.actions[h_idx];
             CombatAction o_act = node->opp_stats.actions[o_idx];
 
@@ -789,25 +815,48 @@ float TeamHpDeltaEvaluator::evaluate(const World& world, int team_id) const {
 
 // ─── TeamMcts ──────────────────────────────────────────────────────────────
 
-TeamMcts::PlayerStats TeamMcts::build_stats_(const Agent& self, const World& world) {
+TeamMcts::PlayerStats TeamMcts::build_stats_(const Agent& self, const World& world) const {
     PlayerStats s;
     s.actions = legal_actions(self, world);
     s.visits.assign(s.actions.size(), 0);
     s.total_value.assign(s.actions.size(), 0.0f);
+    s.priors = compute_priors(prior_.get(), self, world, s.actions);
     return s;
 }
 
-int TeamMcts::pick_action_idx_(const PlayerStats& stats, int node_visits, float c) const {
-    for (size_t i = 0; i < stats.visits.size(); i++) {
-        if (stats.visits[i] == 0) return static_cast<int>(i);
+int TeamMcts::pick_action_idx_(const PlayerStats& stats, int node_visits) const {
+    const bool use_puct = cfg_.prior_c > 0.0f;
+
+    if (!use_puct) {
+        for (size_t i = 0; i < stats.visits.size(); i++) {
+            if (stats.visits[i] == 0) return static_cast<int>(i);
+        }
+        const float ln_n = std::log(static_cast<float>(std::max(1, node_visits)));
+        const float c = cfg_.uct_c;
+        int   best = 0;
+        float best_score = -std::numeric_limits<float>::infinity();
+        for (size_t i = 0; i < stats.visits.size(); i++) {
+            float mean    = stats.total_value[i] / static_cast<float>(stats.visits[i]);
+            float explore = c * std::sqrt(ln_n / static_cast<float>(stats.visits[i]));
+            float score   = mean + explore;   // all heroes maximise (cooperative)
+            if (score > best_score) { best_score = score; best = static_cast<int>(i); }
+        }
+        return best;
     }
-    const float ln_n = std::log(static_cast<float>(std::max(1, node_visits)));
+
+    const float sqrt_N = std::sqrt(static_cast<float>(std::max(1, node_visits)));
+    const float c = cfg_.prior_c;
     int   best = 0;
     float best_score = -std::numeric_limits<float>::infinity();
     for (size_t i = 0; i < stats.visits.size(); i++) {
-        float mean    = stats.total_value[i] / static_cast<float>(stats.visits[i]);
-        float explore = c * std::sqrt(ln_n / static_cast<float>(stats.visits[i]));
-        float score   = mean + explore;   // all heroes maximise (cooperative)
+        float mean = stats.visits[i] > 0
+            ? stats.total_value[i] / static_cast<float>(stats.visits[i])
+            : 0.0f;
+        float p = (i < stats.priors.size())
+            ? stats.priors[i]
+            : 1.0f / static_cast<float>(stats.actions.size());
+        float explore = c * p * sqrt_N / (1.0f + static_cast<float>(stats.visits[i]));
+        float score   = mean + explore;
         if (score > best_score) { best_score = score; best = static_cast<int>(i); }
     }
     return best;
@@ -933,7 +982,7 @@ TeamMcts::JointAction TeamMcts::search(World& world, const std::vector<Agent*>& 
             bool any_legal = false;
             for (size_t h = 0; h < heroes.size(); h++) {
                 if (node->per_hero[h].actions.empty()) { idxs[h] = -1; continue; }
-                idxs[h] = pick_action_idx_(node->per_hero[h], node->visits, cfg_.uct_c);
+                idxs[h] = pick_action_idx_(node->per_hero[h], node->visits);
                 any_legal = true;
             }
             if (!any_legal) break;

@@ -346,6 +346,7 @@ public:
         std::vector<CombatAction> actions;
         std::vector<int>          visits;
         std::vector<float>        total_value;   // always hero's perspective
+        std::vector<float>        priors;         // normalized; empty ⇒ uniform
     };
 
     struct DNode {
@@ -367,6 +368,7 @@ public:
 
     void set_evaluator(std::shared_ptr<IEvaluator> ev)         { evaluator_ = std::move(ev); }
     void set_rollout_policy(std::shared_ptr<IRolloutPolicy> p) { rollout_policy_ = std::move(p); }
+    void set_prior(std::shared_ptr<IPrior> p)                  { prior_ = std::move(p); }
 
     /// Search for the best joint action under simultaneous-move assumptions.
     /// The returned hero action is what the caller should commit; the opp
@@ -389,10 +391,10 @@ private:
              | (static_cast<uint32_t>(o) & 0xFFFFu);
     }
 
-    static PlayerStats build_stats_(const Agent& self, const World& world);
+    PlayerStats build_stats_(const Agent& self, const World& world) const;
 
     int  pick_action_idx_(const PlayerStats& stats, int node_visits,
-                          float c, bool minimize) const;
+                          bool minimize) const;
 
     void step_joint_(World& world,
                      Agent& hero, const CombatAction& hero_act,
@@ -403,6 +405,7 @@ private:
     MctsConfig                      cfg_{};
     std::shared_ptr<IEvaluator>     evaluator_;
     std::shared_ptr<IRolloutPolicy> rollout_policy_;
+    std::shared_ptr<IPrior>         prior_;
     std::unique_ptr<DNode>          root_;
     SearchStats                     stats_{};
 };
@@ -432,6 +435,7 @@ public:
         std::vector<CombatAction> actions;
         std::vector<int>          visits;
         std::vector<float>        total_value;
+        std::vector<float>        priors;            // normalized; empty ⇒ uniform
     };
 
     struct TNode {
@@ -451,6 +455,7 @@ public:
     void set_evaluator(std::shared_ptr<ITeamEvaluator> ev)      { evaluator_ = std::move(ev); }
     void set_rollout_policy(std::shared_ptr<IRolloutPolicy> p)  { rollout_policy_ = std::move(p); }
     void set_opponent_policy(OpponentPolicy p)                  { opponent_ = std::move(p); }
+    void set_prior(std::shared_ptr<IPrior> p)                   { prior_ = std::move(p); }
 
     /// Search the best joint action for the team. All heroes are treated as
     /// cooperating (shared value). The returned JointAction has one entry
@@ -467,9 +472,9 @@ public:
     const TNode* last_root() const { return root_.get(); }
 
 private:
-    static PlayerStats build_stats_(const Agent& self, const World& world);
+    PlayerStats build_stats_(const Agent& self, const World& world) const;
 
-    int  pick_action_idx_(const PlayerStats& stats, int node_visits, float c) const;
+    int  pick_action_idx_(const PlayerStats& stats, int node_visits) const;
 
     void step_joint_(World& world,
                      const std::vector<Agent*>& heroes,
@@ -480,6 +485,7 @@ private:
     MctsConfig                       cfg_{};
     std::shared_ptr<ITeamEvaluator>  evaluator_;
     std::shared_ptr<IRolloutPolicy>  rollout_policy_;
+    std::shared_ptr<IPrior>          prior_;
     OpponentPolicy                   opponent_;
     std::unique_ptr<TNode>           root_;
     SearchStats                      stats_{};
