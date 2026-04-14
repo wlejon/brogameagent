@@ -2259,6 +2259,104 @@ TEST(mcts_hp_delta_evaluator_terminal_win_loss) {
     CHECK_NEAR(ev.evaluate(s->world, s->hero.unit().id), -1.0f, 1e-5f);
 }
 
+// ─── DecoupledMcts (simultaneous-move) ─────────────────────────────────────
+
+TEST(dmcts_hero_wins_in_expectation_when_stronger) {
+    // Hero: 100hp, 10dmg, 2 aps. Opp: 50hp, 5dmg, 1 aps. Both in range.
+    // Under simultaneous-move search, even a thinking opponent can't save
+    // this matchup — hero's trades are strictly better — so the value at
+    // the root should be positive.
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 1500;
+    cfg.rollout_horizon = 24;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 11;
+    mcts::DecoupledMcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+
+    engine.search(s->world, s->hero, s->enemy);
+    CHECK(engine.last_stats().best_mean > 0.0f);
+}
+
+TEST(dmcts_is_deterministic_under_seed) {
+    auto s1 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    auto s2 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 256;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xABCD;
+    mcts::DecoupledMcts e1(cfg), e2(cfg);
+    for (auto* e : {&e1, &e2}) {
+        e->set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+        e->set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    }
+
+    auto a1 = e1.search(s1->world, s1->hero, s1->enemy);
+    auto a2 = e2.search(s2->world, s2->hero, s2->enemy);
+    CHECK(a1 == a2);
+    CHECK(e1.last_stats().tree_size == e2.last_stats().tree_size);
+}
+
+TEST(dmcts_search_side_effect_free_on_world) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    float hero_hp_before = s->hero.unit().hp;
+    float enemy_hp_before = s->enemy.unit().hp;
+    float heroX = s->hero.x(), heroZ = s->hero.z();
+    float enemyX = s->enemy.x(), enemyZ = s->enemy.z();
+
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 128;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat  = 2;
+    mcts::DecoupledMcts engine(cfg);
+    engine.search(s->world, s->hero, s->enemy);
+
+    CHECK_NEAR(s->hero.unit().hp, hero_hp_before, 1e-4f);
+    CHECK_NEAR(s->enemy.unit().hp, enemy_hp_before, 1e-4f);
+    CHECK_NEAR(s->hero.x(), heroX, 1e-4f);
+    CHECK_NEAR(s->hero.z(), heroZ, 1e-4f);
+    CHECK_NEAR(s->enemy.x(), enemyX, 1e-4f);
+    CHECK_NEAR(s->enemy.z(), enemyZ, 1e-4f);
+}
+
+TEST(dmcts_advance_root_preserves_subtree) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 400;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat  = 2;
+    mcts::DecoupledMcts engine(cfg);
+
+    auto first = engine.search(s->world, s->hero, s->enemy);
+    int tree_before = engine.last_stats().tree_size;
+    CHECK(tree_before > 1);
+
+    engine.advance_root(first.hero, first.opp);
+    // Commit both actions in the caller's world.
+    mcts::apply(s->hero,  s->world, first.hero, cfg.sim_dt * cfg.action_repeat);
+    mcts::apply(s->enemy, s->world, first.opp,  cfg.sim_dt * cfg.action_repeat);
+
+    engine.search(s->world, s->hero, s->enemy);
+    CHECK(engine.last_stats().reused_root == true);
+}
+
+TEST(dmcts_search_grows_joint_tree) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 500;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat  = 2;
+    mcts::DecoupledMcts engine(cfg);
+    engine.search(s->world, s->hero, s->enemy);
+
+    // At least one joint child must exist; tree_size grows with iterations.
+    CHECK(engine.last_stats().tree_size > 1);
+    CHECK(engine.last_stats().root_children > 0);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {

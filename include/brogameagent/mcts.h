@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace brogameagent::mcts {
@@ -218,6 +219,92 @@ private:
     OpponentPolicy                opponent_;
     std::unique_ptr<Node>         root_;
     SearchStats                   stats_{};
+};
+
+
+// ─── Decoupled MCTS (simultaneous-move 1v1) ────────────────────────────────
+//
+// Both players are searched simultaneously using Decoupled UCT. At every
+// tree node, per-player action stats are tracked independently; selection
+// picks one action per player via UCT (hero maximises, opponent minimises
+// hero value), and child nodes are keyed by the (hero_idx, opp_idx) pair.
+//
+// This is the right engine for real-time 1v1 combat where neither side
+// observes the other's choice before acting. For turn-based games where
+// one side moves at a time, use the single-player Mcts with an opponent
+// policy callback.
+
+class DecoupledMcts {
+public:
+    struct Joint {
+        CombatAction hero;
+        CombatAction opp;
+        bool operator==(const Joint&) const = default;
+    };
+
+    struct PlayerStats {
+        std::vector<CombatAction> actions;
+        std::vector<int>          visits;
+        std::vector<float>        total_value;   // always hero's perspective
+    };
+
+    struct DNode {
+        PlayerStats hero_stats;
+        PlayerStats opp_stats;
+        // Sparse children: key = pack(hero_idx, opp_idx); only visited pairs.
+        std::unordered_map<uint32_t, std::unique_ptr<DNode>> children;
+        int   visits = 0;
+        DNode* parent = nullptr;
+        int   parent_hero_idx = -1;
+        int   parent_opp_idx  = -1;
+    };
+
+    DecoupledMcts() = default;
+    explicit DecoupledMcts(MctsConfig cfg) : cfg_(cfg) {}
+
+    void set_config(const MctsConfig& cfg) { cfg_ = cfg; }
+    const MctsConfig& config() const { return cfg_; }
+
+    void set_evaluator(std::shared_ptr<IEvaluator> ev)         { evaluator_ = std::move(ev); }
+    void set_rollout_policy(std::shared_ptr<IRolloutPolicy> p) { rollout_policy_ = std::move(p); }
+
+    /// Search for the best joint action under simultaneous-move assumptions.
+    /// The returned hero action is what the caller should commit; the opp
+    /// action is the planner's best-response prediction (useful for debug).
+    Joint search(World& world, Agent& hero, Agent& opp);
+
+    /// Promote the child matching both observed actions. If the pair wasn't
+    /// expanded during search (small budget), resets the tree.
+    void advance_root(const CombatAction& hero_committed,
+                       const CombatAction& opp_committed);
+
+    void reset_tree() { root_.reset(); }
+
+    const SearchStats& last_stats() const { return stats_; }
+    const DNode* last_root() const { return root_.get(); }
+
+private:
+    static uint32_t pack_key_(int h, int o) {
+        return (static_cast<uint32_t>(h) << 16)
+             | (static_cast<uint32_t>(o) & 0xFFFFu);
+    }
+
+    static PlayerStats build_stats_(const Agent& self, const World& world);
+
+    int  pick_action_idx_(const PlayerStats& stats, int node_visits,
+                          float c, bool minimize) const;
+
+    void step_joint_(World& world,
+                     Agent& hero, const CombatAction& hero_act,
+                     Agent& opp,  const CombatAction& opp_act);
+
+    float rollout_(World& world, Agent& hero, Agent& opp);
+
+    MctsConfig                      cfg_{};
+    std::shared_ptr<IEvaluator>     evaluator_;
+    std::shared_ptr<IRolloutPolicy> rollout_policy_;
+    std::unique_ptr<DNode>          root_;
+    SearchStats                     stats_{};
 };
 
 } // namespace brogameagent::mcts
