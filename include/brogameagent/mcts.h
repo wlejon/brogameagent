@@ -151,16 +151,62 @@ public:
 };
 
 
+// ─── Action priors (PUCT) ──────────────────────────────────────────────────
+//
+// A prior assigns non-negative weights to each legal action of a node. With
+// MctsConfig::prior_c > 0, Mcts selection uses PUCT instead of plain UCT:
+//
+//     score(child) = Q(child) + prior_c * P(child) * √N(parent) / (1 + n(child))
+//
+// where P(child) is the child's normalized prior probability. Good priors
+// compress the search into promising subtrees and routinely double effective
+// strength per iteration. Weights are normalized by Mcts internally — callers
+// just return relative weights; zero weights are allowed.
+
+class IPrior {
+public:
+    virtual ~IPrior() = default;
+    /// Return a weight for each action in `actions`. Output size must equal
+    /// `actions.size()`. All weights must be >= 0; at least one should be
+    /// positive (if all are zero, Mcts falls back to a uniform prior).
+    virtual std::vector<float> score(
+        const Agent& self, const World& world,
+        const std::vector<CombatAction>& actions) const = 0;
+};
+
+/// Uniform prior — every action gets the same weight. Equivalent to plain
+/// UCT when prior_c > 0 (selection then reduces to Q + c * √N / (1 + n)).
+class UniformPrior : public IPrior {
+public:
+    std::vector<float> score(
+        const Agent& self, const World& world,
+        const std::vector<CombatAction>& actions) const override;
+};
+
+/// Weights attack actions > ability actions > pure-move actions. Cheap
+/// heuristic: if action.attack_slot >= 0 → weight 4, else if
+/// action.ability_slot >= 0 → weight 2, else weight 1. Encourages the tree
+/// to prefer engagement actions early, which then win on Q once they pay off.
+class AttackBiasPrior : public IPrior {
+public:
+    std::vector<float> score(
+        const Agent& self, const World& world,
+        const std::vector<CombatAction>& actions) const override;
+};
+
+
 // ─── Tree node (internal, exposed for debug/test) ──────────────────────────
 
 struct Node {
     CombatAction action{};        // action that produced this node from parent
     Node*        parent = nullptr;
     std::vector<std::unique_ptr<Node>> children;
-    std::vector<CombatAction>           untried;  // legal actions not yet expanded
+    std::vector<CombatAction>           untried;        // legal actions not yet expanded
+    std::vector<float>                  untried_priors; // aligned with `untried`; normalized
 
     int   visits      = 0;
     float total_value = 0.0f;     // sum of rollout values, hero's perspective
+    float prior_p     = 1.0f;     // prior probability of taking this child's action at parent
 
     float mean() const { return visits > 0 ? total_value / static_cast<float>(visits) : 0.0f; }
     bool  is_leaf() const { return children.empty(); }
@@ -195,6 +241,14 @@ struct MctsConfig {
     // expanded before UCT takes over, matching classical MCTS.
     // Typical values: 0.5 (aggressive depth) to 0.8 (near-classical).
     float pw_alpha = 0.0f;
+
+    // PUCT exploration weight (Mcts only). 0 (default) = plain UCT using
+    // uct_c. When > 0, Mcts selection uses
+    //     score = Q + prior_c * P * √N_parent / (1 + n_child)
+    // and the uct_c term is ignored. Typical values: 1.0–3.0. Pair with
+    // set_prior() — without a set prior, the prior is uniform and PUCT
+    // reduces to an exploration-constant-rescaled UCT variant.
+    float prior_c = 0.0f;
 };
 
 struct SearchStats {
@@ -218,6 +272,7 @@ public:
     void set_evaluator(std::shared_ptr<IEvaluator> ev)      { evaluator_ = std::move(ev); }
     void set_rollout_policy(std::shared_ptr<IRolloutPolicy> p) { rollout_policy_ = std::move(p); }
     void set_opponent_policy(OpponentPolicy p)              { opponent_ = std::move(p); }
+    void set_prior(std::shared_ptr<IPrior> p)               { prior_ = std::move(p); }
 
     /// Search the best action for `hero` in the current `world`. The search
     /// clones world state via snapshot/restore internally; the caller's world
@@ -260,6 +315,7 @@ private:
     MctsConfig                    cfg_{};
     std::shared_ptr<IEvaluator>   evaluator_;
     std::shared_ptr<IRolloutPolicy> rollout_policy_;
+    std::shared_ptr<IPrior>       prior_;
     OpponentPolicy                opponent_;
     std::unique_ptr<Node>         root_;
     SearchStats                   stats_{};

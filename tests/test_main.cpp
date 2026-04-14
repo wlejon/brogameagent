@@ -2864,6 +2864,110 @@ TEST(mcts_pw_is_deterministic_under_seed) {
     CHECK(a1 == a2);
 }
 
+TEST(attack_bias_prior_weights_attack_over_move) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::AttackBiasPrior prior;
+    auto acts = mcts::legal_actions(s->hero, s->world);
+    CHECK(acts.size() > 1);
+    auto w = prior.score(s->hero, s->world, acts);
+    CHECK(w.size() == acts.size());
+    // Find a pure-move and an attack action, verify the attack outweighs.
+    float max_move = 0.0f, min_attack = 1e9f;
+    bool saw_move = false, saw_attack = false;
+    for (size_t i = 0; i < acts.size(); i++) {
+        if (acts[i].attack_slot >= 0) {
+            saw_attack = true; if (w[i] < min_attack) min_attack = w[i];
+        } else if (acts[i].ability_slot < 0) {
+            saw_move = true; if (w[i] > max_move) max_move = w[i];
+        }
+    }
+    CHECK(saw_move);
+    CHECK(saw_attack);
+    CHECK(min_attack > max_move);
+}
+
+TEST(uniform_prior_all_equal) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::UniformPrior prior;
+    auto acts = mcts::legal_actions(s->hero, s->world);
+    auto w = prior.score(s->hero, s->world, acts);
+    CHECK(w.size() == acts.size());
+    for (float v : w) CHECK(std::abs(v - w[0]) < 1e-6f);
+}
+
+TEST(mcts_puct_picks_attack_with_prior) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 128;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xBAB;
+    cfg.prior_c        = 1.5f;     // enable PUCT
+    mcts::Mcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    engine.set_prior(std::make_shared<mcts::AttackBiasPrior>());
+
+    auto a = engine.search(s->world, s->hero);
+    CHECK(a.attack_slot >= 0);
+    CHECK(engine.last_stats().best_mean > 0.0f);
+
+    // With an attack-biased prior, the most-visited attack-containing child
+    // should accumulate more visits than an average child.
+    const auto* root = engine.last_root();
+    CHECK(root != nullptr);
+    int attack_visits = 0, move_only_visits = 0;
+    for (const auto& up : root->children) {
+        if (up->action.attack_slot >= 0) attack_visits += up->visits;
+        else if (up->action.ability_slot < 0) move_only_visits += up->visits;
+    }
+    CHECK(attack_visits > move_only_visits);
+}
+
+TEST(mcts_puct_child_priors_sum_to_one) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 64;
+    cfg.rollout_horizon = 4;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xBAB2;
+    cfg.prior_c        = 1.5f;
+    mcts::Mcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    engine.set_prior(std::make_shared<mcts::AttackBiasPrior>());
+    engine.search(s->world, s->hero);
+    const auto* root = engine.last_root();
+    CHECK(root != nullptr);
+    // Sum of all children priors + remaining untried priors should be ~1.
+    float sum = 0.0f;
+    for (const auto& up : root->children) sum += up->prior_p;
+    for (float p : root->untried_priors) sum += p;
+    CHECK(std::abs(sum - 1.0f) < 1e-4f);
+}
+
+TEST(mcts_puct_is_deterministic_under_seed) {
+    auto s1 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    auto s2 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 128;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xBAB3;
+    cfg.prior_c        = 1.5f;
+    auto run = [&](McstScene& s) {
+        mcts::Mcts e(cfg);
+        e.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+        e.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+        e.set_opponent_policy(mcts::policy_idle);
+        e.set_prior(std::make_shared<mcts::AttackBiasPrior>());
+        return e.search(s.world, s.hero);
+    };
+    CHECK(run(*s1) == run(*s2));
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {

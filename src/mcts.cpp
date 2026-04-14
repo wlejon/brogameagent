@@ -267,6 +267,53 @@ CombatAction AggressiveRollout::choose(Agent& self, World& world) const {
     return policy_aggressive(self, world);
 }
 
+// ─── Priors ────────────────────────────────────────────────────────────────
+
+std::vector<float> UniformPrior::score(
+    const Agent& /*self*/, const World& /*world*/,
+    const std::vector<CombatAction>& actions) const
+{
+    return std::vector<float>(actions.size(), 1.0f);
+}
+
+std::vector<float> AttackBiasPrior::score(
+    const Agent& /*self*/, const World& /*world*/,
+    const std::vector<CombatAction>& actions) const
+{
+    std::vector<float> w(actions.size(), 1.0f);
+    for (size_t i = 0; i < actions.size(); i++) {
+        if (actions[i].attack_slot  >= 0) w[i] = 4.0f;
+        else if (actions[i].ability_slot >= 0) w[i] = 2.0f;
+        // else move-only: keep 1.0
+    }
+    return w;
+}
+
+namespace {
+
+/// Compute normalized priors for `actions` via `prior` (or uniform if null).
+/// Output is a probability distribution summing to 1; if all weights are
+/// zero or input is empty, returns uniform.
+std::vector<float> compute_priors(const IPrior* prior,
+                                   const Agent& self, const World& world,
+                                   const std::vector<CombatAction>& actions) {
+    const size_t n = actions.size();
+    if (n == 0) return {};
+    std::vector<float> w = prior ? prior->score(self, world, actions)
+                                  : std::vector<float>(n, 1.0f);
+    if (w.size() != n) w.assign(n, 1.0f);
+    float sum = 0.0f;
+    for (float v : w) { if (v < 0.0f) v = 0.0f; sum += v; }
+    if (sum <= 0.0f) {
+        std::fill(w.begin(), w.end(), 1.0f / static_cast<float>(n));
+        return w;
+    }
+    for (float& v : w) v = (v < 0.0f ? 0.0f : v) / sum;
+    return w;
+}
+
+} // namespace
+
 // ─── Mcts engine ───────────────────────────────────────────────────────────
 
 namespace {
@@ -281,6 +328,23 @@ Node* best_uct_child(Node* node, float c) {
         float exploit = ch->mean();
         float explore = c * std::sqrt(ln_n / static_cast<float>(ch->visits));
         float score = exploit + explore;
+        if (score > best_score) { best_score = score; best = ch; }
+    }
+    return best;
+}
+
+/// PUCT selection: score = Q + c * P * √N_parent / (1 + n_child). Used when
+/// cfg_.prior_c > 0. Does NOT short-circuit on visits==0 because prior
+/// probability already distinguishes between unvisited children.
+Node* best_puct_child(Node* node, float c) {
+    Node* best = nullptr;
+    float best_score = -std::numeric_limits<float>::infinity();
+    const float sqrt_N = std::sqrt(static_cast<float>(std::max(1, node->visits)));
+    for (auto& up : node->children) {
+        Node* ch = up.get();
+        float q = ch->mean();
+        float u = c * ch->prior_p * sqrt_N / (1.0f + static_cast<float>(ch->visits));
+        float score = q + u;
         if (score > best_score) { best_score = score; best = ch; }
     }
     return best;
@@ -340,7 +404,9 @@ Node* Mcts::select_(Node* node, World& world, Agent& hero) {
 
     while (!wants_expansion(node)) {
         if (is_terminal_for(hero, world)) return node;
-        Node* next = best_uct_child(node, cfg_.uct_c);
+        Node* next = cfg_.prior_c > 0.0f
+            ? best_puct_child(node, cfg_.prior_c)
+            : best_uct_child(node, cfg_.uct_c);
         if (!next) return node;
         step_decision_(world, hero, next->action);
         node = next;
@@ -351,17 +417,25 @@ Node* Mcts::select_(Node* node, World& world, Agent& hero) {
 Node* Mcts::expand_(Node* node, World& world, Agent& hero) {
     if (is_terminal_for(hero, world) || node->untried.empty()) return node;
 
-    // Pop from the back for O(1); order doesn't matter for correctness since
-    // UCT's unvisited-first rule gives every untried action equal priority.
+    // Pop from the back for O(1). Under PUCT, each untried slot carries its
+    // normalized prior probability; pop both aligned.
     CombatAction a = node->untried.back();
     node->untried.pop_back();
+    float child_p = 1.0f;
+    if (!node->untried_priors.empty()) {
+        child_p = node->untried_priors.back();
+        node->untried_priors.pop_back();
+    }
 
     step_decision_(world, hero, a);
 
     auto child = std::make_unique<Node>();
     child->action  = a;
     child->parent  = node;
+    child->prior_p = child_p;
     child->untried = legal_actions(hero, world);
+    child->untried_priors = compute_priors(
+        prior_.get(), hero, world, child->untried);
     Node* raw = child.get();
     node->children.push_back(std::move(child));
     return raw;
@@ -405,6 +479,8 @@ CombatAction Mcts::search(World& world, Agent& hero) {
     } else {
         root_ = std::make_unique<Node>();
         root_->untried = legal_actions(hero, world);
+        root_->untried_priors = compute_priors(
+            prior_.get(), hero, world, root_->untried);
     }
 
     const int  iter_cap = cfg_.iterations > 0 ? cfg_.iterations
