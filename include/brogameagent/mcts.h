@@ -588,6 +588,104 @@ private:
 };
 
 
+// ─── TacticPrior ───────────────────────────────────────────────────────────
+//
+// IPrior that biases a per-hero search toward the CombatAction dictated by
+// a committed team tactic (via tactic_to_action). The match action gets a
+// large weight; everything else gets 1. Used by LayeredPlanner to couple
+// coarse TacticMcts with fine TeamMcts without hard-constraining the fine
+// search — it can still deviate when payoff is better.
+
+class TacticPrior : public IPrior {
+public:
+    void set_tactic(Tactic t) { tactic_ = t; }
+    Tactic tactic() const     { return tactic_; }
+
+    void set_match_weight(float w) { match_weight_ = w; }
+    void set_other_weight(float w) { other_weight_ = w; }
+
+    std::vector<float> score(
+        const Agent& self, const World& world,
+        const std::vector<CombatAction>& actions) const override;
+
+private:
+    Tactic tactic_{};
+    float  match_weight_ = 8.0f;
+    float  other_weight_ = 1.0f;
+};
+
+
+// ─── LayeredPlanner ────────────────────────────────────────────────────────
+//
+// Hierarchical composition of TacticMcts (coarse) over TeamMcts (fine). The
+// tactic is re-planned every `tactic_cfg.tactic_window_decisions` fine
+// decisions; in between, fine per-hero search runs every decide() call,
+// priored toward the currently committed tactic via TacticPrior. Evaluator,
+// rollout policy, and opponent policy are shared across both layers.
+//
+// Intended usage:
+//   LayeredPlanner planner({tactic_cfg, fine_cfg});
+//   planner.set_team_evaluator(std::make_shared<TeamHpDeltaEvaluator>());
+//   planner.set_rollout_policy(std::make_shared<AggressiveRollout>());
+//   planner.set_opponent_policy(policy_aggressive);
+//   while (game_running) {
+//       auto joint = planner.decide(world, heroes);
+//       commit(joint);            // apply each hero action externally
+//   }
+
+class LayeredPlanner {
+public:
+    struct Config {
+        MctsConfig tactic_cfg{};   // config for the coarse TacticMcts
+        MctsConfig fine_cfg{};     // config for the fine TeamMcts
+    };
+
+    struct Stats {
+        Tactic      committed_tactic{};
+        int         windows_until_replan = 0;
+        bool        replanned_this_call  = false;
+        SearchStats tactic_stats{};    // from the last tactic search (stale
+                                        // when replanned_this_call is false)
+        SearchStats fine_stats{};
+    };
+
+    LayeredPlanner() = default;
+    explicit LayeredPlanner(Config cfg) : cfg_(cfg) {}
+
+    void set_config(const Config& cfg) { cfg_ = cfg; }
+    const Config& config() const       { return cfg_; }
+
+    void set_team_evaluator(std::shared_ptr<ITeamEvaluator> ev) { evaluator_ = std::move(ev); }
+    void set_rollout_policy(std::shared_ptr<IRolloutPolicy> p)  { rollout_policy_ = std::move(p); }
+    void set_opponent_policy(OpponentPolicy p)                   { opponent_ = std::move(p); }
+
+    /// Forget the committed tactic and both search trees. Call between
+    /// episodes so the next decide() starts fresh.
+    void reset();
+
+    /// Produce per-hero actions for the current frame. Runs TacticMcts only
+    /// when the current tactic has expired; always runs TeamMcts.
+    TeamMcts::JointAction decide(World& world, const std::vector<Agent*>& heroes);
+
+    const Stats& last_stats() const     { return stats_; }
+    Tactic committed_tactic() const     { return committed_tactic_; }
+    int    windows_until_replan() const { return windows_left_; }
+
+private:
+    Config                            cfg_{};
+    TacticMcts                        tactic_mcts_;
+    TeamMcts                          fine_mcts_;
+    std::shared_ptr<TacticPrior>      prior_;
+    std::shared_ptr<ITeamEvaluator>   evaluator_;
+    std::shared_ptr<IRolloutPolicy>   rollout_policy_;
+    OpponentPolicy                    opponent_;
+
+    Tactic committed_tactic_{};
+    int    windows_left_ = 0;
+    Stats  stats_{};
+};
+
+
 // ─── Root-parallel search ──────────────────────────────────────────────────
 //
 // Run N independent MCTS trees in N threads, then merge root visit counts

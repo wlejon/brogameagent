@@ -1583,4 +1583,72 @@ DecoupledMcts::Joint root_parallel_search_decoupled(
     return out;
 }
 
+// ─── TacticPrior ───────────────────────────────────────────────────────────
+
+std::vector<float> TacticPrior::score(
+    const Agent& self, const World& world,
+    const std::vector<CombatAction>& actions) const
+{
+    std::vector<float> w(actions.size(), other_weight_);
+    if (!self.unit().alive() || actions.empty()) return w;
+    CombatAction target = tactic_to_action(tactic_, self, world);
+    for (size_t i = 0; i < actions.size(); i++) {
+        if (actions[i] == target) w[i] = match_weight_;
+    }
+    return w;
+}
+
+
+// ─── LayeredPlanner ────────────────────────────────────────────────────────
+
+void LayeredPlanner::reset() {
+    tactic_mcts_.reset_tree();
+    fine_mcts_.reset_tree();
+    committed_tactic_ = Tactic{};
+    windows_left_ = 0;
+    stats_ = Stats{};
+}
+
+TeamMcts::JointAction LayeredPlanner::decide(
+    World& world, const std::vector<Agent*>& heroes)
+{
+    stats_.replanned_this_call = false;
+
+    // Configure the tactic layer lazily on first use (or on any config change
+    // — cheap to re-apply every call since setters just move shared_ptrs).
+    tactic_mcts_.set_config(cfg_.tactic_cfg);
+    if (evaluator_)      tactic_mcts_.set_evaluator(evaluator_);
+    if (opponent_)       tactic_mcts_.set_opponent_policy(opponent_);
+
+    fine_mcts_.set_config(cfg_.fine_cfg);
+    if (evaluator_)      fine_mcts_.set_evaluator(evaluator_);
+    if (rollout_policy_) fine_mcts_.set_rollout_policy(rollout_policy_);
+    if (opponent_)       fine_mcts_.set_opponent_policy(opponent_);
+
+    // (Re)plan the tactic when the current commitment has expired. Tree is
+    // reset each time because world state has moved on between calls and the
+    // prior tree's stats were collected for a stale snapshot.
+    if (windows_left_ <= 0) {
+        tactic_mcts_.reset_tree();
+        committed_tactic_ = tactic_mcts_.search(world, heroes);
+        stats_.tactic_stats = tactic_mcts_.last_stats();
+        windows_left_ = std::max(1, cfg_.tactic_cfg.tactic_window_decisions);
+        stats_.replanned_this_call = true;
+    }
+
+    // Bias the fine search toward the committed tactic via TacticPrior.
+    if (!prior_) prior_ = std::make_shared<TacticPrior>();
+    prior_->set_tactic(committed_tactic_);
+    fine_mcts_.set_prior(prior_);
+
+    fine_mcts_.reset_tree();
+    TeamMcts::JointAction joint = fine_mcts_.search(world, heroes);
+    stats_.fine_stats = fine_mcts_.last_stats();
+
+    windows_left_--;
+    stats_.committed_tactic      = committed_tactic_;
+    stats_.windows_until_replan  = windows_left_;
+    return joint;
+}
+
 } // namespace brogameagent::mcts

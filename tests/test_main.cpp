@@ -3059,6 +3059,108 @@ TEST(team_mcts_puct_root_priors_sum_to_one_per_hero) {
     }
 }
 
+TEST(tactic_prior_boosts_matching_action) {
+    auto s = make_team_scene(1, 1);
+    auto& hero = *s->heroes.front();
+    // FocusLowestHp with the one enemy → target action is attack_slot=0.
+    mcts::TacticPrior tp;
+    tp.set_tactic(mcts::Tactic{ mcts::TacticKind::FocusLowestHp });
+    auto acts = mcts::legal_actions(hero, s->world);
+    auto w = tp.score(hero, s->world, acts);
+    CHECK(w.size() == acts.size());
+    mcts::CombatAction target = mcts::tactic_to_action(
+        mcts::Tactic{ mcts::TacticKind::FocusLowestHp }, hero, s->world);
+    float max_w = 0.0f, match_w = 0.0f;
+    bool saw_match = false;
+    for (size_t i = 0; i < acts.size(); i++) {
+        if (acts[i] == target) { saw_match = true; match_w = w[i]; }
+        if (w[i] > max_w) max_w = w[i];
+    }
+    CHECK(saw_match);
+    CHECK(match_w >= max_w);
+    CHECK(match_w > 1.0f);
+}
+
+TEST(layered_planner_returns_joint_action_of_correct_size) {
+    auto s = make_team_scene(2, 2);
+    mcts::LayeredPlanner::Config cfg;
+    cfg.tactic_cfg.iterations             = 60;
+    cfg.tactic_cfg.rollout_horizon        = 6;
+    cfg.tactic_cfg.action_repeat          = 2;
+    cfg.tactic_cfg.tactic_window_decisions = 3;
+    cfg.tactic_cfg.seed                   = 0x5A1;
+    cfg.fine_cfg.iterations               = 60;
+    cfg.fine_cfg.rollout_horizon          = 4;
+    cfg.fine_cfg.action_repeat            = 2;
+    cfg.fine_cfg.seed                     = 0x5A2;
+    cfg.fine_cfg.prior_c                  = 1.5f;
+    mcts::LayeredPlanner planner(cfg);
+    planner.set_team_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    planner.set_rollout_policy(std::make_shared<mcts::AggressiveRollout>());
+    planner.set_opponent_policy(mcts::policy_aggressive);
+
+    auto joint = planner.decide(s->world, raw(s->heroes));
+    CHECK(joint.per_hero.size() == s->heroes.size());
+    // First call must have planned a tactic.
+    CHECK(planner.last_stats().replanned_this_call == true);
+    CHECK(planner.last_stats().windows_until_replan == 2);  // window=3, one consumed
+}
+
+TEST(layered_planner_replans_tactic_on_schedule) {
+    auto s = make_team_scene(2, 2);
+    mcts::LayeredPlanner::Config cfg;
+    cfg.tactic_cfg.iterations             = 40;
+    cfg.tactic_cfg.rollout_horizon        = 4;
+    cfg.tactic_cfg.action_repeat          = 2;
+    cfg.tactic_cfg.tactic_window_decisions = 2;
+    cfg.tactic_cfg.seed                   = 0x5A3;
+    cfg.fine_cfg.iterations               = 40;
+    cfg.fine_cfg.rollout_horizon          = 4;
+    cfg.fine_cfg.action_repeat            = 2;
+    cfg.fine_cfg.seed                     = 0x5A4;
+    cfg.fine_cfg.prior_c                  = 1.5f;
+    mcts::LayeredPlanner planner(cfg);
+    planner.set_team_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    planner.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    planner.set_opponent_policy(mcts::policy_idle);
+
+    // Windows=2 → replan pattern: T, F, T, F, T, ...
+    std::vector<bool> replanned;
+    for (int i = 0; i < 5; i++) {
+        planner.decide(s->world, raw(s->heroes));
+        replanned.push_back(planner.last_stats().replanned_this_call);
+    }
+    CHECK(replanned[0] == true);
+    CHECK(replanned[1] == false);
+    CHECK(replanned[2] == true);
+    CHECK(replanned[3] == false);
+    CHECK(replanned[4] == true);
+}
+
+TEST(layered_planner_reset_forces_next_replan) {
+    auto s = make_team_scene(2, 2);
+    mcts::LayeredPlanner::Config cfg;
+    cfg.tactic_cfg.iterations             = 30;
+    cfg.tactic_cfg.rollout_horizon        = 4;
+    cfg.tactic_cfg.action_repeat          = 2;
+    cfg.tactic_cfg.tactic_window_decisions = 5;
+    cfg.tactic_cfg.seed                   = 0x5A5;
+    cfg.fine_cfg.iterations               = 30;
+    cfg.fine_cfg.rollout_horizon          = 4;
+    cfg.fine_cfg.action_repeat            = 2;
+    cfg.fine_cfg.seed                     = 0x5A6;
+    cfg.fine_cfg.prior_c                  = 1.5f;
+    mcts::LayeredPlanner planner(cfg);
+    planner.set_team_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    planner.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    planner.set_opponent_policy(mcts::policy_idle);
+    planner.decide(s->world, raw(s->heroes));
+    CHECK(planner.last_stats().windows_until_replan == 4);
+    planner.reset();
+    planner.decide(s->world, raw(s->heroes));
+    CHECK(planner.last_stats().replanned_this_call == true);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
