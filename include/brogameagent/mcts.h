@@ -141,6 +141,15 @@ public:
     CombatAction choose(Agent& self, World& world) const override;
 };
 
+/// Scripted "close and auto-attack the nearest enemy" rollout. Wraps
+/// policy_aggressive. Typically produces materially stronger search than
+/// RandomRollout under equal iteration budgets, at the cost of bias toward
+/// melee play — prefer it when the caller's heroes are expected to engage.
+class AggressiveRollout : public IRolloutPolicy {
+public:
+    CombatAction choose(Agent& self, World& world) const override;
+};
+
 
 // ─── Tree node (internal, exposed for debug/test) ──────────────────────────
 
@@ -445,9 +454,13 @@ struct Tactic {
 /// produces the same action. Heroes not alive get a no-op.
 CombatAction tactic_to_action(const Tactic& t, const Agent& hero, const World& world);
 
-/// Tactics currently available to the team. Today returns all TacticKind
-/// variants; future versions will prune contextually (e.g. no Retreat if
-/// already beyond escape range, no FocusLowestHp if no enemies).
+/// Tactics available for the current team + world. Pruned contextually:
+///   - Always includes Hold.
+///   - FocusLowestHp and Scatter only when at least one living enemy exists.
+///   - Retreat only when at least one living enemy is within ~1.5× its own
+///     attack range of some living hero (i.e. there is something to flee
+///     from). Pruning away Retreat in safe states keeps TacticMcts from
+///     wasting budget exploring obviously-dominated plays.
 std::vector<Tactic> legal_tactics(const std::vector<Agent*>& heroes, const World& world);
 
 class TacticMcts {

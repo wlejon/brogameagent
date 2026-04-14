@@ -262,6 +262,11 @@ CombatAction RandomRollout::choose(Agent& self, World& world) const {
     return acts[static_cast<size_t>(i)];
 }
 
+CombatAction AggressiveRollout::choose(Agent& self, World& world) const {
+    if (!self.unit().alive()) return {};
+    return policy_aggressive(self, world);
+}
+
 // ─── Mcts engine ───────────────────────────────────────────────────────────
 
 namespace {
@@ -1063,12 +1068,38 @@ CombatAction tactic_to_action(const Tactic& t, const Agent& hero, const World& w
     return a;
 }
 
-std::vector<Tactic> legal_tactics(const std::vector<Agent*>& /*heroes*/,
-                                   const World& /*world*/) {
+std::vector<Tactic> legal_tactics(const std::vector<Agent*>& heroes,
+                                   const World& world) {
     std::vector<Tactic> out;
-    out.reserve(static_cast<size_t>(TacticKind::COUNT));
-    for (int k = 0; k < static_cast<int>(TacticKind::COUNT); k++) {
-        out.push_back({ static_cast<TacticKind>(k) });
+    out.push_back({ TacticKind::Hold });  // always legal
+
+    if (heroes.empty()) return out;
+    const int team_id = heroes.front()->unit().teamId;
+
+    bool any_enemy_alive = false;
+    bool any_threat      = false;   // enemy within 1.5× its attack range of a hero
+    for (Agent* e : world.agents()) {
+        if (!e || !e->unit().alive()) continue;
+        if (e->unit().teamId == team_id) continue;
+        any_enemy_alive = true;
+
+        const float threat_r  = std::max(1e-3f, e->unit().attackRange) * 1.5f;
+        const float threat_r2 = threat_r * threat_r;
+        for (Agent* h : heroes) {
+            if (!h || !h->unit().alive()) continue;
+            float dx = e->x() - h->x();
+            float dz = e->z() - h->z();
+            if (dx * dx + dz * dz <= threat_r2) { any_threat = true; break; }
+        }
+        if (any_threat) break;
+    }
+
+    if (any_enemy_alive) {
+        out.push_back({ TacticKind::FocusLowestHp });
+        out.push_back({ TacticKind::Scatter });
+    }
+    if (any_threat) {
+        out.push_back({ TacticKind::Retreat });
     }
     return out;
 }

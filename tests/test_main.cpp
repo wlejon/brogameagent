@@ -2702,6 +2702,88 @@ TEST(tactic_mcts_search_side_effect_free) {
     for (auto& e : s->enemies) CHECK_NEAR(e->unit().hp, hp_before[i++], 1e-4f);
 }
 
+TEST(legal_tactics_no_enemies_returns_hold_only) {
+    auto s = make_team_scene(/*heroes*/2, /*enemies*/0);
+    auto ts = mcts::legal_tactics(raw(s->heroes), s->world);
+    CHECK(ts.size() == 1);
+    CHECK(ts[0].kind == mcts::TacticKind::Hold);
+}
+
+TEST(legal_tactics_all_dead_enemies_returns_hold_only) {
+    auto s = make_team_scene(2, 2);
+    for (auto& e : s->enemies) e->unit().hp = 0.0f;
+    auto ts = mcts::legal_tactics(raw(s->heroes), s->world);
+    CHECK(ts.size() == 1);
+    CHECK(ts[0].kind == mcts::TacticKind::Hold);
+}
+
+TEST(legal_tactics_prunes_retreat_when_enemies_far) {
+    // Default make_team_scene: attackRange=3, heroes at x≈-1, enemies at x≈+1.
+    // Move enemies far away so no hero is within 1.5× enemy attackRange.
+    auto s = make_team_scene(2, 2);
+    for (size_t i = 0; i < s->enemies.size(); i++) {
+        s->enemies[i]->setPosition(100.0f + 0.4f * i, 0.3f * i);
+    }
+    auto ts = mcts::legal_tactics(raw(s->heroes), s->world);
+    bool has_retreat = false, has_focus = false, has_scatter = false, has_hold = false;
+    for (auto& t : ts) {
+        has_retreat |= (t.kind == mcts::TacticKind::Retreat);
+        has_focus   |= (t.kind == mcts::TacticKind::FocusLowestHp);
+        has_scatter |= (t.kind == mcts::TacticKind::Scatter);
+        has_hold    |= (t.kind == mcts::TacticKind::Hold);
+    }
+    CHECK(has_hold);
+    CHECK(has_focus);
+    CHECK(has_scatter);
+    CHECK(!has_retreat);
+}
+
+TEST(legal_tactics_keeps_retreat_when_enemy_in_threat_range) {
+    // Stock scene: enemies ~2 units from heroes, 1.5× attackRange = 4.5 → threat.
+    auto s = make_team_scene(2, 2);
+    auto ts = mcts::legal_tactics(raw(s->heroes), s->world);
+    bool has_retreat = false;
+    for (auto& t : ts) if (t.kind == mcts::TacticKind::Retreat) has_retreat = true;
+    CHECK(has_retreat);
+    CHECK(ts.size() == 4);
+}
+
+TEST(aggressive_rollout_returns_legal_action) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::AggressiveRollout rollout;
+    auto a = rollout.choose(s->hero, s->world);
+    // Enemy is in range → should pick an attack slot; movement is still N
+    // (charge toward enemy), which is fine.
+    CHECK(a.attack_slot >= 0);
+    CHECK(a.move_dir == mcts::MoveDir::N);
+}
+
+TEST(aggressive_rollout_dead_agent_returns_noop) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    s->hero.unit().hp = 0.0f;
+    mcts::AggressiveRollout rollout;
+    auto a = rollout.choose(s->hero, s->world);
+    CHECK(a.attack_slot == -1);
+    CHECK(a.ability_slot == -1);
+    CHECK(a.move_dir == mcts::MoveDir::Hold);
+}
+
+TEST(mcts_with_aggressive_rollout_picks_attack_vs_idle_opponent) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 128;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xA66;
+    mcts::Mcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::AggressiveRollout>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    auto a = engine.search(s->world, s->hero);
+    CHECK(a.attack_slot >= 0);
+    CHECK(engine.last_stats().best_mean > 0.0f);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
