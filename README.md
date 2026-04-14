@@ -33,7 +33,7 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-Produces the static lib, tests, and `replay_query.exe`.
+Produces the static lib, tests, `replay_query.exe`, and `mcts_bench.exe`.
 
 ### Running tests
 
@@ -55,6 +55,24 @@ Produces the static lib, tests, and `replay_query.exe`.
 ```
 
 All output is tab-separated — pipe into `awk`, `csvkit`, `pandas`, whatever.
+
+### `mcts_bench` CLI
+
+Runs N episodes with MCTS planning per decision and reports win/loss/draw
+counts, mean terminal HP delta, and mean per-decision search cost as a
+single TSV row:
+
+```sh
+./build/Release/mcts_bench.exe duel [flags]
+./build/Release/mcts_bench.exe team [flags]
+```
+
+Key flags: `--episodes N`, `--iterations M`, `--budget-ms T`,
+`--rollout {random|aggressive}`, `--opponent {idle|aggressive}`,
+`--puct C`, `--pw A`, `--heroes H`, `--enemies E`,
+`--planner {team|layered}`, `--seed S`, `--max-ticks K`.
+
+Sweep by re-running across a grid and concatenating the output rows.
 
 ## Core concepts
 

@@ -84,6 +84,9 @@ option(BROGAMEAGENT_TOOLS "Build brogameagent CLI tools" ${PROJECT_IS_TOP_LEVEL}
 if(BROGAMEAGENT_TOOLS)
     add_executable(replay_query tools/replay_query.cpp)
     target_link_libraries(replay_query PRIVATE brogameagent)
+
+    add_executable(mcts_bench tools/mcts_bench.cpp)
+    target_link_libraries(mcts_bench PRIVATE brogameagent)
 endif()
 
 # Tests
