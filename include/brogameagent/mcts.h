@@ -186,6 +186,15 @@ struct MctsConfig {
     // ≈ 256 ms of game time per tactic — coarse enough to matter, fine
     // enough to respond to new threats.
     int   tactic_window_decisions = 4;
+
+    // Progressive widening (Mcts only). When > 0, a node expands a new child
+    // only while children.size() < ceil(visits^pw_alpha); otherwise selection
+    // descends into the existing children via UCT. Keeps the tree from going
+    // wide-and-shallow over large action sets (9 move dirs × N enemy slots ×
+    // ability slots). 0 (default) disables PW — every untried action is
+    // expanded before UCT takes over, matching classical MCTS.
+    // Typical values: 0.5 (aggressive depth) to 0.8 (near-classical).
+    float pw_alpha = 0.0f;
 };
 
 struct SearchStats {

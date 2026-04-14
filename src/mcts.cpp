@@ -321,7 +321,24 @@ void Mcts::step_decision_(World& world, Agent& hero, const CombatAction& hero_ac
 }
 
 Node* Mcts::select_(Node* node, World& world, Agent& hero) {
-    while (node->fully_expanded() && !node->is_leaf()) {
+    // Descend until we reach a node where we should expand a new child.
+    // Expansion is triggered by:
+    //   - leaf (no children yet), OR
+    //   - PW disabled and an untried action exists, OR
+    //   - PW enabled and children.size() < ceil(visits^pw_alpha) with untried
+    //     actions available.
+    // Otherwise we descend via UCT into the existing children.
+    auto wants_expansion = [&](const Node* n) {
+        if (n->children.empty()) return true;
+        if (n->untried.empty())  return false;
+        if (cfg_.pw_alpha <= 0.0f) return true;
+        float threshold = std::ceil(std::pow(
+            static_cast<float>(std::max(1, n->visits)),
+            cfg_.pw_alpha));
+        return static_cast<float>(n->children.size()) < threshold;
+    };
+
+    while (!wants_expansion(node)) {
         if (is_terminal_for(hero, world)) return node;
         Node* next = best_uct_child(node, cfg_.uct_c);
         if (!next) return node;

@@ -2784,6 +2784,86 @@ TEST(mcts_with_aggressive_rollout_picks_attack_vs_idle_opponent) {
     CHECK(engine.last_stats().best_mean > 0.0f);
 }
 
+TEST(mcts_pw_bounds_root_children_by_visits_alpha) {
+    // With pw_alpha = 0.5 and 100 iterations, the root should have at most
+    // ceil(100^0.5) = 10 children. Without PW (classical), the root would
+    // expand all 9 move-direction-only actions on the first ~9 iterations
+    // and typically end up with 10+ children quickly.
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 100;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0x1234;
+    cfg.pw_alpha       = 0.5f;
+    mcts::Mcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    engine.search(s->world, s->hero);
+    int bound = static_cast<int>(std::ceil(std::pow(100.0f, 0.5f)));
+    CHECK(engine.last_stats().root_children <= bound);
+    CHECK(engine.last_stats().root_children >= 1);
+}
+
+TEST(mcts_pw_off_matches_classical_expansion) {
+    // pw_alpha = 0 should leave expansion unchanged: root children count
+    // saturates at the number of legal actions (capped by iteration budget).
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 100;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0x5678;
+    cfg.pw_alpha       = 0.0f;
+    mcts::Mcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    engine.search(s->world, s->hero);
+    // Under PW=0, we expect the root to have expanded well beyond the PW(0.5)
+    // bound of 10 — we're just asserting PW isn't being applied.
+    CHECK(engine.last_stats().root_children > 10);
+}
+
+TEST(mcts_pw_still_picks_attack_vs_idle) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 256;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xABCD;
+    cfg.pw_alpha       = 0.5f;
+    mcts::Mcts engine(cfg);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_rollout_policy(std::make_shared<mcts::AggressiveRollout>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    auto a = engine.search(s->world, s->hero);
+    CHECK(a.attack_slot >= 0);
+    CHECK(engine.last_stats().best_mean > 0.0f);
+}
+
+TEST(mcts_pw_is_deterministic_under_seed) {
+    auto s1 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    auto s2 = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations     = 128;
+    cfg.rollout_horizon = 6;
+    cfg.action_repeat  = 2;
+    cfg.seed           = 0xCAFE;
+    cfg.pw_alpha       = 0.5f;
+    auto run = [&](McstScene& s) {
+        mcts::Mcts e(cfg);
+        e.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+        e.set_rollout_policy(std::make_shared<mcts::RandomRollout>());
+        e.set_opponent_policy(mcts::policy_idle);
+        return e.search(s.world, s.hero);
+    };
+    auto a1 = run(*s1);
+    auto a2 = run(*s2);
+    CHECK(a1 == a2);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
