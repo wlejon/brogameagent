@@ -307,4 +307,45 @@ private:
     SearchStats                     stats_{};
 };
 
+
+// ─── Root-parallel search ──────────────────────────────────────────────────
+//
+// Run N independent MCTS trees in N threads, then merge root visit counts
+// across trees to pick the final action. The caller owns N Worlds, each
+// pre-seeded to the same game state; each thread gets one World to mutate
+// during its search (snapshot/restore internally). Per-thread engines get
+// seed = cfg.seed + thread_idx so their rollouts diverge.
+//
+// Unlike sequential "parallel" MCTS (which is just more iterations on one
+// tree), this gives real speedup on multi-core machines at the cost of
+// some noise in the merged distribution vs. one huge tree.
+
+struct ParallelSearchStats {
+    int  num_threads    = 0;
+    int  total_iterations = 0;
+    int  elapsed_ms     = 0;
+    int  merged_best_visits = 0;
+};
+
+/// Single-player root-parallel search. Each thread's opponent is driven by
+/// `opponent_policy`. Each world must have an agent with id == hero_id.
+CombatAction root_parallel_search(
+    const std::vector<World*>& worlds,
+    int hero_id,
+    const MctsConfig& cfg,
+    std::shared_ptr<IEvaluator>     evaluator,
+    std::shared_ptr<IRolloutPolicy> rollout_policy,
+    OpponentPolicy                  opponent_policy,
+    ParallelSearchStats*            out_stats = nullptr);
+
+/// Decoupled root-parallel search. Each world must contain both hero_id and
+/// opp_id; the returned joint merges each player's per-root visit counts.
+DecoupledMcts::Joint root_parallel_search_decoupled(
+    const std::vector<World*>& worlds,
+    int hero_id, int opp_id,
+    const MctsConfig& cfg,
+    std::shared_ptr<IEvaluator>     evaluator,
+    std::shared_ptr<IRolloutPolicy> rollout_policy,
+    ParallelSearchStats*            out_stats = nullptr);
+
 } // namespace brogameagent::mcts

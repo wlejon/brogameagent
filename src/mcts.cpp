@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <map>
+#include <thread>
 
 namespace brogameagent::mcts {
 
@@ -653,6 +655,174 @@ void Mcts::advance_root(const CombatAction& committed) {
         // drop the tree and let the next search build fresh.
         root_.reset();
     }
+}
+
+// ─── Root-parallel search ──────────────────────────────────────────────────
+
+namespace {
+
+// Deterministic ordering key for CombatAction so merged maps are iteration-
+// order independent.
+struct CombatActionKey {
+    int move_dir;
+    int attack_slot;
+    int ability_slot;
+    bool operator<(const CombatActionKey& o) const {
+        if (move_dir    != o.move_dir)    return move_dir    < o.move_dir;
+        if (attack_slot != o.attack_slot) return attack_slot < o.attack_slot;
+        return ability_slot < o.ability_slot;
+    }
+    static CombatActionKey from(const CombatAction& a) {
+        return { static_cast<int>(a.move_dir), a.attack_slot, a.ability_slot };
+    }
+    CombatAction to() const {
+        CombatAction a;
+        a.move_dir    = static_cast<MoveDir>(move_dir);
+        a.attack_slot = static_cast<int8_t>(attack_slot);
+        a.ability_slot = static_cast<int8_t>(ability_slot);
+        return a;
+    }
+};
+
+} // namespace
+
+CombatAction root_parallel_search(
+    const std::vector<World*>& worlds,
+    int hero_id,
+    const MctsConfig& cfg,
+    std::shared_ptr<IEvaluator>     evaluator,
+    std::shared_ptr<IRolloutPolicy> rollout_policy,
+    OpponentPolicy                  opponent_policy,
+    ParallelSearchStats*            out_stats)
+{
+    using clock = std::chrono::steady_clock;
+    const auto t_start = clock::now();
+
+    const int N = static_cast<int>(worlds.size());
+    if (N == 0) return {};
+
+    std::vector<Mcts>        engines(N);
+    std::vector<std::thread> threads;
+    threads.reserve(N);
+
+    for (int i = 0; i < N; i++) {
+        MctsConfig thread_cfg = cfg;
+        thread_cfg.seed = cfg.seed + static_cast<uint64_t>(i) * 1000003ull;
+        engines[i].set_config(thread_cfg);
+        engines[i].set_evaluator(evaluator);
+        engines[i].set_rollout_policy(rollout_policy);
+        engines[i].set_opponent_policy(opponent_policy);
+    }
+
+    for (int i = 0; i < N; i++) {
+        threads.emplace_back([&, i]() {
+            Agent* hero = worlds[i]->findById(hero_id);
+            if (!hero) return;
+            engines[i].search(*worlds[i], *hero);
+        });
+    }
+    for (auto& t : threads) t.join();
+
+    // Merge: sum root-child visits across all trees.
+    std::map<CombatActionKey, int> merged;
+    int total_iters = 0;
+    for (int i = 0; i < N; i++) {
+        const Node* root = engines[i].last_root();
+        total_iters += engines[i].last_stats().iterations;
+        if (!root) continue;
+        for (const auto& child : root->children) {
+            merged[CombatActionKey::from(child->action)] += child->visits;
+        }
+    }
+
+    CombatAction best{};
+    int best_visits = -1;
+    for (const auto& [k, v] : merged) {
+        if (v > best_visits) { best_visits = v; best = k.to(); }
+    }
+
+    const auto t_end = clock::now();
+    if (out_stats) {
+        out_stats->num_threads      = N;
+        out_stats->total_iterations = total_iters;
+        out_stats->elapsed_ms       = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count());
+        out_stats->merged_best_visits = best_visits > 0 ? best_visits : 0;
+    }
+    return best;
+}
+
+DecoupledMcts::Joint root_parallel_search_decoupled(
+    const std::vector<World*>& worlds,
+    int hero_id, int opp_id,
+    const MctsConfig& cfg,
+    std::shared_ptr<IEvaluator>     evaluator,
+    std::shared_ptr<IRolloutPolicy> rollout_policy,
+    ParallelSearchStats*            out_stats)
+{
+    using clock = std::chrono::steady_clock;
+    const auto t_start = clock::now();
+
+    const int N = static_cast<int>(worlds.size());
+    if (N == 0) return {};
+
+    std::vector<DecoupledMcts> engines(N);
+    std::vector<std::thread>   threads;
+    threads.reserve(N);
+
+    for (int i = 0; i < N; i++) {
+        MctsConfig thread_cfg = cfg;
+        thread_cfg.seed = cfg.seed + static_cast<uint64_t>(i) * 1000003ull;
+        engines[i].set_config(thread_cfg);
+        engines[i].set_evaluator(evaluator);
+        engines[i].set_rollout_policy(rollout_policy);
+    }
+
+    for (int i = 0; i < N; i++) {
+        threads.emplace_back([&, i]() {
+            Agent* hero = worlds[i]->findById(hero_id);
+            Agent* opp  = worlds[i]->findById(opp_id);
+            if (!hero || !opp) return;
+            engines[i].search(*worlds[i], *hero, *opp);
+        });
+    }
+    for (auto& t : threads) t.join();
+
+    std::map<CombatActionKey, int> hero_merged;
+    std::map<CombatActionKey, int> opp_merged;
+    int total_iters = 0;
+    for (int i = 0; i < N; i++) {
+        const auto* root = engines[i].last_root();
+        total_iters += engines[i].last_stats().iterations;
+        if (!root) continue;
+        for (size_t a = 0; a < root->hero_stats.actions.size(); a++) {
+            hero_merged[CombatActionKey::from(root->hero_stats.actions[a])]
+                += root->hero_stats.visits[a];
+        }
+        for (size_t a = 0; a < root->opp_stats.actions.size(); a++) {
+            opp_merged[CombatActionKey::from(root->opp_stats.actions[a])]
+                += root->opp_stats.visits[a];
+        }
+    }
+
+    DecoupledMcts::Joint out{};
+    int best_h = -1, best_o = -1;
+    for (const auto& [k, v] : hero_merged) {
+        if (v > best_h) { best_h = v; out.hero = k.to(); }
+    }
+    for (const auto& [k, v] : opp_merged) {
+        if (v > best_o) { best_o = v; out.opp = k.to(); }
+    }
+
+    const auto t_end = clock::now();
+    if (out_stats) {
+        out_stats->num_threads      = N;
+        out_stats->total_iterations = total_iters;
+        out_stats->elapsed_ms       = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count());
+        out_stats->merged_best_visits = best_h > 0 ? best_h : 0;
+    }
+    return out;
 }
 
 } // namespace brogameagent::mcts

@@ -2357,6 +2357,78 @@ TEST(dmcts_search_grows_joint_tree) {
     CHECK(engine.last_stats().root_children > 0);
 }
 
+// ─── Root-parallel MCTS ────────────────────────────────────────────────────
+
+TEST(mcts_parallel_returns_valid_action) {
+    // Three cloned scenes, same starting state, searched in parallel.
+    constexpr int N = 3;
+    std::vector<std::unique_ptr<McstScene>> scenes;
+    std::vector<World*> worlds;
+    for (int i = 0; i < N; i++) {
+        scenes.emplace_back(make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f));
+        worlds.push_back(&scenes.back()->world);
+    }
+
+    mcts::MctsConfig cfg;
+    cfg.iterations      = 400;
+    cfg.rollout_horizon = 16;
+    cfg.action_repeat   = 4;
+    cfg.seed            = 0x1234;
+
+    mcts::ParallelSearchStats pstats;
+    auto picked = mcts::root_parallel_search(
+        worlds, /*hero_id*/ 1, cfg,
+        std::make_shared<mcts::HpDeltaEvaluator>(),
+        std::make_shared<mcts::RandomRollout>(),
+        mcts::policy_idle,
+        &pstats);
+
+    CHECK(pstats.num_threads == N);
+    CHECK(pstats.total_iterations == N * cfg.iterations);   // no time cap → exact
+    CHECK(pstats.merged_best_visits > 0);
+
+    // With hero in range + idle opp, attack should dominate merged visits.
+    CHECK(picked.attack_slot == 0);
+
+    // None of the worlds should have been mutated by the parallel search.
+    for (auto& sc : scenes) {
+        CHECK_NEAR(sc->hero.unit().hp, 100.0f, 1e-4f);
+        CHECK_NEAR(sc->enemy.unit().hp, 50.0f, 1e-4f);
+    }
+}
+
+TEST(dmcts_parallel_returns_joint) {
+    constexpr int N = 2;
+    std::vector<std::unique_ptr<McstScene>> scenes;
+    std::vector<World*> worlds;
+    for (int i = 0; i < N; i++) {
+        scenes.emplace_back(make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f));
+        worlds.push_back(&scenes.back()->world);
+    }
+
+    mcts::MctsConfig cfg;
+    cfg.iterations      = 200;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat   = 2;
+    cfg.seed            = 0x5678;
+
+    mcts::ParallelSearchStats pstats;
+    auto joint = mcts::root_parallel_search_decoupled(
+        worlds, /*hero_id*/ 1, /*opp_id*/ 2, cfg,
+        std::make_shared<mcts::HpDeltaEvaluator>(),
+        std::make_shared<mcts::RandomRollout>(),
+        &pstats);
+
+    CHECK(pstats.num_threads == N);
+    CHECK(pstats.merged_best_visits > 0);
+    (void)joint;
+
+    for (auto& sc : scenes) {
+        CHECK_NEAR(sc->hero.unit().hp, 100.0f, 1e-4f);
+        CHECK_NEAR(sc->enemy.unit().hp, 50.0f, 1e-4f);
+    }
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
