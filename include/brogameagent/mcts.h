@@ -141,8 +141,11 @@ struct Node {
 // ─── Engine ────────────────────────────────────────────────────────────────
 
 struct MctsConfig {
-    int   iterations = 1000;          // fixed budget; wall-time budget comes in M2
-    int   rollout_horizon = 32;       // cap per rollout (sim ticks)
+    int   iterations = 1000;          // hard cap on iterations (0 = unlimited)
+    int   budget_ms  = 0;             // wall-time cap in ms (0 = unlimited).
+                                      // Search exits when either cap fires.
+                                      // At least one of the two must be > 0.
+    int   rollout_horizon = 32;       // cap per rollout (decision windows)
     float sim_dt = 0.016f;            // one sim tick = 16 ms
     int   action_repeat = 4;          // sim ticks per MCTS decision
     float uct_c = 1.41421356f;        // √2 — exploration constant
@@ -155,6 +158,8 @@ struct SearchStats {
     int   tree_size = 0;
     float best_mean = 0.0f;
     int   best_visits = 0;
+    int   elapsed_ms = 0;
+    bool  reused_root = false;        // true if tree from prior search was kept
 };
 
 class Mcts {
@@ -173,7 +178,21 @@ public:
     /// clones world state via snapshot/restore internally; the caller's world
     /// is not mutated. Returns the action with the highest visit count at
     /// the root (most robust under UCT).
+    ///
+    /// If a tree from a prior search remains (see advance_root), search
+    /// resumes using it — budgets stack across consecutive decisions when
+    /// the committed action is tracked via advance_root.
     CombatAction search(World& world, Agent& hero);
+
+    /// After the caller commits an action in the real game, call this to
+    /// promote the matching child subtree to the new root. On next search()
+    /// the statistics accumulated in that subtree are reused. If no matching
+    /// child exists (e.g. budget was too low to expand it), the tree is
+    /// discarded and the next search starts fresh.
+    void advance_root(const CombatAction& committed);
+
+    /// Drop the search tree. Next search() starts from scratch.
+    void reset_tree() { root_.reset(); }
 
     /// Stats from the most recent search() call. Cleared on next search.
     const SearchStats& last_stats() const { return stats_; }

@@ -3,6 +3,7 @@
 #include "brogameagent/action_mask.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 
@@ -365,17 +366,42 @@ void Mcts::backprop_(Node* node, float value) {
 }
 
 CombatAction Mcts::search(World& world, Agent& hero) {
+    using clock = std::chrono::steady_clock;
+    const auto t_start = clock::now();
+
     // Save caller's state so search is side-effect free on the live world.
     WorldSnapshot saved = world.snapshot();
 
-    root_ = std::make_unique<Node>();
-    root_->untried = legal_actions(hero, world);
+    bool reused = false;
+    if (root_) {
+        reused = true;
+        // When resuming, we trust the prior tree's legal-action list. The
+        // caller is responsible for calling reset_tree() if the world has
+        // changed beyond what advance_root can track.
+    } else {
+        root_ = std::make_unique<Node>();
+        root_->untried = legal_actions(hero, world);
+    }
 
-    for (int it = 0; it < cfg_.iterations; it++) {
+    const int  iter_cap = cfg_.iterations > 0 ? cfg_.iterations
+                                              : std::numeric_limits<int>::max();
+    const bool time_cap = cfg_.budget_ms > 0;
+
+    int it = 0;
+    for (; it < iter_cap; it++) {
+        if (time_cap) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                clock::now() - t_start).count();
+            if (elapsed >= cfg_.budget_ms) break;
+        }
+
         world.restore(saved);
         // Per-iteration seed so rollouts diverge while staying reproducible
-        // under a fixed cfg_.seed.
-        world.seed(cfg_.seed + static_cast<uint64_t>(it));
+        // under a fixed cfg_.seed. Offset by prior root visits so resumed
+        // searches don't re-run identical rollouts from iteration 0.
+        world.seed(cfg_.seed
+                   + static_cast<uint64_t>(it)
+                   + static_cast<uint64_t>(root_->visits) * 7919ull);
 
         Node* leaf  = select_(root_.get(), world, hero);
         Node* child = expand_(leaf, world, hero);
@@ -393,13 +419,36 @@ CombatAction Mcts::search(World& world, Agent& hero) {
         if (up->visits > best_visits) { best_visits = up->visits; best = up.get(); }
     }
 
-    stats_.iterations    = cfg_.iterations;
+    const auto t_end = clock::now();
+    stats_.iterations    = it;
     stats_.root_children = static_cast<int>(root_->children.size());
     stats_.tree_size     = count_tree(root_.get());
     stats_.best_mean     = best ? best->mean() : 0.0f;
     stats_.best_visits   = best ? best->visits : 0;
+    stats_.elapsed_ms    = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count());
+    stats_.reused_root   = reused;
 
     return best ? best->action : CombatAction{};
+}
+
+void Mcts::advance_root(const CombatAction& committed) {
+    if (!root_) return;
+    std::unique_ptr<Node> promoted;
+    for (auto& up : root_->children) {
+        if (up->action == committed) {
+            promoted = std::move(up);
+            break;
+        }
+    }
+    if (promoted) {
+        promoted->parent = nullptr;
+        root_ = std::move(promoted);
+    } else {
+        // Committed action wasn't explored deeply enough to have a child —
+        // drop the tree and let the next search build fresh.
+        root_.reset();
+    }
 }
 
 } // namespace brogameagent::mcts
