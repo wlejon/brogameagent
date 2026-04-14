@@ -33,7 +33,9 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-Produces the static lib, tests, `replay_query.exe`, and `mcts_bench.exe`.
+Produces the static lib, tests, `replay_query.exe`, `mcts_bench.exe`, and
+the examples under `examples/` (see `examples/README.md` for the guided
+tour from "hello world" to layered multi-agent search).
 
 ### Running tests
 
