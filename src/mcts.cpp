@@ -158,6 +158,14 @@ void apply(Agent& agent, World& world, const CombatAction& action, float dt) {
         }
     }
 
+    // Lock movement-facing to the aim direction so that MoveDir::N (local
+    // -Z, "forward") means "toward the aim target." Without this, yaw_ is
+    // whatever the velocity-direction integrator left it at, and a fixed
+    // MoveDir like E causes yaw_ to cycle (E→S→W→N), tracing a circle
+    // instead of a straight strafe. Resetting yaw_ at the start of every
+    // decision keeps the policy's frame and the integrator's frame aligned.
+    agent.setYaw(aim_yaw);
+
     MoveVec mv = move_vec(action.move_dir);
 
     AgentAction aa;

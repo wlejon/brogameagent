@@ -75,6 +75,13 @@ public:
     /// Movement facing (radians, FPS convention: 0 = -Z).
     float yaw() const { return yaw_; }
 
+    /// Directly set the movement-facing yaw. Normally yaw is updated from
+    /// velocity direction inside the dynamics integrator; use this when an
+    /// external planner (e.g. MCTS) needs to align movement facing with an
+    /// aim target before applying an action, so that "local forward" in the
+    /// action's frame points at the intended aim direction.
+    void setYaw(float yaw) { yaw_ = yaw; }
+
     /// Aim direction — decoupled from movement, set by applyAction or aimAt.
     float aimYaw() const { return aimYaw_; }
     float aimPitch() const { return aimPitch_; }
