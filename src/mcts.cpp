@@ -821,6 +821,47 @@ float TeamHpDeltaEvaluator::evaluate(const World& world, int team_id) const {
 }
 
 
+// ─── TeamAdvantageEvaluator ────────────────────────────────────────────────
+//
+// Blends HP delta with an alive-count delta so kills dominate scratches.
+// Weighted 0.6 alive + 0.4 HP by default — a kill is worth ~(0.6/N_team + small
+// HP swing), while a balanced HP trade with no deaths is near 0. This breaks
+// the "Retreat scores 0 because nobody takes damage" degenerate case that
+// pure HP-delta suffers from at short horizons, while leaving terminal wins
+// and losses pegged at ±1.
+
+float TeamAdvantageEvaluator::evaluate(const World& world, int team_id) const {
+    int team_n = 0, team_alive = 0;
+    int enemy_n = 0, enemy_alive = 0;
+    float team_hp = 0.0f, enemy_hp = 0.0f;
+    for (Agent* a : world.agents()) {
+        bool alive = a->unit().alive();
+        float frac = alive ? a->unit().hp / std::max(1e-6f, a->unit().maxHp) : 0.0f;
+        if (a->unit().teamId == team_id) {
+            team_n++;
+            if (alive) team_alive++;
+            team_hp += frac;
+        } else {
+            enemy_n++;
+            if (alive) enemy_alive++;
+            enemy_hp += frac;
+        }
+    }
+    if (team_alive == 0)  return -1.0f;
+    if (enemy_alive == 0) return  1.0f;
+
+    float alive_delta = (team_n  > 0 ? static_cast<float>(team_alive)  / team_n  : 0.0f)
+                      - (enemy_n > 0 ? static_cast<float>(enemy_alive) / enemy_n : 0.0f);
+    float hp_delta    = (team_n  > 0 ? team_hp  / team_n  : 0.0f)
+                      - (enemy_n > 0 ? enemy_hp / enemy_n : 0.0f);
+
+    float score = 0.6f * alive_delta + 0.4f * hp_delta;
+    if (score < -1.0f) score = -1.0f;
+    if (score >  1.0f) score =  1.0f;
+    return score;
+}
+
+
 // ─── TeamMcts ──────────────────────────────────────────────────────────────
 
 TeamMcts::PlayerStats TeamMcts::build_stats_(const Agent& self, const World& world) const {

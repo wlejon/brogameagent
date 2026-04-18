@@ -120,6 +120,15 @@ public:
     float evaluate(const World& world, int team_id) const override;
 };
 
+/// Blends alive-count delta (0.6 weight) with HP delta (0.4 weight). A kill
+/// swings the score ~0.6/N more than a heal/damage trade — so the planner
+/// prefers decisive engagements over HP-preserving stalls like Retreat.
+/// Terminal wipes still peg to ±1.
+class TeamAdvantageEvaluator : public ITeamEvaluator {
+public:
+    float evaluate(const World& world, int team_id) const override;
+};
+
 
 // ─── Rollout policy ────────────────────────────────────────────────────────
 //
