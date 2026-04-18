@@ -77,8 +77,38 @@ void Agent::integrate_(float desiredVx, float desiredVz, float dt) {
         }
     }
 
-    x_ += vx_ * dt;
-    z_ += vz_ * dt;
+    // Candidate next position under current velocity.
+    float nx = x_ + vx_ * dt;
+    float nz = z_ + vz_ * dt;
+
+    // Nav-grid aware clamping: axis-wise slide so an agent grazing an
+    // obstacle wall keeps the tangential component instead of stalling.
+    // Also clamps to the grid bounds so policy-driven agents (MCTS, NN)
+    // stay inside the arena without needing external supervision —
+    // matches what the scripted A* path would produce. Shrink by a small
+    // epsilon to keep samples clear of cell boundaries.
+    if (navGrid_) {
+        constexpr float EPS = 1e-3f;
+        float lo_x = navGrid_->minX() + EPS, hi_x = navGrid_->maxX() - EPS;
+        float lo_z = navGrid_->minZ() + EPS, hi_z = navGrid_->maxZ() - EPS;
+        if (nx < lo_x) { nx = lo_x; vx_ = 0.0f; }
+        if (nx > hi_x) { nx = hi_x; vx_ = 0.0f; }
+        if (nz < lo_z) { nz = lo_z; vz_ = 0.0f; }
+        if (nz > hi_z) { nz = hi_z; vz_ = 0.0f; }
+        if (!navGrid_->isWalkable(nx, nz)) {
+            // Try X-only move, then Z-only, then give up (stay put).
+            if (navGrid_->isWalkable(nx, z_)) {
+                nz = z_; vz_ = 0.0f;
+            } else if (navGrid_->isWalkable(x_, nz)) {
+                nx = x_; vx_ = 0.0f;
+            } else {
+                nx = x_; nz = z_; vx_ = 0.0f; vz_ = 0.0f;
+            }
+        }
+    }
+
+    x_ = nx;
+    z_ = nz;
 }
 
 void Agent::update(float dt) {

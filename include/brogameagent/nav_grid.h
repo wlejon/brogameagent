@@ -37,6 +37,14 @@ public:
     int height() const { return height_; }
     float cellSize() const { return cellSize_; }
 
+    // World-space bounds. Used by Agent::integrate_ to clamp continuous-
+    // control motion so policy-driven agents can't walk off the navigable
+    // area (rollouts and the scripted path must both respect the same box).
+    float minX() const { return minX_; }
+    float minZ() const { return minZ_; }
+    float maxX() const { return maxX_; }
+    float maxZ() const { return maxZ_; }
+
 private:
     int toGridX(float worldX) const;
     int toGridZ(float worldZ) const;
