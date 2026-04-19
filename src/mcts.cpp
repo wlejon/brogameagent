@@ -2104,6 +2104,101 @@ void TeamOptionMcts::advance_root(const TeamOption* committed) {
 }
 
 
+// ─── Commander ─────────────────────────────────────────────────────────────
+
+void Commander::reset() {
+    assignments_.clear();
+    hero_states_.clear();
+    windows_left_ = 0;
+}
+
+std::string Commander::committed_option_for_hero(size_t hero_idx) const {
+    if (hero_idx >= hero_states_.size()) return {};
+    const Option* opt = hero_states_[hero_idx].current_option;
+    return opt ? opt->name() : std::string{};
+}
+
+std::vector<CombatAction> Commander::decide(World& world,
+                                              const std::vector<Agent*>& heroes) {
+    std::vector<CombatAction> out(heroes.size());
+    if (heroes.empty() || roles_.empty()) return out;
+
+    // Resize per-hero state to match roster. If the team composition changed,
+    // engines are dropped — they're keyed to a role's option set which may
+    // no longer be valid.
+    if (hero_states_.size() != heroes.size()) {
+        hero_states_.clear();
+        hero_states_.resize(heroes.size());
+        windows_left_ = 0;
+    }
+
+    // Re-assign roles when the window elapses. On re-assignment we reset
+    // each hero's current option — a reassigned hero's previous option may
+    // not belong to their new role's set.
+    const bool need_replan = (windows_left_ <= 0) ||
+                             (assignments_.size() != heroes.size());
+    if (need_replan) {
+        if (assigner_) {
+            assignments_ = assigner_(heroes, world);
+        } else {
+            // Default: round-robin heroes across registered roles.
+            assignments_.assign(heroes.size(), 0);
+            for (size_t i = 0; i < heroes.size(); i++) {
+                assignments_[i] = static_cast<int>(i % roles_.size());
+            }
+        }
+        if (assignments_.size() != heroes.size()) assignments_.resize(heroes.size(), 0);
+
+        // Dropping options on reassign is the common-case behaviour; a hero
+        // moving from "lead" to "support" shouldn't finish their old push.
+        for (auto& hs : hero_states_) {
+            hs.current_option = nullptr;
+            hs.ticks_in_option = 0;
+            hs.engine.reset();
+        }
+        windows_left_ = cfg_.replan_every_windows;
+    }
+
+    for (size_t i = 0; i < heroes.size(); i++) {
+        Agent* h = heroes[i];
+        if (!h || !h->unit().alive()) continue;
+        int r = assignments_[i];
+        if (r < 0 || r >= static_cast<int>(roles_.size())) continue;
+        const Role& role = roles_[r];
+        if (role.options.empty()) continue;
+
+        HeroState& hs = hero_states_[i];
+        if (!hs.engine) {
+            hs.engine = std::make_unique<OptionMcts>(cfg_.role_cfg);
+            hs.engine->set_options(role.options);
+            auto ev = role.evaluator ? role.evaluator : default_eval_;
+            if (ev) hs.engine->set_evaluator(ev);
+            if (opponent_) hs.engine->set_opponent_policy(opponent_);
+        }
+
+        // Pick a new option when none is active or the current one is
+        // terminated. Search is only invoked here — steady-state stepping
+        // just calls option.step() which is cheap.
+        if (!hs.current_option ||
+            hs.current_option->should_terminate(*h, world, hs.ticks_in_option) ||
+            hs.ticks_in_option >= cfg_.role_cfg.option_max_windows) {
+            const Option* picked = hs.engine->search(world, *h);
+            hs.current_option = picked;
+            hs.ticks_in_option = 0;
+            hs.engine->advance_root(picked);
+        }
+
+        if (hs.current_option) {
+            out[i] = hs.current_option->step(*h, world, hs.ticks_in_option);
+            hs.ticks_in_option++;
+        }
+    }
+
+    windows_left_--;
+    return out;
+}
+
+
 // ─── Root-parallel search ──────────────────────────────────────────────────
 
 namespace {

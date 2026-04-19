@@ -3027,6 +3027,104 @@ TEST(team_option_mcts_is_deterministic_under_seed) {
 }
 
 
+// ─── Commander ─────────────────────────────────────────────────────────────
+
+TEST(commander_assigns_roles_and_produces_actions) {
+    auto s = make_team_scene(2, 2);
+    mcts::Commander::Config cfg;
+    cfg.role_cfg.iterations = 30;
+    cfg.role_cfg.rollout_horizon = 2;
+    cfg.role_cfg.option_max_windows = 2;
+    cfg.replan_every_windows = 2;
+    mcts::Commander cmdr(cfg);
+
+    // Role A: hold. Role B: attack. Default round-robin assignment → hero 0
+    // gets role 0 (hold), hero 1 gets role 1 (attack).
+    std::vector<std::shared_ptr<mcts::Option>> hold_opts = { std::make_shared<HoldOpt>(2) };
+    std::vector<std::shared_ptr<mcts::Option>> atk_opts  = {
+        std::make_shared<HoldOpt>(2), std::make_shared<AttackOpt>(2) };
+    cmdr.add_role("hold",   hold_opts);
+    cmdr.add_role("attack", atk_opts);
+    cmdr.set_default_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    cmdr.set_opponent_policy(mcts::policy_idle);
+
+    auto acts = cmdr.decide(s->world, raw(s->heroes));
+    CHECK(acts.size() == 2);
+    CHECK(cmdr.current_assignments().size() == 2);
+    CHECK(cmdr.current_assignments()[0] == 0);
+    CHECK(cmdr.current_assignments()[1] == 1);
+    CHECK(cmdr.committed_option_for_hero(0) == "hold");
+    // Hero 1 committed either "hold" or "attack" from role 1's set.
+    std::string h1_opt = cmdr.committed_option_for_hero(1);
+    CHECK(h1_opt == "hold" || h1_opt == "attack");
+}
+
+TEST(commander_custom_assigner_is_honored) {
+    auto s = make_team_scene(3, 2);
+    mcts::Commander::Config cfg;
+    cfg.role_cfg.iterations = 20;
+    cfg.role_cfg.option_max_windows = 2;
+    mcts::Commander cmdr(cfg);
+
+    std::vector<std::shared_ptr<mcts::Option>> opts = { std::make_shared<HoldOpt>(1) };
+    cmdr.add_role("alpha", opts);
+    cmdr.add_role("beta",  opts);
+    cmdr.set_default_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    cmdr.set_opponent_policy(mcts::policy_idle);
+
+    // All heroes on role "beta" (index 1).
+    cmdr.set_assigner([](const std::vector<Agent*>& h, const World&) {
+        return std::vector<int>(h.size(), 1);
+    });
+    cmdr.decide(s->world, raw(s->heroes));
+    for (int a : cmdr.current_assignments()) CHECK(a == 1);
+}
+
+TEST(commander_replan_window_countdown_works) {
+    auto s = make_team_scene(2, 2);
+    mcts::Commander::Config cfg;
+    cfg.role_cfg.iterations = 10;
+    cfg.role_cfg.option_max_windows = 1;
+    cfg.replan_every_windows = 3;
+    mcts::Commander cmdr(cfg);
+    std::vector<std::shared_ptr<mcts::Option>> opts = { std::make_shared<HoldOpt>(1) };
+    cmdr.add_role("only", opts);
+    cmdr.set_default_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    cmdr.set_opponent_policy(mcts::policy_idle);
+
+    cmdr.decide(s->world, raw(s->heroes));
+    int w1 = cmdr.windows_until_replan();
+    cmdr.decide(s->world, raw(s->heroes));
+    int w2 = cmdr.windows_until_replan();
+    cmdr.decide(s->world, raw(s->heroes));
+    int w3 = cmdr.windows_until_replan();
+    CHECK(w1 > w2);
+    CHECK(w2 > w3);
+}
+
+TEST(commander_dead_hero_skipped) {
+    auto s = make_team_scene(2, 2);
+    s->heroes[0]->unit().hp = 0.0f;    // kill hero 0
+    mcts::Commander::Config cfg;
+    cfg.role_cfg.iterations = 10;
+    cfg.role_cfg.option_max_windows = 1;
+    mcts::Commander cmdr(cfg);
+    std::vector<std::shared_ptr<mcts::Option>> opts = { std::make_shared<HoldOpt>(1) };
+    cmdr.add_role("only", opts);
+    cmdr.set_default_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    cmdr.set_opponent_policy(mcts::policy_idle);
+
+    auto acts = cmdr.decide(s->world, raw(s->heroes));
+    // Dead hero gets default-constructed (no-op) action — move_dir Hold,
+    // no attack, no ability. We can't probe "committed option" since there
+    // isn't one, so just assert the default shape.
+    CHECK(acts[0].move_dir == mcts::MoveDir::Hold);
+    CHECK(acts[0].attack_slot == -1);
+    CHECK(acts[0].ability_slot == -1);
+    CHECK(cmdr.committed_option_for_hero(0) == "");
+}
+
+
 TEST(aggressive_rollout_returns_legal_action) {
     auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
     mcts::AggressiveRollout rollout;

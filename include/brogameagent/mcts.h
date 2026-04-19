@@ -971,6 +971,116 @@ private:
 };
 
 
+// ─── Commander (role-based hierarchical planner) ──────────────────────────
+//
+// Assigns each hero to one of N named roles, then runs a per-hero OptionMcts
+// using that role's option set and evaluator. Role assignment runs at a
+// coarser cadence than per-hero execution: re-assigned every
+// `replan_every_windows` decide() calls, or immediately when the team
+// composition changes.
+//
+// Why this shape, not TeamMcts? Joint team search over N heroes × M actions
+// has N^M branching — combinatorial collapse at realtime budgets. Commander
+// decomposes: a cheap role-assignment step at low frequency picks who is
+// doing what job, then per-hero single-agent search plans *within* a role's
+// smaller option space. Each hero only reasons about its own objectives
+// and its own option set; coordination comes from role specialization, not
+// joint search.
+//
+// Typical roles for a MOBA/shooter team:
+//   - "lead"    : aggressive options — push, commit, peek-shoot
+//   - "flank"   : flanking/reposition options
+//   - "support" : follow-ally, heal, retreat-to-cover
+// A Role can also specialise its evaluator so e.g. a support's value
+// function weights ally HP, not damage dealt.
+//
+// Options inside a role commit for their natural lifetime (governed by
+// should_terminate + option_max_windows). Commander only invokes search
+// when a hero's current option terminates, not every frame — cheap at
+// runtime even with a heavy MCTS budget.
+
+class Commander {
+public:
+    struct Role {
+        std::string name;
+        std::vector<std::shared_ptr<Option>> options;   // option set for this role
+        std::shared_ptr<IEvaluator> evaluator;          // optional; falls back to default_evaluator
+    };
+
+    struct Config {
+        MctsConfig role_cfg{};
+        int replan_every_windows = 4;   // decide() calls between role re-assignments
+    };
+
+    /// Caller-supplied role-assignment function. Returns a vector of role
+    /// indices (same length as heroes). Index -1 leaves the hero idle this
+    /// period. If null, Commander round-robins heroes across roles.
+    using AssignFn = std::function<std::vector<int>(
+        const std::vector<Agent*>& heroes, const World& world)>;
+
+    Commander() = default;
+    explicit Commander(Config cfg) : cfg_(cfg) {}
+
+    void set_config(const Config& cfg) { cfg_ = cfg; }
+    const Config& config() const { return cfg_; }
+
+    /// Register a role. Order matters — the assignment function returns
+    /// indices into this registered list.
+    void add_role(std::string name,
+                   std::vector<std::shared_ptr<Option>> options,
+                   std::shared_ptr<IEvaluator> evaluator = nullptr) {
+        Role r;
+        r.name = std::move(name);
+        r.options = std::move(options);
+        r.evaluator = std::move(evaluator);
+        roles_.push_back(std::move(r));
+        reset();
+    }
+    const std::vector<Role>& roles() const { return roles_; }
+
+    void set_assigner(AssignFn fn)                              { assigner_ = std::move(fn); reset(); }
+    void set_opponent_policy(OpponentPolicy p)                   { opponent_ = std::move(p); }
+    void set_default_evaluator(std::shared_ptr<IEvaluator> ev)   { default_eval_ = std::move(ev); }
+
+    /// Forget per-hero option state and engines. The next decide() call
+    /// will re-assign roles and re-search options for everyone.
+    void reset();
+
+    /// Per-hero actions for the current frame. Returns heroes.size() actions
+    /// (dead or role=-1 heroes get a no-op). decide() only runs a per-hero
+    /// OptionMcts::search when that hero's current option has terminated or
+    /// their role reassignment reset it — cheap in the common case.
+    std::vector<CombatAction> decide(World& world, const std::vector<Agent*>& heroes);
+
+    /// Current role-index assignment. Index i corresponds to heroes[i] at
+    /// the last decide() call. Empty before first decide().
+    const std::vector<int>& current_assignments() const { return assignments_; }
+
+    /// Name of the option currently committed by the given hero (or empty
+    /// string if none). Useful for debug overlays.
+    std::string committed_option_for_hero(size_t hero_idx) const;
+
+    int windows_until_replan() const { return windows_left_; }
+
+private:
+    struct HeroState {
+        const Option* current_option = nullptr;
+        int           ticks_in_option = 0;
+        std::unique_ptr<OptionMcts> engine;
+    };
+
+    Config                            cfg_{};
+    std::vector<Role>                 roles_;
+    AssignFn                          assigner_;
+    OpponentPolicy                    opponent_;
+    std::shared_ptr<IEvaluator>       default_eval_;
+
+    std::vector<int>                  assignments_;
+    std::vector<HeroState>            hero_states_;
+    int                               windows_left_ = 0;
+};
+
+
 // ─── Root-parallel search ──────────────────────────────────────────────────
 //
 // Run N independent MCTS trees in N threads, then merge root visit counts
