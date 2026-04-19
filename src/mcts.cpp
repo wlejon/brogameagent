@@ -18,7 +18,7 @@ namespace {
 struct MoveVec { float x; float z; };
 constexpr float S = 0.70710678f;  // sin(45°) = cos(45°)
 
-constexpr MoveVec MOVE_VECS[static_cast<int>(MoveDir::COUNT)] = {
+constexpr MoveVec MOVE_VECS[9] = {
     /*Hold*/ { 0,  0},
     /*N   */ { 0, -1},
     /*NE  */ { S, -S},
@@ -30,10 +30,17 @@ constexpr MoveVec MOVE_VECS[static_cast<int>(MoveDir::COUNT)] = {
     /*NW  */ {-S, -S},
 };
 
+// Returns the agent-local stick vector for a direct-steering MoveDir.
+// Pathfinding MoveDirs return {0,0} — apply() dispatches those via setTarget
+// before the moveX/moveZ path is taken.
 MoveVec move_vec(MoveDir d) {
     int i = static_cast<int>(d);
-    if (i < 0 || i >= static_cast<int>(MoveDir::COUNT)) return {0, 0};
+    if (i < 0 || i >= 9) return {0, 0};
     return MOVE_VECS[i];
+}
+
+bool is_path_dir(MoveDir d) {
+    return d == MoveDir::PathToTarget || d == MoveDir::PathAway;
 }
 
 bool is_enemy_of(const Agent& a, const Agent& b) {
@@ -166,16 +173,52 @@ void apply(Agent& agent, World& world, const CombatAction& action, float dt) {
     // decision keeps the policy's frame and the integrator's frame aligned.
     agent.setYaw(aim_yaw);
 
-    MoveVec mv = move_vec(action.move_dir);
-
-    AgentAction aa;
-    aa.moveX = mv.x;
-    aa.moveZ = mv.z;
-    aa.aimYaw = aim_yaw;
-    aa.aimPitch = 0.0f;
-    aa.attackTargetId = -1;      // resolved separately so ability targeting
-    aa.useAbilityId   = -1;      // is independent of attack routing
-    agent.applyAction(aa, dt);
+    if (is_path_dir(action.move_dir)) {
+        // Pathfinding-aware motion. Target an aim/flee reference ~4 units
+        // away; Agent::setTarget runs A* through the nav grid on significant
+        // target changes and Agent::update steers along the current path.
+        // The 4u lead matches the open-arena decision window (agent speed
+        // ~5u/s × ~0.75s before a new plan overrides).
+        int ref_id = attack_target_id;
+        if (ref_id < 0) {
+            if (Agent* near = find_nearest_enemy(agent, world); near) {
+                ref_id = near->unit().id;
+            }
+        }
+        bool moved = false;
+        if (ref_id >= 0) {
+            if (Agent* t = world.findById(ref_id); t) {
+                float dx = t->x() - agent.x();
+                float dz = t->z() - agent.z();
+                float d  = std::sqrt(dx*dx + dz*dz);
+                float sign = (action.move_dir == MoveDir::PathAway) ? -1.0f : 1.0f;
+                const float LEAD = 4.0f;
+                if (d > 1e-3f) {
+                    float wx = agent.x() + sign * (dx / d) * LEAD;
+                    float wz = agent.z() + sign * (dz / d) * LEAD;
+                    agent.setTarget(wx, wz);
+                    agent.update(dt);
+                    moved = true;
+                }
+            }
+        }
+        // Agent::update() doesn't tick cooldowns (unlike applyAction), so
+        // we mirror that side effect here regardless of whether motion
+        // actually happened — otherwise attack_slot / ability_slot below
+        // fire on stale cooldowns.
+        agent.unit().tickCooldowns(dt);
+        (void)moved;
+    } else {
+        MoveVec mv = move_vec(action.move_dir);
+        AgentAction aa;
+        aa.moveX = mv.x;
+        aa.moveZ = mv.z;
+        aa.aimYaw = aim_yaw;
+        aa.aimPitch = 0.0f;
+        aa.attackTargetId = -1;      // resolved separately so ability targeting
+        aa.useAbilityId   = -1;      // is independent of attack routing
+        agent.applyAction(aa, dt);
+    }
 
     if (action.attack_slot >= 0 && attack_target_id >= 0) {
         world.resolveAttack(agent, attack_target_id);
@@ -219,6 +262,68 @@ CombatAction policy_aggressive(Agent& self, const World& world) {
                 break;
             }
         }
+    }
+    return a;
+}
+
+CombatAction policy_scripted(Agent& self, const World& world) {
+    CombatAction a;
+    if (!self.unit().alive()) return a;
+    Agent* enemy = find_nearest_enemy(self, world);
+    if (!enemy) return a;
+
+    float mask[action_mask::TOTAL];
+    int   enemy_ids[action_mask::N_ENEMY_SLOTS];
+    action_mask::build(self, world, mask, enemy_ids);
+
+    int nearest_slot = -1;
+    for (int k = 0; k < action_mask::N_ENEMY_SLOTS; k++) {
+        if (enemy_ids[k] == enemy->unit().id) { nearest_slot = k; break; }
+    }
+
+    float dx = enemy->x() - self.x();
+    float dz = enemy->z() - self.z();
+    float d  = std::sqrt(dx * dx + dz * dz);
+    float r  = self.unit().attackRange;
+    float hp_frac = self.unit().hp / std::max(1e-6f, self.unit().maxHp);
+    bool  cd_ready = self.unit().attackCooldown <= 0.0f;
+    bool  in_range = d <= r;
+
+    // Auto-attack when we can — same slot logic as policy_aggressive, but
+    // layered on top of the movement decision below.
+    if (cd_ready && in_range && nearest_slot >= 0 && mask[nearest_slot] > 0.0f) {
+        a.attack_slot = static_cast<int8_t>(nearest_slot);
+    }
+
+    // Pick the highest-impact ready ability that's gated in the mask. Slot
+    // order here mirrors ai-arena's ability layout (heal=0, fireball=1,
+    // beam=2, grenade=3). Prefer offensive casts when we have a target in
+    // range; fall back to heal if wounded.
+    for (int s = 0; s < action_mask::N_ABILITY_SLOTS; s++) {
+        if (mask[action_mask::N_ENEMY_SLOTS + s] <= 0.0f) continue;
+        // Heal ourselves when wounded and no in-range threat exists yet.
+        if (s == 0 && hp_frac < 0.5f) {
+            a.ability_slot = static_cast<int8_t>(s);
+            break;
+        }
+        if (s != 0 && in_range) {
+            a.ability_slot = static_cast<int8_t>(s);
+            break;
+        }
+    }
+
+    // Movement: flee if wounded, kite if too close, path in if too far,
+    // hold if comfortably in-range and firing.
+    if (hp_frac < 0.3f) {
+        a.move_dir = MoveDir::PathAway;
+    } else if (!in_range) {
+        a.move_dir = MoveDir::PathToTarget;
+    } else if (d < r * 0.55f) {
+        // Strafe perpendicular to close enemy. Pick E or W by agent id parity
+        // so opposite flanks emerge naturally instead of everyone mirroring.
+        a.move_dir = (self.unit().id & 1) ? MoveDir::E : MoveDir::W;
+    } else {
+        a.move_dir = a.attack_slot >= 0 ? MoveDir::Hold : MoveDir::PathToTarget;
     }
     return a;
 }
@@ -273,6 +378,11 @@ CombatAction RandomRollout::choose(Agent& self, World& world) const {
 CombatAction AggressiveRollout::choose(Agent& self, World& world) const {
     if (!self.unit().alive()) return {};
     return policy_aggressive(self, world);
+}
+
+CombatAction ScriptedRollout::choose(Agent& self, World& world) const {
+    if (!self.unit().alive()) return {};
+    return policy_scripted(self, world);
 }
 
 // ─── Priors ────────────────────────────────────────────────────────────────
@@ -862,6 +972,70 @@ float TeamAdvantageEvaluator::evaluate(const World& world, int team_id) const {
 }
 
 
+// ─── TeamPositionEvaluator ─────────────────────────────────────────────────
+//
+// Blends the alive + HP deltas of TeamAdvantageEvaluator with a positional
+// term: count the fraction of living heroes that have at least one enemy in
+// their attack range (can fight back this window). Pure HP/kill evaluators
+// score a full-HP team hiding in the corner identically to a full-HP team
+// engaging — which lets the planner drift into dominated-but-safe states at
+// short horizons. The positional bonus fixes that without needing LOS rays.
+
+float TeamPositionEvaluator::evaluate(const World& world, int team_id) const {
+    int   team_n = 0, team_alive = 0;
+    int   enemy_n = 0, enemy_alive = 0;
+    float team_hp = 0.0f, enemy_hp = 0.0f;
+    int   team_in_range = 0, enemy_in_range = 0;
+
+    const auto& all = world.agents();
+    for (Agent* a : all) {
+        bool alive = a->unit().alive();
+        float frac = alive ? a->unit().hp / std::max(1e-6f, a->unit().maxHp) : 0.0f;
+        if (a->unit().teamId == team_id) {
+            team_n++;
+            if (alive) team_alive++;
+            team_hp += frac;
+        } else {
+            enemy_n++;
+            if (alive) enemy_alive++;
+            enemy_hp += frac;
+        }
+    }
+    if (team_alive == 0)  return -1.0f;
+    if (enemy_alive == 0) return  1.0f;
+
+    // Positional pass — quadratic in agent count but tiny at this scale.
+    for (Agent* a : all) {
+        if (!a->unit().alive()) continue;
+        float r2 = a->unit().attackRange * a->unit().attackRange;
+        bool has_in_range = false;
+        for (Agent* b : all) {
+            if (a == b) continue;
+            if (!b->unit().alive()) continue;
+            if (b->unit().teamId == a->unit().teamId) continue;
+            float dx = b->x() - a->x();
+            float dz = b->z() - a->z();
+            if (dx * dx + dz * dz <= r2) { has_in_range = true; break; }
+        }
+        if (!has_in_range) continue;
+        if (a->unit().teamId == team_id) team_in_range++;
+        else                              enemy_in_range++;
+    }
+
+    float alive_delta = (team_n  > 0 ? static_cast<float>(team_alive)  / team_n  : 0.0f)
+                      - (enemy_n > 0 ? static_cast<float>(enemy_alive) / enemy_n : 0.0f);
+    float hp_delta    = (team_n  > 0 ? team_hp  / team_n  : 0.0f)
+                      - (enemy_n > 0 ? enemy_hp / enemy_n : 0.0f);
+    float pos_delta   = (team_alive  > 0 ? static_cast<float>(team_in_range)  / team_alive  : 0.0f)
+                      - (enemy_alive > 0 ? static_cast<float>(enemy_in_range) / enemy_alive : 0.0f);
+
+    float score = 0.5f * alive_delta + 0.3f * hp_delta + 0.2f * pos_delta;
+    if (score < -1.0f) score = -1.0f;
+    if (score >  1.0f) score =  1.0f;
+    return score;
+}
+
+
 // ─── TeamMcts ──────────────────────────────────────────────────────────────
 
 TeamMcts::PlayerStats TeamMcts::build_stats_(const Agent& self, const World& world) const {
@@ -1224,34 +1398,56 @@ CombatAction tactic_to_action(const Tactic& t, const Agent& hero, const World& w
             Agent* target = lowest_hp_enemy(hero, world);
             if (!target) break;
             int slot = enemy_slot_of_id(hero, world, target->unit().id);
+            float mask[action_mask::TOTAL];
+            int   enemy_ids[action_mask::N_ENEMY_SLOTS];
+            action_mask::build(hero, world, mask, enemy_ids);
+            // First-available offensive ability. Slot 0 = heal by convention
+            // (ai-arena scenario); skip it when picking offense.
+            int ability = -1;
+            for (int s = 1; s < action_mask::N_ABILITY_SLOTS; s++) {
+                if (mask[action_mask::N_ENEMY_SLOTS + s] > 0.0f) {
+                    ability = s;
+                    break;
+                }
+            }
             if (slot >= 0) {
                 a.attack_slot = static_cast<int8_t>(slot);
+                a.ability_slot = static_cast<int8_t>(ability);
                 a.move_dir = MoveDir::Hold;   // in range — stop and shoot
             } else {
-                a.move_dir = MoveDir::N;      // out of range — close the gap
-                // Aim handled inside mcts::apply via nearest-enemy fallback;
-                // to be truly robust we'd aim at `target` explicitly. That
-                // requires threading the enemy_id through apply — leaving
-                // that for a future tactic-targeting refactor.
+                a.ability_slot = static_cast<int8_t>(ability);  // cast on the way
+                a.move_dir = MoveDir::PathToTarget;
             }
             break;
         }
         case TacticKind::Scatter: {
-            // Attack nearest in-range (slot 0), close otherwise.
+            // Attack nearest in-range (slot 0), close otherwise. Cast the
+            // first available offensive ability in parallel — abilities
+            // typically have longer range than the auto-attack so they
+            // chip the enemy down while closing.
             float mask[action_mask::TOTAL];
             int   enemy_ids[action_mask::N_ENEMY_SLOTS];
             action_mask::build(hero, world, mask, enemy_ids);
+            int ability = -1;
+            for (int s = 1; s < action_mask::N_ABILITY_SLOTS; s++) {
+                if (mask[action_mask::N_ENEMY_SLOTS + s] > 0.0f) {
+                    ability = s;
+                    break;
+                }
+            }
             if (mask[0] > 0.0f) {
                 a.attack_slot = 0;
+                a.ability_slot = static_cast<int8_t>(ability);
             } else if (enemy_ids[0] >= 0) {
-                a.move_dir = MoveDir::N;
+                a.move_dir = MoveDir::PathToTarget;
+                a.ability_slot = static_cast<int8_t>(ability);
             }
             break;
         }
         case TacticKind::Retreat: {
-            // mcts::apply aims the agent at the nearest enemy, so local -Z
-            // (N) is toward them and +Z (S) is away. No attacks.
-            a.move_dir = MoveDir::S;
+            // Pathfind away from the nearest enemy so we route around
+            // obstacles instead of sliding into a wall.
+            a.move_dir = MoveDir::PathAway;
             break;
         }
         default: break;
@@ -1688,6 +1884,8 @@ TeamMcts::JointAction LayeredPlanner::decide(
     // Bias the fine search toward the committed tactic via TacticPrior.
     if (!prior_) prior_ = std::make_shared<TacticPrior>();
     prior_->set_tactic(committed_tactic_);
+    prior_->set_match_weight(cfg_.tactic_match_weight);
+    prior_->set_other_weight(cfg_.tactic_other_weight);
     fine_mcts_.set_prior(prior_);
 
     fine_mcts_.reset_tree();

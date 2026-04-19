@@ -32,7 +32,13 @@ enum class MoveDir : int8_t {
     SW   = 6,
     W    = 7,
     NW   = 8,
-    COUNT = 9,
+    // Pathfinding-aware kinds. apply() drives motion via Agent::setTarget +
+    // Agent::update (A* through the nav grid, velocity-capped steering) so
+    // the agent routes around obstacles. When the agent has no nav grid
+    // attached, these degenerate to direct steering toward the target.
+    PathToTarget = 9,    // pathfind toward attack target (or nearest enemy)
+    PathAway     = 10,   // pathfind away from nearest enemy (flee)
+    COUNT        = 11,
 };
 
 struct CombatAction {
@@ -78,6 +84,21 @@ CombatAction policy_idle(Agent& self, const World& world);
 /// Aggressive scripted policy: close on nearest enemy and auto-attack when
 /// in range. No abilities. Useful as a punching-bag opponent in tests.
 CombatAction policy_aggressive(Agent& self, const World& world);
+
+/// Scripted policy with kiting, fleeing, and ability use. Designed as a
+/// realistic opponent model for MCTS rollouts when the "real" opponent is a
+/// hand-crafted AI (cover / kite / flee / heal / AoE): better-calibrated
+/// value estimates than policy_aggressive gives, at the cost of ~2x branch
+/// predictor footprint.
+///
+/// Decision logic:
+///   - HP < 30%: PathAway + cast heal if available (self-target).
+///   - In attack range + cooldown ready: attack, move Hold.
+///   - Just inside range (<= 50%): strafe (E/W perpendicular) to kite.
+///   - Else: PathToTarget to close the gap.
+///   - When any offensive ability (grenade/beam/fireball) is off cd + mana
+///     is available + target in range, use it.
+CombatAction policy_scripted(Agent& self, const World& world);
 
 
 // ─── Evaluator ─────────────────────────────────────────────────────────────
@@ -129,6 +150,17 @@ public:
     float evaluate(const World& world, int team_id) const override;
 };
 
+/// Position-aware evaluator: TeamAdvantage plus a bonus for living heroes
+/// who have at least one enemy inside their attack range (can contribute to
+/// damage next window) and a penalty for heroes inside an enemy's range
+/// without a matching target. Designed to reward positions where the team
+/// can actually fight back rather than just "preserve HP." Score stays in
+/// [-1, 1].
+class TeamPositionEvaluator : public ITeamEvaluator {
+public:
+    float evaluate(const World& world, int team_id) const override;
+};
+
 
 // ─── Rollout policy ────────────────────────────────────────────────────────
 //
@@ -155,6 +187,16 @@ public:
 /// RandomRollout under equal iteration budgets, at the cost of bias toward
 /// melee play — prefer it when the caller's heroes are expected to engage.
 class AggressiveRollout : public IRolloutPolicy {
+public:
+    CombatAction choose(Agent& self, World& world) const override;
+};
+
+/// Richer scripted rollout with kite / flee / ability use — wraps
+/// policy_scripted. Pricier per rollout step than AggressiveRollout (more
+/// branches, calls action_mask twice) but produces much better-calibrated
+/// value estimates when the true opponent is itself a hand-crafted AI
+/// rather than a charge-and-swing bot.
+class ScriptedRollout : public IRolloutPolicy {
 public:
     CombatAction choose(Agent& self, World& world) const override;
 };
@@ -647,6 +689,13 @@ public:
     struct Config {
         MctsConfig tactic_cfg{};   // config for the coarse TacticMcts
         MctsConfig fine_cfg{};     // config for the fine TeamMcts
+        // TacticPrior weights used to bias the fine per-hero search toward
+        // the committed tactic's action. Higher match/other ratio → the
+        // fine search barely deviates from tactic_to_action; lower ratio →
+        // the fine search can diverge per-hero. Default 8/1 preserves the
+        // original behavior.
+        float tactic_match_weight = 8.0f;
+        float tactic_other_weight = 1.0f;
     };
 
     struct Stats {

@@ -2067,9 +2067,10 @@ TEST(mcts_legal_actions_includes_move_only_when_no_combat_legal) {
     auto s = make_duel_scene(0, 0, 20, 0);
     auto acts = mcts::legal_actions(s->hero, s->world);
 
-    // Expect 9 move dirs × 1 attack option (-1 only) × 1 ability option (-1)
-    // since enemy is far away and no abilities are registered.
-    CHECK(acts.size() == 9);
+    // 11 move dirs (9 cardinal + PathToTarget + PathAway) × 1 attack option
+    // (-1 only) × 1 ability option (-1) since enemy is far away and no
+    // abilities are registered.
+    CHECK(acts.size() == 11);
     for (const auto& a : acts) {
         CHECK(a.attack_slot == -1);
         CHECK(a.ability_slot == -1);
@@ -2080,8 +2081,8 @@ TEST(mcts_legal_actions_exposes_attack_slot_when_in_range) {
     auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
     auto acts = mcts::legal_actions(s->hero, s->world);
 
-    // 9 moves × (2 attack opts: -1 and slot 0) × 1 ability opt
-    CHECK(acts.size() == 18);
+    // 11 moves × (2 attack opts: -1 and slot 0) × 1 ability opt
+    CHECK(acts.size() == 22);
     bool saw_attack = false;
     for (const auto& a : acts) {
         if (a.attack_slot == 0) saw_attack = true;
@@ -2608,7 +2609,7 @@ TEST(tactic_to_action_retreat_moves_back_no_attack) {
     auto s = make_team_scene(1, 1);
     mcts::Tactic t{ mcts::TacticKind::Retreat };
     auto a = mcts::tactic_to_action(t, *s->heroes[0], s->world);
-    CHECK(a.move_dir == mcts::MoveDir::S);
+    CHECK(a.move_dir == mcts::MoveDir::PathAway);
     CHECK(a.attack_slot == -1);
     CHECK(a.ability_slot == -1);
 }
@@ -2618,7 +2619,7 @@ TEST(tactic_to_action_focus_targets_lowest_hp_enemy) {
     s->enemies[1]->unit().hp = 5.0f;   // make enemy 1 the clear focus
     mcts::Tactic t{ mcts::TacticKind::FocusLowestHp };
     auto a = mcts::tactic_to_action(t, *s->heroes[0], s->world);
-    CHECK(a.attack_slot != -1 || a.move_dir == mcts::MoveDir::N);
+    CHECK(a.attack_slot != -1 || a.move_dir == mcts::MoveDir::PathToTarget);
 }
 
 TEST(tactic_mcts_search_returns_legal_tactic) {
