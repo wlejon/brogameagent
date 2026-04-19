@@ -284,6 +284,22 @@ struct MctsConfig {
     // enough to respond to new threats.
     int   tactic_window_decisions = 4;
 
+    // OptionMcts / TeamOptionMcts only: hard cap on how many decision windows
+    // a committed option runs for in-tree before the search advances to a new
+    // option. Options normally terminate via their own should_terminate()
+    // predicate; this cap is a safety net so a stuck / never-terminating
+    // option doesn't swallow an entire search iteration. 8 windows ≈ 2 s of
+    // game time at default dt/action_repeat, enough for a peek-shoot-retreat
+    // maneuver without starving exploration.
+    int   option_max_windows = 8;
+
+    // When true, leaf evaluation skips the rollout phase entirely and returns
+    // the evaluator's value at the expand site. Use this with a strong value
+    // function (heuristic or learned) — it decouples search depth from
+    // rollout cost. Equivalent behaviour to rollout_horizon=0 but explicit,
+    // and honored by all MCTS variants including TacticMcts / OptionMcts.
+    bool  use_leaf_value = false;
+
     // Progressive widening (Mcts only). When > 0, a node expands a new child
     // only while children.size() < ceil(visits^pw_alpha); otherwise selection
     // descends into the existing children via UCT. Keeps the tree from going
@@ -663,6 +679,217 @@ private:
     Tactic tactic_{};
     float  match_weight_ = 8.0f;
     float  other_weight_ = 1.0f;
+};
+
+
+// ─── Options (temporally-extended actions) ────────────────────────────────
+//
+// An Option is a policy π with an initiation predicate I and a termination
+// predicate β — the standard Sutton/Precup options framework. MCTS over
+// options plans at a variable temporal grain: committing an option advances
+// the world by many ticks in a single tree edge, so the effective search
+// horizon is (tree depth) × (option length) rather than (tree depth) × (one
+// decision window). This is the right tool for maneuvers that take multiple
+// ticks to pay off — "peek and shoot", "retreat to cover", "flank left" —
+// where plain CombatAction-level search wastes its budget on tick-level
+// differences that don't matter.
+//
+// Branching collapses from ~18 (move×attack×ability) per node to the size of
+// the option set (typically 4–8), so priors become optional and iteration
+// budgets can be much smaller. Pair with use_leaf_value + a heuristic
+// evaluator for real-time MOBA/shooter AI.
+//
+// Options are caller-authored: write a subclass, or — from JS — build one
+// with bro.ai.game.createOption({ canInitiate, step, shouldTerminate }).
+
+class Option {
+public:
+    virtual ~Option() = default;
+
+    /// Stable human-readable name. Used as the key in advance_root matching
+    /// and in debug output. Must be unique within an OptionMcts's option set.
+    virtual const std::string& name() const = 0;
+
+    /// True iff this option can be started from the current (self, world)
+    /// state. OptionMcts filters its untried list through this predicate
+    /// every expansion, so it's fine (expected) for can_initiate to depend
+    /// on dynamic state like HP, cooldowns, or visible enemies.
+    virtual bool can_initiate(const Agent& self, const World& world) const = 0;
+
+    /// Produce the CombatAction to apply this tick of option execution.
+    /// `ticks_in_option` starts at 0 when the option is committed and
+    /// increments per decision window (not per sim tick). Options are free
+    /// to read/write ephemeral state on `self` — but see should_terminate()
+    /// for how to signal completion without stateful callers.
+    virtual CombatAction step(Agent& self, World& world, int ticks_in_option) const = 0;
+
+    /// True iff the option should stop running and the next option (or
+    /// rollout step / search level) should take over. Called after each
+    /// window; MCTS also terminates an option unconditionally once
+    /// cfg.option_max_windows is reached.
+    virtual bool should_terminate(const Agent& self, const World& world,
+                                   int ticks_in_option) const = 0;
+};
+
+/// Team-scoped companion to Option. A TeamOption governs all heroes on the
+/// controlled team simultaneously — use this for coordinated plays (focus
+/// fire, formation moves, synchronised retreat) where per-hero options would
+/// diverge. Single-hero Options are the right choice for per-role planning
+/// inside a Commander.
+class TeamOption {
+public:
+    virtual ~TeamOption() = default;
+    virtual const std::string& name() const = 0;
+    virtual bool can_initiate(const std::vector<Agent*>& heroes,
+                              const World& world) const = 0;
+    /// Return exactly heroes.size() actions, in the same order. Dead heroes
+    /// should receive a no-op action; caller does not skip them.
+    virtual std::vector<CombatAction> step(const std::vector<Agent*>& heroes,
+                                            World& world,
+                                            int ticks_in_option) const = 0;
+    virtual bool should_terminate(const std::vector<Agent*>& heroes,
+                                   const World& world,
+                                   int ticks_in_option) const = 0;
+};
+
+
+// ─── OptionMcts (single-hero option search) ────────────────────────────────
+//
+// Tree search over a caller-supplied option set, driving one hero agent.
+// Other agents in the world are driven by OpponentPolicy during in-tree
+// execution and rollouts (same contract as Mcts). Each tree edge represents
+// "commit option X until it terminates or cap" and advances the world by
+// potentially many windows — so depth-3 tree with options that average 4
+// windows gives a 12-window (≈ 3 s) planning horizon for the iteration cost
+// of a 3-deep search.
+
+class OptionMcts {
+public:
+    struct ONode {
+        const Option* action = nullptr;   // option committed at this node's in-edge; null at root
+        ONode*        parent = nullptr;
+        std::vector<std::unique_ptr<ONode>> children;
+        std::vector<const Option*> untried;
+        int   visits = 0;
+        float total_value = 0.0f;
+
+        float mean() const { return visits > 0 ? total_value / static_cast<float>(visits) : 0.0f; }
+        bool  is_leaf() const { return children.empty(); }
+        bool  fully_expanded() const { return untried.empty(); }
+    };
+
+    OptionMcts() = default;
+    explicit OptionMcts(MctsConfig cfg) : cfg_(cfg) {}
+
+    void set_config(const MctsConfig& cfg) { cfg_ = cfg; }
+    const MctsConfig& config() const { return cfg_; }
+
+    /// Register the options available to the search. OptionMcts holds these
+    /// via shared_ptr so rollout / commander / JS wrappers can share the
+    /// same objects. Must be called before search(). Safe to replace between
+    /// searches (resets the tree).
+    void set_options(std::vector<std::shared_ptr<Option>> options) {
+        options_ = std::move(options);
+        root_.reset();
+    }
+    const std::vector<std::shared_ptr<Option>>& options() const { return options_; }
+
+    void set_evaluator(std::shared_ptr<IEvaluator> ev)         { evaluator_ = std::move(ev); }
+    void set_opponent_policy(OpponentPolicy p)                 { opponent_ = std::move(p); }
+
+    /// Search for the best option to commit from the current state. Returns
+    /// the Option pointer (stable across calls — owned by options_), or
+    /// nullptr if no option can_initiate here (caller should fall back).
+    const Option* search(World& world, Agent& hero);
+
+    /// Promote the subtree matching the committed option by name. Unknown or
+    /// un-expanded options reset the tree.
+    void advance_root(const Option* committed);
+
+    void reset_tree() { root_.reset(); }
+
+    const SearchStats& last_stats() const { return stats_; }
+    const ONode* last_root() const { return root_.get(); }
+
+    /// Execute an option against the live world — advance state by windows
+    /// until option.should_terminate() returns true, terminal is reached,
+    /// or cfg.option_max_windows is hit. Returns windows executed. Useful
+    /// when committing an option outside of search().
+    int execute_option(World& world, Agent& hero, const Option& option);
+
+private:
+    ONode* select_(ONode* node, World& world, Agent& hero);
+    ONode* expand_(ONode* node, World& world, Agent& hero);
+    float  rollout_(World& world, Agent& hero);
+    std::vector<const Option*> legal_options_(const Agent& hero, const World& world) const;
+    void   step_option_(World& world, Agent& hero, const Option& option);
+
+    MctsConfig                      cfg_{};
+    std::vector<std::shared_ptr<Option>> options_;
+    std::shared_ptr<IEvaluator>     evaluator_;
+    OpponentPolicy                  opponent_;
+    std::unique_ptr<ONode>          root_;
+    SearchStats                     stats_{};
+};
+
+
+// ─── TeamOptionMcts (team-scoped option search) ───────────────────────────
+
+class TeamOptionMcts {
+public:
+    struct TNode {
+        const TeamOption* action = nullptr;
+        TNode*            parent = nullptr;
+        std::vector<std::unique_ptr<TNode>> children;
+        std::vector<const TeamOption*> untried;
+        int   visits = 0;
+        float total_value = 0.0f;
+
+        float mean() const { return visits > 0 ? total_value / static_cast<float>(visits) : 0.0f; }
+        bool  is_leaf() const { return children.empty(); }
+        bool  fully_expanded() const { return untried.empty(); }
+    };
+
+    TeamOptionMcts() = default;
+    explicit TeamOptionMcts(MctsConfig cfg) : cfg_(cfg) {}
+
+    void set_config(const MctsConfig& cfg) { cfg_ = cfg; }
+    const MctsConfig& config() const { return cfg_; }
+
+    void set_options(std::vector<std::shared_ptr<TeamOption>> options) {
+        options_ = std::move(options);
+        root_.reset();
+    }
+    const std::vector<std::shared_ptr<TeamOption>>& options() const { return options_; }
+
+    void set_evaluator(std::shared_ptr<ITeamEvaluator> ev)      { evaluator_ = std::move(ev); }
+    void set_opponent_policy(OpponentPolicy p)                   { opponent_ = std::move(p); }
+
+    const TeamOption* search(World& world, const std::vector<Agent*>& heroes);
+    void advance_root(const TeamOption* committed);
+    void reset_tree() { root_.reset(); }
+
+    const SearchStats& last_stats() const { return stats_; }
+    const TNode* last_root() const { return root_.get(); }
+
+    int execute_option(World& world, const std::vector<Agent*>& heroes,
+                       const TeamOption& option);
+
+private:
+    TNode* select_(TNode* node, World& world, const std::vector<Agent*>& heroes);
+    TNode* expand_(TNode* node, World& world, const std::vector<Agent*>& heroes);
+    float  rollout_(World& world, const std::vector<Agent*>& heroes, int team_id);
+    std::vector<const TeamOption*> legal_options_(const std::vector<Agent*>& heroes,
+                                                    const World& world) const;
+    void   step_option_(World& world, const std::vector<Agent*>& heroes,
+                         const TeamOption& option);
+
+    MctsConfig                          cfg_{};
+    std::vector<std::shared_ptr<TeamOption>> options_;
+    std::shared_ptr<ITeamEvaluator>     evaluator_;
+    OpponentPolicy                      opponent_;
+    std::unique_ptr<TNode>              root_;
+    SearchStats                         stats_{};
 };
 
 

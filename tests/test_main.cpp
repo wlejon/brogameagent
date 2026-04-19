@@ -2749,6 +2749,284 @@ TEST(legal_tactics_keeps_retreat_when_enemy_in_threat_range) {
     CHECK(ts.size() == 4);
 }
 
+// ─── OptionMcts / TeamOptionMcts ───────────────────────────────────────────
+
+namespace {
+
+// Simple concrete options for tests. Each option drives the hero with a
+// fixed CombatAction and terminates after N windows.
+class HoldOpt : public mcts::Option {
+    std::string name_ = "hold";
+    int windows_;
+public:
+    explicit HoldOpt(int w = 2) : windows_(w) {}
+    const std::string& name() const override { return name_; }
+    bool can_initiate(const Agent&, const World&) const override { return true; }
+    mcts::CombatAction step(Agent&, World&, int) const override {
+        return mcts::CombatAction{ mcts::MoveDir::Hold, -1, -1 };
+    }
+    bool should_terminate(const Agent&, const World&, int ticks) const override {
+        return ticks >= windows_;
+    }
+};
+
+class AttackOpt : public mcts::Option {
+    std::string name_ = "attack";
+    int windows_;
+public:
+    explicit AttackOpt(int w = 3) : windows_(w) {}
+    const std::string& name() const override { return name_; }
+    bool can_initiate(const Agent& self, const World& world) const override {
+        // Only if there's at least one living enemy.
+        for (Agent* a : world.agents()) {
+            if (a == &self) continue;
+            if (a->unit().alive() && a->unit().teamId != self.unit().teamId) return true;
+        }
+        return false;
+    }
+    mcts::CombatAction step(Agent&, World&, int) const override {
+        return mcts::CombatAction{ mcts::MoveDir::PathToTarget, 0, -1 };
+    }
+    bool should_terminate(const Agent&, const World&, int ticks) const override {
+        return ticks >= windows_;
+    }
+};
+
+class NeverInitOpt : public mcts::Option {
+    std::string name_ = "never";
+public:
+    const std::string& name() const override { return name_; }
+    bool can_initiate(const Agent&, const World&) const override { return false; }
+    mcts::CombatAction step(Agent&, World&, int) const override { return {}; }
+    bool should_terminate(const Agent&, const World&, int) const override { return true; }
+};
+
+class TeamHoldOpt : public mcts::TeamOption {
+    std::string name_ = "team_hold";
+    int windows_;
+public:
+    explicit TeamHoldOpt(int w = 2) : windows_(w) {}
+    const std::string& name() const override { return name_; }
+    bool can_initiate(const std::vector<Agent*>&, const World&) const override { return true; }
+    std::vector<mcts::CombatAction> step(const std::vector<Agent*>& heroes,
+                                           World&, int) const override {
+        return std::vector<mcts::CombatAction>(heroes.size(),
+            mcts::CombatAction{ mcts::MoveDir::Hold, -1, -1 });
+    }
+    bool should_terminate(const std::vector<Agent*>&, const World&, int t) const override {
+        return t >= windows_;
+    }
+};
+
+class TeamPushOpt : public mcts::TeamOption {
+    std::string name_ = "team_push";
+    int windows_;
+public:
+    explicit TeamPushOpt(int w = 3) : windows_(w) {}
+    const std::string& name() const override { return name_; }
+    bool can_initiate(const std::vector<Agent*>& heroes, const World& world) const override {
+        if (heroes.empty()) return false;
+        int team = heroes.front()->unit().teamId;
+        for (Agent* a : world.agents()) {
+            if (a->unit().alive() && a->unit().teamId != team) return true;
+        }
+        return false;
+    }
+    std::vector<mcts::CombatAction> step(const std::vector<Agent*>& heroes,
+                                           World&, int) const override {
+        return std::vector<mcts::CombatAction>(heroes.size(),
+            mcts::CombatAction{ mcts::MoveDir::PathToTarget, 0, -1 });
+    }
+    bool should_terminate(const std::vector<Agent*>&, const World&, int t) const override {
+        return t >= windows_;
+    }
+};
+
+} // namespace
+
+TEST(option_mcts_search_returns_an_option) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations        = 80;
+    cfg.rollout_horizon   = 3;
+    cfg.action_repeat     = 2;
+    cfg.option_max_windows = 4;
+    cfg.seed              = 0xAB;
+
+    std::vector<std::shared_ptr<mcts::Option>> opts = {
+        std::make_shared<HoldOpt>(2),
+        std::make_shared<AttackOpt>(3),
+    };
+    mcts::OptionMcts engine(cfg);
+    engine.set_options(opts);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+
+    const mcts::Option* chosen = engine.search(s->world, s->hero);
+    CHECK(chosen != nullptr);
+    CHECK(chosen->name() == "hold" || chosen->name() == "attack");
+    CHECK(engine.last_stats().root_children > 0);
+}
+
+TEST(option_mcts_excludes_options_that_cannot_initiate) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations        = 40;
+    cfg.rollout_horizon   = 2;
+    cfg.option_max_windows = 3;
+
+    std::vector<std::shared_ptr<mcts::Option>> opts = {
+        std::make_shared<HoldOpt>(2),
+        std::make_shared<NeverInitOpt>(),   // filtered out every expansion
+    };
+    mcts::OptionMcts engine(cfg);
+    engine.set_options(opts);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    engine.search(s->world, s->hero);
+    // Only "hold" should ever have been expanded at the root.
+    CHECK(engine.last_stats().root_children == 1);
+}
+
+TEST(option_mcts_returns_null_when_no_option_initiable) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations = 20;
+    std::vector<std::shared_ptr<mcts::Option>> opts = {
+        std::make_shared<NeverInitOpt>(),
+    };
+    mcts::OptionMcts engine(cfg);
+    engine.set_options(opts);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    CHECK(engine.search(s->world, s->hero) == nullptr);
+}
+
+TEST(option_mcts_search_is_side_effect_free) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, 3.0f);
+    float hp_hero_before = s->hero.unit().hp;
+    float hp_enemy_before = s->world.agents()[1]->unit().hp;
+
+    mcts::MctsConfig cfg;
+    cfg.iterations = 50;
+    cfg.rollout_horizon = 3;
+    cfg.option_max_windows = 3;
+    std::vector<std::shared_ptr<mcts::Option>> opts = {
+        std::make_shared<HoldOpt>(2),
+        std::make_shared<AttackOpt>(2),
+    };
+    mcts::OptionMcts engine(cfg);
+    engine.set_options(opts);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    engine.search(s->world, s->hero);
+
+    CHECK_NEAR(s->hero.unit().hp, hp_hero_before, 1e-4f);
+    CHECK_NEAR(s->world.agents()[1]->unit().hp, hp_enemy_before, 1e-4f);
+}
+
+TEST(option_mcts_advance_root_by_name) {
+    auto s = make_duel_scene(0, 0, 1.0f, 0, 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations = 40;
+    cfg.option_max_windows = 3;
+    std::vector<std::shared_ptr<mcts::Option>> opts = {
+        std::make_shared<HoldOpt>(2),
+        std::make_shared<AttackOpt>(2),
+    };
+    mcts::OptionMcts engine(cfg);
+    engine.set_options(opts);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    const mcts::Option* first = engine.search(s->world, s->hero);
+    CHECK(first != nullptr);
+
+    // Re-author the option set with fresh shared_ptrs (different pointers,
+    // same names) — advance_root must match by name and preserve the subtree.
+    std::vector<std::shared_ptr<mcts::Option>> opts2 = {
+        std::make_shared<HoldOpt>(2),
+        std::make_shared<AttackOpt>(2),
+    };
+    const mcts::Option* committed = nullptr;
+    for (auto& sp : opts2) if (sp->name() == first->name()) { committed = sp.get(); break; }
+    engine.advance_root(committed);
+    CHECK(engine.last_root() != nullptr);
+    CHECK(engine.last_root()->action != nullptr);
+    CHECK(engine.last_root()->action->name() == first->name());
+}
+
+TEST(option_mcts_use_leaf_value_finishes_with_large_horizon) {
+    // With use_leaf_value=true, rollout_horizon is ignored. Set it huge: if
+    // rollout actually ran the search would take long enough that elapsed_ms
+    // would be very large. Instead we just assert it completes all iterations
+    // and reports a small-to-moderate elapsed time.
+    auto s = make_duel_scene(0, 0, 1.0f, 0, 3.0f);
+    mcts::MctsConfig cfg;
+    cfg.iterations = 30;
+    cfg.rollout_horizon = 10000;
+    cfg.use_leaf_value = true;
+    cfg.option_max_windows = 2;
+    std::vector<std::shared_ptr<mcts::Option>> opts = {
+        std::make_shared<HoldOpt>(1),
+        std::make_shared<AttackOpt>(1),
+    };
+    mcts::OptionMcts engine(cfg);
+    engine.set_options(opts);
+    engine.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+    engine.search(s->world, s->hero);
+    CHECK(engine.last_stats().iterations == 30);
+    CHECK(engine.last_stats().elapsed_ms < 500);
+}
+
+TEST(team_option_mcts_search_returns_an_option) {
+    auto s = make_team_scene(2, 2);
+    mcts::MctsConfig cfg;
+    cfg.iterations        = 60;
+    cfg.rollout_horizon   = 3;
+    cfg.action_repeat     = 2;
+    cfg.option_max_windows = 3;
+    cfg.seed              = 0xCD;
+
+    std::vector<std::shared_ptr<mcts::TeamOption>> opts = {
+        std::make_shared<TeamHoldOpt>(2),
+        std::make_shared<TeamPushOpt>(2),
+    };
+    mcts::TeamOptionMcts engine(cfg);
+    engine.set_options(opts);
+    engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+    engine.set_opponent_policy(mcts::policy_idle);
+
+    const mcts::TeamOption* chosen = engine.search(s->world, raw(s->heroes));
+    CHECK(chosen != nullptr);
+    CHECK(chosen->name() == "team_hold" || chosen->name() == "team_push");
+}
+
+TEST(team_option_mcts_is_deterministic_under_seed) {
+    auto s1 = make_team_scene(2, 2);
+    auto s2 = make_team_scene(2, 2);
+    mcts::MctsConfig cfg;
+    cfg.iterations        = 40;
+    cfg.rollout_horizon   = 3;
+    cfg.option_max_windows = 2;
+    cfg.seed              = 0xBEEF;
+
+    auto run = [&](TeamScene& s) {
+        std::vector<std::shared_ptr<mcts::TeamOption>> opts = {
+            std::make_shared<TeamHoldOpt>(2),
+            std::make_shared<TeamPushOpt>(2),
+        };
+        mcts::TeamOptionMcts engine(cfg);
+        engine.set_options(opts);
+        engine.set_evaluator(std::make_shared<mcts::TeamHpDeltaEvaluator>());
+        engine.set_opponent_policy(mcts::policy_idle);
+        const mcts::TeamOption* o = engine.search(s.world, raw(s.heroes));
+        return o ? o->name() : std::string{};
+    };
+    CHECK(run(*s1) == run(*s2));
+}
+
+
 TEST(aggressive_rollout_returns_legal_action) {
     auto s = make_duel_scene(0, 0, 1.0f, 0, /*attackRange*/ 3.0f);
     mcts::AggressiveRollout rollout;
