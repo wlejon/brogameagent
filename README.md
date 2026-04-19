@@ -187,4 +187,4 @@ schema evolution is a compile error at the boundary.
 
 ## License / authorship
 
-Solo authorship; no license file yet. Add before any external share.
+MIT [LICENSE](LICENSE)
