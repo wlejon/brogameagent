@@ -35,6 +35,17 @@ add_library(brogameagent STATIC
     src/observability.cpp
     src/belief.cpp
     src/info_set_mcts.cpp
+    # --- NN circuits ---
+    src/nn/ops.cpp
+    src/nn/circuits.cpp
+    src/nn/encoder.cpp
+    src/nn/heads.cpp
+    src/nn/net.cpp
+    # --- Learning primitives + adapters ---
+    src/learn/trainer.cpp
+    src/learn/search_trace.cpp
+    src/learn/neural_adapters.cpp
+    src/learn/gumbel.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 
@@ -93,6 +104,15 @@ if(BROGAMEAGENT_TOOLS)
 
     add_executable(mcts_bench tools/mcts_bench.cpp)
     target_link_libraries(mcts_bench PRIVATE brogameagent)
+
+    add_executable(nn_check tools/nn_check.cpp)
+    target_link_libraries(nn_check PRIVATE brogameagent)
+
+    add_executable(nn_train_value tools/nn_train_value.cpp)
+    target_link_libraries(nn_train_value PRIVATE brogameagent)
+
+    add_executable(nn_exit tools/nn_exit.cpp)
+    target_link_libraries(nn_exit PRIVATE brogameagent)
 endif()
 
 # Tests
