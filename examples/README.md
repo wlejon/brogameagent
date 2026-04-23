@@ -23,3 +23,11 @@ short summary of what it did. Build with the top-level CMake
 
 Recommended reading order matches the numbering. The MCTS-focused files
 (07 onward) assume familiarity with the primitives in 01–06.
+
+The NN / ExIt layer is demonstrated by CLIs rather than examples — see
+`tools/nn_check.cpp`, `tools/nn_train_value.cpp`, and `tools/nn_exit.cpp`
+in the repository root. `nn_exit` in particular is the end-to-end tour:
+it exercises the same MCTS engines used here (`Mcts` with `NeuralPrior` +
+`NeuralEvaluator`), captures targets via `learn::SearchTrace`, trains
+`SingleHeroNet` with `ExItTrainer`, and hot-swaps weights through a
+`WeightsHandle`.
