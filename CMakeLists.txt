@@ -32,6 +32,9 @@ add_library(brogameagent STATIC
     src/capability_set.cpp
     src/capabilities.cpp
     src/scripted_minion_policy.cpp
+    src/observability.cpp
+    src/belief.cpp
+    src/info_set_mcts.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 

@@ -368,6 +368,20 @@ public:
     /// Useful for debug visualisation / tests. Null if search() not yet run.
     const Node* last_root() const { return root_.get(); }
 
+    /// Ensure the root node exists; if not, initialise it against the current
+    /// world state (legal_actions + priors). Safe to call repeatedly. Exposed
+    /// for custom iteration schedulers — normal callers should use search().
+    void ensure_root(World& world, Agent& hero);
+
+    /// Run one (select, expand, rollout, backprop) iteration on the existing
+    /// tree, assuming `world` is already in the desired iteration-start state.
+    /// Does NOT snapshot/restore the world — the caller controls iteration-
+    /// boundary state. Used by InfoSetMcts for determinized IS-MCTS.
+    void run_iteration(World& world, Agent& hero);
+
+    /// Most-visited root child action, or default {} if the tree is empty.
+    CombatAction best_action() const;
+
 private:
     // Internal iteration phases.
     Node* select_(Node* node, World& world, Agent& hero);
@@ -1122,3 +1136,11 @@ DecoupledMcts::Joint root_parallel_search_decoupled(
     ParallelSearchStats*            out_stats = nullptr);
 
 } // namespace brogameagent::mcts
+
+// ─── Partial-observability MCTS ────────────────────────────────────────────
+//
+// Declarations live in a sibling header to keep the options framework above
+// close to its existing documentation. The include is at the bottom because
+// info_set_mcts.h depends on everything in this header.
+#include "info_set_mcts.h"
+

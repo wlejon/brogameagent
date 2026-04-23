@@ -3755,6 +3755,237 @@ TEST(policy_scripted_minion_lanewalks_when_no_enemy_in_range) {
     CHECK(out.capId == kCapLaneWalk);
 }
 
+// ─── Partial observability: observation + belief + IS-MCTS ─────────────────
+
+TEST(observe_visible_enemy_no_obstacles) {
+    World world;
+    Agent hero; hero.unit().id = 1; hero.unit().teamId = 0;
+    hero.unit().hp = 100;
+    hero.setPosition(0, 0); world.addAgent(&hero);
+
+    Agent enemy; enemy.unit().id = 2; enemy.unit().teamId = 1;
+    enemy.unit().hp = 50;
+    enemy.setPosition(5, 0); world.addAgent(&enemy);
+
+    obs::VisibilityConfig cfg;  // omnidirectional, unlimited range, LOS on
+    auto o = obs::observe(world, 0, cfg, 0.0f);
+    CHECK(o.allies.size() == 1);
+    CHECK(o.enemies.size() == 1);
+    CHECK(o.enemies[0].visible);
+    CHECK_NEAR(o.enemies[0].pos.x, 5.0f, 1e-3f);
+}
+
+TEST(observe_enemy_behind_wall_hidden) {
+    World world;
+    world.addObstacle({0, 0, 0.5f, 2.0f});  // tall thin wall at origin
+
+    Agent hero; hero.unit().id = 1; hero.unit().teamId = 0; hero.unit().hp = 100;
+    hero.setPosition(-5, 0); world.addAgent(&hero);
+
+    Agent enemy; enemy.unit().id = 2; enemy.unit().teamId = 1; enemy.unit().hp = 50;
+    enemy.setPosition(5, 0); world.addAgent(&enemy);
+
+    obs::VisibilityConfig cfg;
+    auto o = obs::observe(world, 0, cfg, 0.0f);
+    CHECK(!o.enemies[0].visible);
+}
+
+TEST(observe_range_gating) {
+    World world;
+    Agent hero; hero.unit().id = 1; hero.unit().teamId = 0; hero.unit().hp = 100;
+    hero.setPosition(0, 0); world.addAgent(&hero);
+    Agent enemy; enemy.unit().id = 2; enemy.unit().teamId = 1; enemy.unit().hp = 50;
+    enemy.setPosition(20, 0); world.addAgent(&enemy);
+
+    obs::VisibilityConfig cfg; cfg.max_range = 10.0f;
+    auto o = obs::observe(world, 0, cfg, 0.0f);
+    CHECK(!o.enemies[0].visible);
+}
+
+TEST(observe_merge_preserves_stale) {
+    World world;
+    Agent hero; hero.unit().id = 1; hero.unit().teamId = 0; hero.unit().hp = 100;
+    hero.setPosition(-5, 0); world.addAgent(&hero);
+    Agent enemy; enemy.unit().id = 2; enemy.unit().teamId = 1; enemy.unit().hp = 50;
+    enemy.setPosition(5, 0); world.addAgent(&enemy);
+
+    obs::VisibilityConfig cfg;
+    auto o0 = obs::observe(world, 0, cfg, 0.0f);
+    CHECK(o0.enemies[0].visible);
+
+    // Enemy moves to a new location and a wall appears between them.
+    enemy.setPosition(10, 0);
+    world.addObstacle({7, 0, 0.5f, 2.0f});
+    auto o1_raw = obs::observe(world, 0, cfg, 1.0f);
+    CHECK(!o1_raw.enemies[0].visible);
+
+    auto o1 = obs::merge(o0, o1_raw, 1.0f);
+    CHECK(!o1.enemies[0].visible);
+    // Stale position carried forward is the last-seen (5, 0), not current (10, 0).
+    CHECK_NEAR(o1.enemies[0].pos.x, 5.0f, 1e-3f);
+    CHECK_NEAR(o1.enemies[0].last_seen_elapsed, 1.0f, 1e-3f);
+}
+
+TEST(belief_collapses_on_sighting) {
+    NavGrid nav(-10, -10, 10, 10, 0.5f);
+    belief::TeamBelief tb(0, 32, &nav);
+
+    Vec2 prior{5, 0};
+    tb.register_enemy(2, 50.0f, &prior);
+
+    // Synthesize an observation where the enemy is visible at (3, 1).
+    obs::TeamObservation fresh;
+    fresh.team_id = 0; fresh.timestamp = 0.0f;
+    obs::AgentObservation e;
+    e.id = 2; e.team_id = 1; e.pos = {3, 1}; e.hp = 42; e.alive = true; e.visible = true;
+    fresh.enemies.push_back(e);
+
+    tb.update(fresh);
+    CHECK(tb.enemies().size() == 1);
+    CHECK(tb.enemies()[0].visible);
+    // All particles should be at (3, 1) exactly.
+    for (const auto& p : tb.enemies()[0].particles) {
+        CHECK_NEAR(p.pos.x, 3.0f, 1e-4f);
+        CHECK_NEAR(p.pos.z, 1.0f, 1e-4f);
+    }
+}
+
+TEST(belief_spreads_on_loss_of_contact) {
+    NavGrid nav(-10, -10, 10, 10, 0.5f);
+    belief::MotionParams mp; mp.spread_on_loss = 2.0f;
+    belief::TeamBelief tb(0, 64, &nav, mp);
+
+    Vec2 prior{5, 0};
+    tb.register_enemy(2, 50.0f, &prior);
+
+    // Sighting collapses.
+    obs::TeamObservation seen;
+    seen.team_id = 0; seen.timestamp = 0.0f;
+    {
+        obs::AgentObservation e;
+        e.id = 2; e.team_id = 1; e.pos = {3, 0}; e.hp = 42; e.alive = true; e.visible = true;
+        seen.enemies.push_back(e);
+    }
+    tb.update(seen);
+
+    // Next tick: enemy hidden (e.g., stepped behind cover).
+    obs::TeamObservation hidden;
+    hidden.team_id = 0; hidden.timestamp = 1.0f;
+    {
+        obs::AgentObservation e;
+        e.id = 2; e.team_id = 1; e.pos = {0, 0}; e.hp = 0; e.alive = false;
+        e.visible = false; e.last_seen_elapsed = 1.0f;
+        hidden.enemies.push_back(e);
+    }
+    tb.update(hidden);
+
+    // Particles should no longer all coincide; compute variance.
+    float sx = 0, sx2 = 0; int n = 0;
+    for (const auto& p : tb.enemies()[0].particles) { sx += p.pos.x; sx2 += p.pos.x * p.pos.x; n++; }
+    CHECK(n > 0);
+    float mean = sx / n;
+    float var  = sx2 / n - mean * mean;
+    CHECK(var > 0.01f);  // non-degenerate spread
+}
+
+TEST(belief_sample_returns_mapped_ids) {
+    NavGrid nav(-10, -10, 10, 10, 0.5f);
+    belief::TeamBelief tb(0, 16, &nav);
+    Vec2 p{3, 3};
+    tb.register_enemy(7, 100.0f, &p);
+    tb.register_enemy(9, 100.0f, &p);
+
+    std::mt19937_64 rng(42);
+    auto s = tb.sample(rng);
+    CHECK(s.size() == 2);
+    CHECK(s.count(7) == 1);
+    CHECK(s.count(9) == 1);
+}
+
+TEST(patch_snapshot_overwrites_enemy_only) {
+    World world;
+    Agent hero; hero.unit().id = 1; hero.unit().teamId = 0; hero.unit().hp = 100;
+    hero.setPosition(-3, 0); world.addAgent(&hero);
+    Agent enemy; enemy.unit().id = 2; enemy.unit().teamId = 1; enemy.unit().hp = 80;
+    enemy.setPosition(3, 0); world.addAgent(&enemy);
+
+    auto snap = world.snapshot();
+    std::unordered_map<int, belief::EnemyParticle> sampled;
+    belief::EnemyParticle p; p.pos = {7, 2}; p.vel = {1, 0}; p.hp = 30; p.heading = 0.5f;
+    sampled.emplace(2, p);
+
+    mcts::patch_snapshot_with_particles(snap, sampled);
+
+    // Hero untouched.
+    CHECK_NEAR(snap.agents[0].x, -3.0f, 1e-4f);
+    CHECK_NEAR(snap.agents[0].unit.hp, 100.0f, 1e-4f);
+    // Enemy patched.
+    CHECK_NEAR(snap.agents[1].x, 7.0f, 1e-4f);
+    CHECK_NEAR(snap.agents[1].z, 2.0f, 1e-4f);
+    CHECK_NEAR(snap.agents[1].unit.hp, 30.0f, 1e-4f);
+}
+
+TEST(infoset_mcts_restores_world) {
+    NavGrid nav(-10, -10, 10, 10, 0.5f);
+
+    World world;
+    world.seed(0x77);
+
+    Agent hero; hero.unit().id = 1; hero.unit().teamId = 0;
+    hero.unit().hp = 100; hero.unit().damage = 10; hero.unit().attackRange = 3;
+    hero.unit().attacksPerSec = 2;
+    hero.setNavGrid(&nav);
+    hero.setPosition(-2, 0); hero.setMaxAccel(30); hero.setMaxTurnRate(10);
+    world.addAgent(&hero);
+
+    Agent enemy; enemy.unit().id = 2; enemy.unit().teamId = 1;
+    enemy.unit().hp = 80; enemy.unit().damage = 8; enemy.unit().attackRange = 3;
+    enemy.unit().attacksPerSec = 1.5f;
+    enemy.setNavGrid(&nav);
+    enemy.setPosition(2, 0); enemy.setMaxAccel(30); enemy.setMaxTurnRate(10);
+    world.addAgent(&enemy);
+
+    auto tb = std::make_shared<belief::TeamBelief>(0, 16, &nav);
+    Vec2 prior{2, 0};
+    tb->register_enemy(2, enemy.unit().maxHp, &prior);
+    // Collapse belief to truth via a fake "visible" observation.
+    obs::TeamObservation seen;
+    seen.team_id = 0; seen.timestamp = 0.0f;
+    {
+        obs::AgentObservation e;
+        e.id = 2; e.team_id = 1; e.pos = {2, 0};
+        e.hp = enemy.unit().hp; e.max_hp = enemy.unit().maxHp;
+        e.alive = true; e.visible = true;
+        seen.enemies.push_back(e);
+    }
+    tb->update(seen);
+
+    mcts::MctsConfig cfg;
+    cfg.iterations = 24;
+    cfg.rollout_horizon = 8;
+    cfg.action_repeat = 4;
+    cfg.seed = 0xABCD;
+
+    mcts::InfoSetMcts planner(cfg);
+    planner.set_belief(tb);
+    planner.set_evaluator(std::make_shared<mcts::HpDeltaEvaluator>());
+    planner.set_rollout_policy(std::make_shared<mcts::AggressiveRollout>());
+    planner.set_opponent_policy(mcts::policy_aggressive);
+
+    float hero_x_before  = hero.x();
+    float enemy_x_before = enemy.x();
+    float hero_hp_before = hero.unit().hp;
+
+    (void)planner.search(world, hero);
+
+    // World must be untouched by search.
+    CHECK_NEAR(hero.x(), hero_x_before, 1e-4f);
+    CHECK_NEAR(enemy.x(), enemy_x_before, 1e-4f);
+    CHECK_NEAR(hero.unit().hp, hero_hp_before, 1e-4f);
+
+    CHECK(planner.last_stats().iterations > 0);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {

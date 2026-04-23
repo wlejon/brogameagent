@@ -586,6 +586,35 @@ void Mcts::backprop_(Node* node, float value) {
     }
 }
 
+void Mcts::ensure_root(World& world, Agent& hero) {
+    if (root_) return;
+    root_ = std::make_unique<Node>();
+    root_->untried = legal_actions(hero, world);
+    root_->untried_priors = compute_priors(
+        prior_.get(), hero, world, root_->untried);
+}
+
+void Mcts::run_iteration(World& world, Agent& hero) {
+    ensure_root(world, hero);
+    Node* leaf  = select_(root_.get(), world, hero);
+    Node* child = expand_(leaf, world, hero);
+    float value = rollout_(world, hero);
+    backprop_(child, value);
+}
+
+CombatAction Mcts::best_action() const {
+    if (!root_) return {};
+    const Node* best = nullptr;
+    int best_visits = -1;
+    for (const auto& up : root_->children) {
+        if (up->visits > best_visits) {
+            best_visits = up->visits;
+            best = up.get();
+        }
+    }
+    return best ? best->action : CombatAction{};
+}
+
 CombatAction Mcts::search(World& world, Agent& hero) {
     using clock = std::chrono::steady_clock;
     const auto t_start = clock::now();
