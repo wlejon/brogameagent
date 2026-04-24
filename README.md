@@ -26,44 +26,6 @@ Layered on top of that substrate:
   MCTS-derived policy/value targets and hot-swaps weights through a
   `WeightsHandle` so the game never pauses for training.
 
-## Repository layout
-
-```
-include/brogameagent/        public headers (pure C++20)
-  # core sim
-  types.h unit.h agent.h world.h
-  nav_grid.h steering.h perception.h
-  observation.h action_mask.h reward.h
-  projectile.h snapshot.h simulation.h
-  vec_simulation.h              # batched envs (for parallel rollouts)
-  recorder.h replay_reader.h    # writing + reading .bgar
-  replay_format.h               # on-disk schema (zero-dep)
-  # planners
-  mcts.h                        # all MCTS variants + options + Commander
-  info_set_mcts.h               # IS-MCTS over particle beliefs
-  belief.h observability.h      # partial-observability infra
-  capability.h policy.h         # scripted policy primitives
-  # NN circuits (hand-crafted, no autograd)
-  nn/tensor.h nn/ops.h          # Tensor + GEMV/softmax/xent primitives
-  nn/circuits.h                 # Linear, ReLU, Tanh
-  nn/encoder.h                  # DeepSetsEncoder (permutation-invariant)
-  nn/heads.h                    # ValueHead, FactoredPolicyHead
-  nn/net.h                      # SingleHeroNet + WeightsHandle
-  # Learning primitives
-  learn/replay_buffer.h         # Situation ring buffer
-  learn/search_trace.h          # extract policy targets from MCTS roots
-  learn/trainer.h               # ExItTrainer (SGD+momentum minibatch)
-  learn/neural_adapters.h       # NeuralEvaluator / NeuralPrior
-  learn/gumbel.h                # GumbelNoisePrior + improved policy target
-src/                           implementations
-tests/test_main.cpp            single-file test suite, 191 tests, no framework
-tools/replay_query.cpp         CLI inspector for .bgar files
-tools/mcts_bench.cpp           MCTS strength/speed sweeps → TSV
-tools/nn_check.cpp             finite-diff gradient verification for every circuit
-tools/nn_train_value.cpp       capture MCTS targets → train SingleHeroNet → save .bgnn
-tools/nn_exit.cpp              full ExIt loop (generate → train → eval, iterated)
-```
-
 ## Building
 
 ```sh
@@ -79,20 +41,20 @@ tour from "hello world" to layered multi-agent search).
 ### Running tests
 
 ```sh
-./build/tests/Release/brogameagent_test.exe
+brogameagent_test.exe
 ```
 
 ### `replay_query` CLI
 
 ```sh
-./build/Release/replay_query.exe info     <file.bgar>
-./build/Release/replay_query.exe roster   <file.bgar>
-./build/Release/replay_query.exe frame    <file.bgar> <frame_idx>
-./build/Release/replay_query.exe step     <file.bgar> <step_idx>
-./build/Release/replay_query.exe agent    <file.bgar> <agent_id>
-./build/Release/replay_query.exe events   <file.bgar> [attacker_id]
-./build/Release/replay_query.exe dps      <file.bgar>
-./build/Release/replay_query.exe dump     <file.bgar>
+replay_query.exe info     <file.bgar>
+replay_query.exe roster   <file.bgar>
+replay_query.exe frame    <file.bgar> <frame_idx>
+replay_query.exe step     <file.bgar> <step_idx>
+replay_query.exe agent    <file.bgar> <agent_id>
+replay_query.exe events   <file.bgar> [attacker_id]
+replay_query.exe dps      <file.bgar>
+replay_query.exe dump     <file.bgar>
 ```
 
 All output is tab-separated — pipe into `awk`, `csvkit`, `pandas`, whatever.
@@ -104,8 +66,8 @@ counts, mean terminal HP delta, and mean per-decision search cost as a
 single TSV row:
 
 ```sh
-./build/Release/mcts_bench.exe duel [flags]
-./build/Release/mcts_bench.exe team [flags]
+mcts_bench.exe duel [flags]
+mcts_bench.exe team [flags]
 ```
 
 Key flags: `--episodes N`, `--iterations M`, `--budget-ms T`,
@@ -119,16 +81,16 @@ Sweep by re-running across a grid and concatenating the output rows.
 
 ```sh
 # Finite-diff gradient verification for every circuit.
-./build/Release/nn_check.exe [--verbose]
+nn_check.exe [--verbose]
 
 # Generate episodes with MCTS, capture (obs, π̂, z) targets, train
 # SingleHeroNet, save .bgnn.
-./build/Release/nn_train_value.exe \
+nn_train_value.exe \
     [--episodes N] [--iterations M] [--steps S] [--out F.bgnn] [--seed X]
 
 # Full ExIt loop: iterated generate → train → eval, hot-swapping weights
 # via WeightsHandle. Emits per-iter TSV metrics and an .bgnn checkpoint.
-./build/Release/nn_exit.exe \
+nn_exit.exe \
     [--iters K] [--episodes N] [--iterations M] [--max-ticks T] \
     [--steps S] [--eval E] [--out-prefix P] [--seed X]
 ```
