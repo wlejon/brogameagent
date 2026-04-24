@@ -55,6 +55,12 @@ public:
     std::vector<uint8_t> save() const;
     void load(const std::vector<uint8_t>& blob);
 
+    // Load only the encoder portion of the net from a blob in
+    // DeepSetsEncoder::save_to format (no magic/version header — just the
+    // raw encoder sub-blob). Used to pull pretrained AE encoder weights
+    // into a fresh SingleHeroNet before supervised fine-tuning.
+    void load_encoder_only(const std::vector<uint8_t>& enc_blob);
+
 private:
     Config cfg_{};
     DeepSetsEncoder enc_;

@@ -1,11 +1,11 @@
-#include "brogameagent/nn/net.h"
+#include "brogameagent/nn/net_st.h"
 
 #include <cassert>
 #include <cstring>
 
 namespace brogameagent::nn {
 
-void SingleHeroNet::init(const Config& cfg) {
+void SingleHeroNetST::init(const Config& cfg) {
     cfg_ = cfg;
     uint64_t seed = cfg.seed;
     enc_.init(cfg.enc, seed);
@@ -19,7 +19,7 @@ void SingleHeroNet::init(const Config& cfg) {
     logits_scratch_.resize(head_.total_logits(), 1);
 }
 
-void SingleHeroNet::forward(const Tensor& x, float& value, Tensor& logits) {
+void SingleHeroNetST::forward(const Tensor& x, float& value, Tensor& logits) {
     enc_.forward(x, enc_out_);
     trunk_.forward(enc_out_, trunk_raw_);
     trunk_act_.forward(trunk_raw_, trunk_act_out_);
@@ -27,7 +27,7 @@ void SingleHeroNet::forward(const Tensor& x, float& value, Tensor& logits) {
     head_.forward(trunk_act_out_, logits);
 }
 
-void SingleHeroNet::backward(float dValue, const Tensor& dLogits) {
+void SingleHeroNetST::backward(float dValue, const Tensor& dLogits) {
     Tensor dTrunkV = Tensor::vec(cfg_.trunk_hidden);
     value_head_.backward(dValue, dTrunkV);
     Tensor dTrunkP = Tensor::vec(cfg_.trunk_hidden);
@@ -45,38 +45,36 @@ void SingleHeroNet::backward(float dValue, const Tensor& dLogits) {
 
     Tensor dX = Tensor::vec(observation::TOTAL);
     enc_.backward(dEnc, dX);
-    // dX is the gradient on the raw observation; we discard it (no upstream).
 }
 
-void SingleHeroNet::zero_grad() {
+void SingleHeroNetST::zero_grad() {
     enc_.zero_grad();
     trunk_.zero_grad();
     value_head_.zero_grad();
     head_.zero_grad();
 }
 
-void SingleHeroNet::sgd_step(float lr, float momentum) {
+void SingleHeroNetST::sgd_step(float lr, float momentum) {
     enc_.sgd_step(lr, momentum);
     trunk_.sgd_step(lr, momentum);
     value_head_.sgd_step(lr, momentum);
     head_.sgd_step(lr, momentum);
 }
 
-int SingleHeroNet::num_params() const {
+int SingleHeroNetST::num_params() const {
     return enc_.num_params() + trunk_.num_params()
          + value_head_.num_params() + head_.num_params();
 }
 
-// Format: magic("BGNN") + version + (per-circuit tensor records via circuits).
-static constexpr uint32_t kMagic = 0x4E4E4742; // "BGNN" LE
-static constexpr uint32_t kVersion = 1;
+static constexpr uint32_t kMagicST = 0x54534742; // "BGST" LE
+static constexpr uint32_t kVersionST = 1;
 
-std::vector<uint8_t> SingleHeroNet::save() const {
+std::vector<uint8_t> SingleHeroNetST::save() const {
     std::vector<uint8_t> out;
     const size_t header = sizeof(uint32_t) * 2;
     out.resize(header);
-    std::memcpy(out.data(), &kMagic, sizeof(uint32_t));
-    std::memcpy(out.data() + sizeof(uint32_t), &kVersion, sizeof(uint32_t));
+    std::memcpy(out.data(), &kMagicST, sizeof(uint32_t));
+    std::memcpy(out.data() + sizeof(uint32_t), &kVersionST, sizeof(uint32_t));
     enc_.save_to(out);
     trunk_.save_to(out);
     value_head_.save_to(out);
@@ -84,18 +82,13 @@ std::vector<uint8_t> SingleHeroNet::save() const {
     return out;
 }
 
-void SingleHeroNet::load_encoder_only(const std::vector<uint8_t>& enc_blob) {
-    size_t offset = 0;
-    enc_.load_from(enc_blob.data(), offset, enc_blob.size());
-}
-
-void SingleHeroNet::load(const std::vector<uint8_t>& blob) {
+void SingleHeroNetST::load(const std::vector<uint8_t>& blob) {
     assert(blob.size() >= sizeof(uint32_t) * 2);
     uint32_t magic = 0, version = 0;
     std::memcpy(&magic,   blob.data(),                   sizeof(uint32_t));
     std::memcpy(&version, blob.data() + sizeof(uint32_t), sizeof(uint32_t));
-    assert(magic == kMagic);
-    assert(version == kVersion);
+    assert(magic == kMagicST);
+    assert(version == kVersionST);
     size_t offset = sizeof(uint32_t) * 2;
     enc_.load_from(blob.data(), offset, blob.size());
     trunk_.load_from(blob.data(), offset, blob.size());

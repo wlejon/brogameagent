@@ -31,6 +31,11 @@ void tanh_forward(const Tensor& x, Tensor& y);
 // dX = dY * (1 - y^2)  — cached `y` avoids recomputing tanh.
 void tanh_backward(const Tensor& y, const Tensor& dY, Tensor& dX);
 
+// Elementwise sigmoid. y = 1/(1+exp(-x)).
+void sigmoid_forward(const Tensor& x, Tensor& y);
+// dX = dY * y * (1 - y)  — cached `y` avoids recomputing sigmoid.
+void sigmoid_backward(const Tensor& y, const Tensor& dY, Tensor& dX);
+
 // Softmax over a flat vector. Stable (subtract max). Optional mask: if
 // non-null, elements with mask[i] == 0 contribute 0 to normaliser and
 // receive output 0. At least one mask entry must be >0 when masking.

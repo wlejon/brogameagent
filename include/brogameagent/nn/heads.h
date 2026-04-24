@@ -89,6 +89,13 @@ private:
     Linear move_, atk_, abil_;
 };
 
+// ─── OpponentPolicyHead ───────────────────────────────────────────────────
+//
+// Auxiliary head predicting the observed opponent's action. Structurally
+// identical to FactoredPolicyHead (same 9 / N_ATTACK / N_ABILITY factoring),
+// reused via alias. Trained with factored_xent against the opponent target.
+using OpponentPolicyHead = FactoredPolicyHead;
+
 // Helper: in-place softmax on each of the three factored regions of a logits
 // vector. Optional attack_mask / ability_mask: size N_ATTACK-1 and
 // N_ABILITY-1 respectively, reflecting action_mask::build output. The

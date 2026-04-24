@@ -91,6 +91,21 @@ void tanh_backward(const Tensor& y, const Tensor& dY, Tensor& dX) {
     for (int i = 0; i < n; ++i) dXp[i] = dYp[i] * (1.0f - yp[i] * yp[i]);
 }
 
+void sigmoid_forward(const Tensor& x, Tensor& y) {
+    const int n = x.size();
+    const float* xp = x.ptr();
+    float* yp = y.ptr();
+    for (int i = 0; i < n; ++i) yp[i] = 1.0f / (1.0f + std::exp(-xp[i]));
+}
+
+void sigmoid_backward(const Tensor& y, const Tensor& dY, Tensor& dX) {
+    const int n = y.size();
+    const float* yp  = y.ptr();
+    const float* dYp = dY.ptr();
+    float* dXp = dX.ptr();
+    for (int i = 0; i < n; ++i) dXp[i] = dYp[i] * yp[i] * (1.0f - yp[i]);
+}
+
 void softmax_forward(const Tensor& logits, Tensor& probs, const float* mask) {
     const int n = logits.size();
     const float* lp = logits.ptr();

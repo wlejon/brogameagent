@@ -39,13 +39,25 @@ add_library(brogameagent STATIC
     src/nn/ops.cpp
     src/nn/circuits.cpp
     src/nn/encoder.cpp
+    src/nn/decoder.cpp
+    src/nn/autoencoder.cpp
     src/nn/heads.cpp
     src/nn/net.cpp
+    src/nn/layernorm.cpp
+    src/nn/embedding.cpp
+    src/nn/attention.cpp
+    src/nn/gru.cpp
+    src/nn/set_transformer.cpp
+    src/nn/net_st.cpp
+    src/nn/heads_dist.cpp
+    src/nn/ensemble.cpp
+    src/nn/forward_model.cpp
     # --- Learning primitives + adapters ---
     src/learn/trainer.cpp
     src/learn/search_trace.cpp
     src/learn/neural_adapters.cpp
     src/learn/gumbel.cpp
+    src/learn/contrastive.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 
@@ -113,6 +125,9 @@ if(BROGAMEAGENT_TOOLS)
 
     add_executable(nn_exit tools/nn_exit.cpp)
     target_link_libraries(nn_exit PRIVATE brogameagent)
+
+    add_executable(nn_pretrain_ae tools/nn_pretrain_ae.cpp)
+    target_link_libraries(nn_pretrain_ae PRIVATE brogameagent)
 endif()
 
 # Tests

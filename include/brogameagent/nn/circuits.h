@@ -114,6 +114,25 @@ private:
     Tensor y_cache_;
 };
 
+class Sigmoid : public ICircuit {
+public:
+    void forward(const Tensor& x, Tensor& y) {
+        sigmoid_forward(x, y);
+        y_cache_ = y;
+    }
+    void backward(const Tensor& dY, Tensor& dX) {
+        sigmoid_backward(y_cache_, dY, dX);
+    }
+    const char* name() const override { return "Sigmoid"; }
+    int  num_params() const override { return 0; }
+    void zero_grad() override {}
+    void sgd_step(float, float) override {}
+    void save_to(std::vector<uint8_t>&) const override {}
+    void load_from(const uint8_t*, size_t&, size_t) override {}
+private:
+    Tensor y_cache_;
+};
+
 // ─── Serialization helpers (tensor-level) ─────────────────────────────────
 
 void tensor_write(const Tensor& t, std::vector<uint8_t>& out);
