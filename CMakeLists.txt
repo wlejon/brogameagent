@@ -43,6 +43,7 @@ add_library(brogameagent STATIC
     src/nn/autoencoder.cpp
     src/nn/heads.cpp
     src/nn/net.cpp
+    src/nn/policy_value_net.cpp
     src/nn/layernorm.cpp
     src/nn/embedding.cpp
     src/nn/attention.cpp
@@ -54,6 +55,7 @@ add_library(brogameagent STATIC
     src/nn/forward_model.cpp
     # --- Learning primitives + adapters ---
     src/learn/trainer.cpp
+    src/learn/generic_trainer.cpp
     src/learn/search_trace.cpp
     src/learn/neural_adapters.cpp
     src/learn/gumbel.cpp

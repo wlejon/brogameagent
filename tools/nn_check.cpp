@@ -15,6 +15,7 @@
 #include "brogameagent/nn/heads.h"
 #include "brogameagent/nn/net.h"
 #include "brogameagent/nn/ops.h"
+#include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/tensor.h"
 #include "brogameagent/nn/layernorm.h"
 #include "brogameagent/nn/embedding.h"
@@ -331,6 +332,92 @@ static void test_full_net() {
     std::printf("SingleHeroNet/sensitivity\t%s\n", any_nonzero ? "PASS" : "FAIL");
     if (any_nonzero) ++g_pass; else ++g_fail;
     (void)loss_fn;
+}
+
+// ───────────────────── PolicyValueNet (gradient + save/load) ─────────────────────
+static void test_policy_value_net() {
+    PolicyValueNet net;
+    PolicyValueNet::Config cfg;
+    cfg.in_dim       = 12;
+    cfg.hidden       = {16, 12};
+    cfg.value_hidden = 8;
+    cfg.num_actions  = 6;
+    cfg.seed         = 0xA11CE;
+    net.init(cfg);
+
+    Tensor x = Tensor::vec(cfg.in_dim);
+    for (int i = 0; i < x.size(); ++i) x[i] = 0.07f * i - 0.4f;
+
+    // Soft target distribution (sums to 1) and a value target in [-1, 1].
+    Tensor tgt = Tensor::vec(cfg.num_actions);
+    {
+        float s = 0.0f;
+        for (int i = 0; i < cfg.num_actions; ++i) { tgt[i] = 0.1f + 0.05f * i; s += tgt[i]; }
+        for (int i = 0; i < cfg.num_actions; ++i) tgt[i] /= s;
+    }
+    const float v_target = 0.3f;
+
+    auto loss_fn = [&]() -> float {
+        float v = 0.0f;
+        Tensor lg = Tensor::vec(cfg.num_actions);
+        net.forward(x, v, lg);
+        float dv = 0.0f;
+        const float lv = mse_scalar(v, v_target, dv);
+        Tensor pr = Tensor::vec(cfg.num_actions);
+        Tensor dL = Tensor::vec(cfg.num_actions);
+        const float lp = softmax_xent(lg, tgt, pr, dL, nullptr);
+        return lv + lp;
+    };
+
+    // Sensitivity: numeric grad over a few obs entries should be non-trivially
+    // nonzero (loss responds to inputs at all).
+    std::vector<float> num;
+    numerical_grad(x.ptr(), 4, loss_fn, num, 1e-3f);
+    bool any_nonzero = false;
+    for (float g : num) if (std::fabs(g) > 1e-5f) any_nonzero = true;
+    std::printf("PolicyValueNet/sensitivity\t%s\n", any_nonzero ? "PASS" : "FAIL");
+    if (any_nonzero) ++g_pass; else ++g_fail;
+
+    // Save/load round-trip preserves outputs bit-exactly (same fp ops).
+    float v1 = 0.0f;
+    Tensor lg1 = Tensor::vec(cfg.num_actions);
+    net.forward(x, v1, lg1);
+
+    auto blob = net.save();
+    PolicyValueNet net2;
+    net2.init(cfg);
+    net2.load(blob);
+    float v2 = 0.0f;
+    Tensor lg2 = Tensor::vec(cfg.num_actions);
+    net2.forward(x, v2, lg2);
+
+    float max_err = std::fabs(v1 - v2);
+    for (int i = 0; i < lg1.size(); ++i)
+        max_err = std::max(max_err, std::fabs(lg1[i] - lg2[i]));
+    const bool ok = max_err < 1e-6f;
+    std::printf("PolicyValueNet/save-load\t%s\tmax_err=%.4e\n", ok ? "PASS" : "FAIL", max_err);
+    if (ok) ++g_pass; else ++g_fail;
+
+    // SGD reduces loss on this single example after a few steps.
+    const float l0 = loss_fn();
+    for (int i = 0; i < 50; ++i) {
+        net.zero_grad();
+        float v = 0.0f;
+        Tensor lg = Tensor::vec(cfg.num_actions);
+        net.forward(x, v, lg);
+        float dv = 0.0f;
+        mse_scalar(v, v_target, dv);
+        Tensor pr = Tensor::vec(cfg.num_actions);
+        Tensor dL = Tensor::vec(cfg.num_actions);
+        softmax_xent(lg, tgt, pr, dL, nullptr);
+        net.backward(dv, dL);
+        net.sgd_step(0.05f, 0.9f);
+    }
+    const float l1 = loss_fn();
+    const bool sgd_ok = l1 < l0 * 0.95f;
+    std::printf("PolicyValueNet/sgd-decreases\t%s\tl0=%.4e\tl1=%.4e\n",
+                sgd_ok ? "PASS" : "FAIL", l0, l1);
+    if (sgd_ok) ++g_pass; else ++g_fail;
 }
 
 // ───────────────────── DeepSetsDecoder ─────────────────────
@@ -1005,6 +1092,7 @@ int main(int argc, char** argv) {
     test_attention();
     test_gru();
     test_full_net();
+    test_policy_value_net();
     test_set_transformer();
     test_single_hero_net_st();
     test_distributional_value();
