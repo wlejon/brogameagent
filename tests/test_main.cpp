@@ -2,6 +2,8 @@
 #include <cmath>
 
 #include <brogameagent/brogameagent.h>
+#include <brogameagent/grid/obs_window.h>
+#include <brogameagent/grid/frame_stack.h>
 
 #include <cassert>
 #include <cstdio>
@@ -4167,6 +4169,202 @@ TEST(generic_mcts_dirichlet_noise_explores_root) {
     // And "right" should be visited materially more under noise than
     // without it — that's the whole point of mixing in exploration mass.
     CHECK(v_on[1] > v_off[1]);
+}
+
+// ─── grid::ObsWindow / FrameStack Tests ────────────────────────────────────
+
+TEST(obs_window_layout_invariants) {
+    using namespace brogameagent::grid;
+    ObsWindowSpec s;
+    s.cols_behind = 2; s.cols_ahead = 3;
+    s.rows_up = 1;     s.rows_down = 1;
+    s.tile_channels = 2;
+    s.self_block_size = 5;
+    EntityLayerSpec layer;
+    layer.channels = 3;
+    layer.enumerate_fn = [] { return size_t{0}; };
+    layer.sample_fn    = [](size_t) { return EntityCell{}; };
+    ObsWindow win(s, [](int, int, float* o){ o[0]=0; o[1]=0; return true; }, {layer});
+    const auto& L = win.layout();
+    CHECK(L.cols == 6);
+    CHECK(L.rows == 3);
+    CHECK(L.tile_offset == 0);
+    CHECK(L.tile_size == 6 * 3 * 2);
+    CHECK(L.layers.size() == 1);
+    CHECK(L.layers[0].offset == L.tile_size);
+    CHECK(L.layers[0].size   == 6 * 3 * 3);
+    CHECK(L.self_offset == L.tile_size + L.layers[0].size);
+    CHECK(L.self_size   == 5);
+    CHECK(L.total       == L.self_offset + 5);
+    CHECK(win.out_dim() == L.total);
+}
+
+TEST(obs_window_tile_sampling_and_oob) {
+    using namespace brogameagent::grid;
+    ObsWindowSpec s;
+    s.cols_behind = 1; s.cols_ahead = 1;
+    s.rows_up = 0;     s.rows_down = 0;
+    s.tile_channels = 1;
+    s.oob_tile = {7.0f};
+    // World is solid at col=0 only; everything else is OOB.
+    auto tile = [](int col, int /*row*/, float* o) -> bool {
+        if (col == 0) { o[0] = 3.0f; return true; }
+        return false;   // OOB substitution path
+    };
+    ObsWindow win(s, tile, {});
+    auto out = win.build(0, 0, {});
+    // window cols = [-1, 0, 1] → [oob, 3, oob] → [7, 3, 7]
+    CHECK(out.size() == 3);
+    CHECK_NEAR(out[0], 7.0f, 1e-6f);
+    CHECK_NEAR(out[1], 3.0f, 1e-6f);
+    CHECK_NEAR(out[2], 7.0f, 1e-6f);
+}
+
+TEST(obs_window_entity_rasterizes_relative_to_ego) {
+    using namespace brogameagent::grid;
+    ObsWindowSpec s;
+    s.cols_behind = 1; s.cols_ahead = 1;
+    s.rows_up = 1;     s.rows_down = 1;
+    s.tile_channels = 1;
+    struct Ent { int col, row; float v; };
+    std::vector<Ent> ents = { {5, 5, 1.0f}, {7, 6, 2.0f}, {99, 99, 9.0f} };
+    EntityLayerSpec layer;
+    layer.channels = 1;
+    layer.enumerate_fn = [&] { return ents.size(); };
+    layer.sample_fn    = [&](size_t i) {
+        EntityCell c; c.col = ents[i].col; c.row = ents[i].row;
+        c.values = { ents[i].v }; return c;
+    };
+    ObsWindow win(s, [](int,int,float* o){ o[0]=0; return true; }, {layer});
+    auto out = win.build(6, 5, {});
+    // window is 3 cols × 3 rows; offsets:
+    //   ego at (col=1, row=1) maps to world (6,5)
+    //   ent (5,5) → window (0,1) — "behind, same row"
+    //   ent (7,6) → window (2,2) — "ahead, below"
+    //   ent (99,99) — out of window, must not appear
+    int tile_size = 3 * 3 * 1;
+    int layer_off = tile_size;
+    auto cell = [&](int wc, int wr) { return out[layer_off + (wr*3 + wc)]; };
+    CHECK_NEAR(cell(0, 1), 1.0f, 1e-6f);
+    CHECK_NEAR(cell(2, 2), 2.0f, 1e-6f);
+    // Center cell (ego) should be untouched (no entity there).
+    CHECK_NEAR(cell(1, 1), 0.0f, 1e-6f);
+}
+
+TEST(obs_window_entity_layer_modes) {
+    using namespace brogameagent::grid;
+    ObsWindowSpec s;
+    s.cols_behind = 0; s.cols_ahead = 0;
+    s.rows_up = 0;     s.rows_down = 0;
+    s.tile_channels = 1;
+    struct E { int col, row; float v; };
+    std::vector<E> ents = { {0,0, 1.0f}, {0,0, 2.0f}, {0,0, 4.0f} };
+    auto enumerate = [&] { return ents.size(); };
+    auto sample = [&](size_t i) {
+        EntityCell c; c.col=ents[i].col; c.row=ents[i].row; c.values={ents[i].v}; return c;
+    };
+    {
+        EntityLayerSpec L; L.channels=1; L.overwrite=false;
+        L.enumerate_fn=enumerate; L.sample_fn=sample;
+        ObsWindow win(s, [](int,int,float* o){o[0]=0;return true;}, {L});
+        auto out = win.build(0, 0, {});
+        // additive: 1+2+4=7
+        CHECK_NEAR(out[1], 7.0f, 1e-6f);   // out[0] is tile, out[1] is layer
+    }
+    {
+        EntityLayerSpec L; L.channels=1; L.overwrite=true;
+        L.enumerate_fn=enumerate; L.sample_fn=sample;
+        ObsWindow win(s, [](int,int,float* o){o[0]=0;return true;}, {L});
+        auto out = win.build(0, 0, {});
+        // last write wins: 4
+        CHECK_NEAR(out[1], 4.0f, 1e-6f);
+    }
+}
+
+TEST(obs_window_normalizers_apply_after_accumulate) {
+    using namespace brogameagent::grid;
+    ObsWindowSpec s;
+    s.cols_behind = 0; s.cols_ahead = 0;
+    s.rows_up = 0;     s.rows_down = 0;
+    s.tile_channels = 1;
+    s.tile_normalize = {0.5f};
+    EntityLayerSpec L;
+    L.channels = 1;
+    L.normalize = {0.25f};
+    std::vector<std::pair<int,int>> dummy = {{0,0},{0,0}};
+    L.enumerate_fn = [&]{ return dummy.size(); };
+    L.sample_fn    = [&](size_t){ EntityCell c; c.col=0; c.row=0; c.values={4.0f}; return c; };
+    ObsWindow win(s, [](int,int,float* o){o[0]=2.0f;return true;}, {L});
+    auto out = win.build(0,0,{});
+    CHECK_NEAR(out[0], 2.0f * 0.5f, 1e-6f);             // tile post-normalize
+    CHECK_NEAR(out[1], (4.0f + 4.0f) * 0.25f, 1e-6f);  // accumulate then normalize
+}
+
+TEST(obs_window_self_block_copied) {
+    using namespace brogameagent::grid;
+    ObsWindowSpec s;
+    s.cols_behind = 0; s.cols_ahead = 0;
+    s.rows_up = 0;     s.rows_down = 0;
+    s.tile_channels = 1;
+    s.self_block_size = 4;
+    ObsWindow win(s, [](int,int,float* o){o[0]=0;return true;}, {});
+    auto out = win.build(0, 0, {1.0f, 2.0f, 3.0f});  // shorter than self block
+    CHECK(out.size() == 5);
+    CHECK_NEAR(out[1], 1.0f, 1e-6f);
+    CHECK_NEAR(out[2], 2.0f, 1e-6f);
+    CHECK_NEAR(out[3], 3.0f, 1e-6f);
+    CHECK_NEAR(out[4], 0.0f, 1e-6f);   // missing self entry padded to 0
+}
+
+TEST(frame_stack_zero_initialized_and_pads_leading_frames) {
+    using namespace brogameagent::grid;
+    FrameStack fs(3, 4);
+    CHECK(fs.out_dim() == 12);
+    CHECK(fs.filled() == 0);
+    auto out = fs.read();
+    for (float v : out) CHECK_NEAR(v, 0.0f, 1e-6f);
+    // Push one frame; the freshest frame must be the *last* k-block.
+    float frame[] = {1.0f, 2.0f, 3.0f};
+    fs.push(frame);
+    out = fs.read();
+    // Slots [0..2] zero (pad), slot 3 holds frame.
+    for (int i = 0; i < 9; ++i) CHECK_NEAR(out[i], 0.0f, 1e-6f);
+    CHECK_NEAR(out[9],  1.0f, 1e-6f);
+    CHECK_NEAR(out[10], 2.0f, 1e-6f);
+    CHECK_NEAR(out[11], 3.0f, 1e-6f);
+}
+
+TEST(frame_stack_chronological_order_when_full) {
+    using namespace brogameagent::grid;
+    FrameStack fs(1, 3);
+    float a = 1.0f, b = 2.0f, c = 3.0f, d = 4.0f, e = 5.0f;
+    fs.push(&a); fs.push(&b); fs.push(&c);
+    auto out = fs.read();
+    CHECK_NEAR(out[0], 1.0f, 1e-6f);
+    CHECK_NEAR(out[1], 2.0f, 1e-6f);
+    CHECK_NEAR(out[2], 3.0f, 1e-6f);   // freshest last
+    fs.push(&d);  // evicts oldest (a)
+    out = fs.read();
+    CHECK_NEAR(out[0], 2.0f, 1e-6f);
+    CHECK_NEAR(out[1], 3.0f, 1e-6f);
+    CHECK_NEAR(out[2], 4.0f, 1e-6f);
+    fs.push(&e);
+    out = fs.read();
+    CHECK_NEAR(out[0], 3.0f, 1e-6f);
+    CHECK_NEAR(out[1], 4.0f, 1e-6f);
+    CHECK_NEAR(out[2], 5.0f, 1e-6f);
+}
+
+TEST(frame_stack_reset_clears_history) {
+    using namespace brogameagent::grid;
+    FrameStack fs(1, 2);
+    float a = 7.0f;
+    fs.push(&a); fs.push(&a); fs.push(&a);
+    fs.reset();
+    CHECK(fs.filled() == 0);
+    auto out = fs.read();
+    CHECK_NEAR(out[0], 0.0f, 1e-6f);
+    CHECK_NEAR(out[1], 0.0f, 1e-6f);
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────

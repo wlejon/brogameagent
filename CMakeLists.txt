@@ -61,6 +61,8 @@ add_library(brogameagent STATIC
     src/learn/neural_adapters.cpp
     src/learn/gumbel.cpp
     src/learn/contrastive.cpp
+    # --- Grid-world / platformer training kit ---
+    src/grid/obs_window.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 
