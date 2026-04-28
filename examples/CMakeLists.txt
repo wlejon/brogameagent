@@ -13,6 +13,7 @@ set(_brogameagent_examples
     12_record_and_read
     13_capabilities_demo
     14_fog_of_war
+    15_grid_corridor
 )
 
 foreach(ex IN LISTS _brogameagent_examples)
