@@ -4,6 +4,7 @@
 #include <brogameagent/brogameagent.h>
 #include <brogameagent/grid/obs_window.h>
 #include <brogameagent/grid/frame_stack.h>
+#include <brogameagent/grid/failure_tape.h>
 
 #include <cassert>
 #include <cstdio>
@@ -4365,6 +4366,83 @@ TEST(frame_stack_reset_clears_history) {
     auto out = fs.read();
     CHECK_NEAR(out[0], 0.0f, 1e-6f);
     CHECK_NEAR(out[1], 0.0f, 1e-6f);
+}
+
+// ─── grid::FailureTape Tests ────────────────────────────────────────────────
+
+TEST(failure_tape_records_only_tail_depth) {
+    using namespace brogameagent::grid;
+    FailureTapeConfig cfg; cfg.tape_depth = 3; cfg.ring_capacity = 16;
+    cfg.penalty = 0.5f; cfg.floor = 0.05f;
+    FailureTape tape(cfg);
+    std::vector<FailureStep> tail;
+    for (int i = 0; i < 10; ++i) tail.push_back({"S", i});
+    tape.record_failure(tail);
+    CHECK(tape.size() == 3);
+    // Only the last 3 actions (7,8,9) should be counted; 0..6 must be 1.0.
+    auto m = tape.multipliers("S", 10);
+    for (int a = 0; a < 7; ++a) CHECK_NEAR(m[a], 1.0f, 1e-6f);
+    CHECK_NEAR(m[7], 0.5f, 1e-6f);
+    CHECK_NEAR(m[8], 0.5f, 1e-6f);
+    CHECK_NEAR(m[9], 0.5f, 1e-6f);
+}
+
+TEST(failure_tape_multiplier_compounds_on_repeats_and_clamps_at_floor) {
+    using namespace brogameagent::grid;
+    FailureTapeConfig cfg; cfg.tape_depth = 100; cfg.ring_capacity = 256;
+    cfg.penalty = 0.5f; cfg.floor = 0.1f;
+    FailureTape tape(cfg);
+    std::vector<FailureStep> t = { {"X", 2}, {"X", 2}, {"X", 2}, {"X", 2}, {"X", 2} };
+    tape.record_failure(t);
+    auto m = tape.multipliers("X", 4);
+    // 0.5^5 = 0.03125 < 0.1 floor → clamps.
+    CHECK_NEAR(m[2], 0.1f, 1e-6f);
+    // Other actions unaffected.
+    CHECK_NEAR(m[0], 1.0f, 1e-6f);
+}
+
+TEST(failure_tape_unknown_sig_is_identity) {
+    using namespace brogameagent::grid;
+    FailureTape tape;
+    auto m = tape.multipliers("never_seen", 6);
+    for (float v : m) CHECK_NEAR(v, 1.0f, 1e-6f);
+}
+
+TEST(failure_tape_ring_eviction_drops_old_counts) {
+    using namespace brogameagent::grid;
+    FailureTapeConfig cfg; cfg.tape_depth = 100; cfg.ring_capacity = 4;
+    cfg.penalty = 0.5f; cfg.floor = 0.0f;
+    FailureTape tape(cfg);
+    // Fill ring with one (S,1) then push 4 (T,2) — S must be fully evicted.
+    tape.record_failure({ {"S", 1} });
+    tape.record_failure({ {"T", 2}, {"T", 2}, {"T", 2}, {"T", 2} });
+    CHECK(tape.size() == 4);
+    auto mS = tape.multipliers("S", 4);
+    for (float v : mS) CHECK_NEAR(v, 1.0f, 1e-6f);
+    auto mT = tape.multipliers("T", 4);
+    CHECK_NEAR(mT[2], 0.5f * 0.5f * 0.5f * 0.5f, 1e-6f);
+}
+
+TEST(failure_tape_apply_priors_in_place) {
+    using namespace brogameagent::grid;
+    FailureTape tape;
+    tape.record_failure({ {"S", 1}, {"S", 1} });
+    std::vector<float> prior = {0.25f, 0.50f, 0.25f, 0.0f};
+    tape.apply_priors("S", prior.data(), static_cast<int>(prior.size()));
+    CHECK_NEAR(prior[0], 0.25f, 1e-6f);
+    CHECK_NEAR(prior[1], 0.50f * 0.25f, 1e-6f);
+    CHECK_NEAR(prior[2], 0.25f, 1e-6f);
+}
+
+TEST(failure_tape_clear_resets_state) {
+    using namespace brogameagent::grid;
+    FailureTape tape;
+    tape.record_failure({ {"S", 1} });
+    CHECK(tape.size() == 1);
+    tape.clear();
+    CHECK(tape.size() == 0);
+    auto m = tape.multipliers("S", 4);
+    for (float v : m) CHECK_NEAR(v, 1.0f, 1e-6f);
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
