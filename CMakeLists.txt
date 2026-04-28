@@ -63,6 +63,7 @@ add_library(brogameagent STATIC
     src/learn/contrastive.cpp
     # --- Grid-world / platformer training kit ---
     src/grid/obs_window.cpp
+    src/grid/generic_recorder.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 

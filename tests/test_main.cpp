@@ -8,6 +8,7 @@
 #include <brogameagent/grid/best_crop.h>
 #include <brogameagent/grid/shaping.h>
 #include <brogameagent/grid/bc_ingest.h>
+#include <brogameagent/grid/generic_recorder.h>
 
 #include <cassert>
 #include <cstdio>
@@ -4664,6 +4665,80 @@ TEST(bc_ingest_drops_demonstrations_with_illegal_action) {
     // Generation stops on the first illegal-action step; the trace was
     // empty before that, so nothing is emitted.
     CHECK(sits.empty());
+}
+
+// ─── grid::GenericRecorder Tests ───────────────────────────────────────────
+
+TEST(generic_recorder_round_trip) {
+    using namespace brogameagent::grid;
+    const char* path = "test_grid_replay.bgargrid";
+    {
+        GenericRecorder rec;
+        std::vector<FieldDef> roster = { {"id", FieldType::I32}, {"kind", FieldType::I32} };
+        std::vector<FieldDef> frame  = { {"id", FieldType::I32}, {"x", FieldType::F32}, {"y", FieldType::F32} };
+        std::vector<FieldDef> events = { {"target", FieldType::I32}, {"amount", FieldType::F32} };
+        CHECK(rec.open(path, /*ep*/ 7, /*seed*/ 0xC0DE, /*dt*/ 1.0f / 60.0f,
+                       roster, frame, events));
+        rec.write_roster({
+            { int32_t{0}, int32_t{1} },
+            { int32_t{1}, int32_t{2} },
+        });
+        rec.record_frame(0, 0.0f,
+            { { int32_t{0}, 1.0f, 2.0f }, { int32_t{1}, 3.0f, 4.0f } },
+            {});
+        rec.record_frame(1, 1.0f / 60.0f,
+            { { int32_t{0}, 1.5f, 2.5f }, { int32_t{1}, 3.5f, 4.5f } },
+            { { int32_t{1}, 12.0f } });
+        CHECK(rec.frame_count() == 2);
+        CHECK(rec.close());
+    }
+    {
+        GenericReplayReader rr;
+        CHECK(rr.open(path));
+        CHECK(rr.episode_id() == 7);
+        CHECK(rr.seed()       == 0xC0DEu);
+        CHECK_NEAR(rr.dt(), 1.0f / 60.0f, 1e-6f);
+        CHECK(rr.frame_count() == 2);
+        CHECK(rr.roster().size() == 2);
+        CHECK(std::get<int32_t>(rr.roster()[0][0]) == 0);
+        CHECK(std::get<int32_t>(rr.roster()[1][1]) == 2);
+        auto f0 = rr.frame(0);
+        CHECK(f0.step_idx == 0);
+        CHECK(f0.rows.size() == 2);
+        CHECK_NEAR(std::get<float>(f0.rows[0][1]), 1.0f, 1e-6f);
+        auto f1 = rr.frame(1);
+        CHECK(f1.events.size() == 1);
+        CHECK_NEAR(std::get<float>(f1.events[0][1]), 12.0f, 1e-6f);
+        // Trajectory of "x" for row index 0 across both frames.
+        auto traj = rr.trajectory(0, "x");
+        CHECK(traj.size() == 2);
+        CHECK_NEAR(std::get<float>(traj[0]), 1.0f, 1e-6f);
+        CHECK_NEAR(std::get<float>(traj[1]), 1.5f, 1e-6f);
+    }
+    std::remove(path);
+}
+
+TEST(generic_recorder_handles_no_events_schema) {
+    using namespace brogameagent::grid;
+    const char* path = "test_grid_replay_no_events.bgargrid";
+    {
+        GenericRecorder rec;
+        std::vector<FieldDef> roster = { {"id", FieldType::I32} };
+        std::vector<FieldDef> frame  = { {"id", FieldType::I32}, {"score", FieldType::I64} };
+        CHECK(rec.open(path, 1, 1, 1.0f, roster, frame, {}));
+        rec.write_roster({ { int32_t{42} } });
+        rec.record_frame(0, 0.0f, { { int32_t{42}, int64_t{100} } });
+        rec.close();
+    }
+    {
+        GenericReplayReader rr;
+        CHECK(rr.open(path));
+        CHECK(rr.event_schema().empty());
+        auto f = rr.frame(0);
+        CHECK(f.events.empty());
+        CHECK(std::get<int64_t>(f.rows[0][1]) == int64_t{100});
+    }
+    std::remove(path);
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
