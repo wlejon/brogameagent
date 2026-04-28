@@ -7,6 +7,7 @@
 #include <brogameagent/grid/failure_tape.h>
 #include <brogameagent/grid/best_crop.h>
 #include <brogameagent/grid/shaping.h>
+#include <brogameagent/grid/bc_ingest.h>
 
 #include <cassert>
 #include <cstdio>
@@ -4565,6 +4566,104 @@ TEST(stall_detector_reset_clears_window) {
     CHECK(!det.tick(1.0f));   // refilling
     CHECK(!det.tick(1.0f));
     CHECK(det.tick(1.0f));    // stalled again
+}
+
+// ─── grid::BC ingestion Tests ──────────────────────────────────────────────
+
+namespace {
+// Tiny 1D corridor env used by BC + harness tests.
+//   state = int position in [0, 10]
+//   actions: 0=left, 1=right, 2=stay
+//   reward: +1 on reaching pos==goal, 0 otherwise; episode ends on goal
+struct CorridorState {
+    int pos = 0;
+    int goal = 10;
+    bool done = false;
+};
+
+mcts::GenericEnv make_corridor_for_bc(CorridorState& st) {
+    mcts::GenericEnv env;
+    env.num_actions = 3;
+    env.snapshot_fn = [&]() -> std::any { return st; };
+    env.restore_fn  = [&](const std::any& s) { st = std::any_cast<CorridorState>(s); };
+    env.legal_actions_fn = [&]() -> std::vector<int> {
+        if (st.done) return {};
+        std::vector<int> a;
+        if (st.pos > 0) a.push_back(0);
+        a.push_back(1);
+        a.push_back(2);
+        return a;
+    };
+    env.observe_fn = [&]() -> std::vector<float> {
+        return { static_cast<float>(st.pos) / static_cast<float>(st.goal) };
+    };
+    env.step_fn = [&](int action) -> mcts::GenericStepResult {
+        mcts::GenericStepResult r;
+        if (st.done) { r.done = true; return r; }
+        if (action == 0 && st.pos > 0) st.pos--;
+        else if (action == 1) st.pos++;
+        if (st.pos >= st.goal) { st.done = true; r.reward = 1.0f; r.done = true; }
+        return r;
+    };
+    return env;
+}
+} // namespace
+
+TEST(bc_ingest_emits_situations_with_one_hot_policy) {
+    using namespace brogameagent::grid;
+    CorridorState st;
+    auto env = make_corridor_for_bc(st);
+    // Heuristic: always go right.
+    auto policy = [](const std::vector<float>&, const std::vector<int>&) { return 1; };
+    BCConfig cfg; cfg.rollout_horizon = 32; cfg.min_return = 0.0f; cfg.gamma = 0.9f;
+    std::vector<std::any> starts = { CorridorState{} };  // start at pos=0
+    auto sits = generate_bc_situations(env, policy, starts, cfg);
+    CHECK(!sits.empty());
+    // One step per move toward goal — corridor is length 10, so exactly 10
+    // situations until goal.
+    CHECK(sits.size() == 10);
+    for (const auto& s : sits) {
+        CHECK(s.policy_target.size() == 3);
+        // One-hot at action 1 (right).
+        CHECK_NEAR(s.policy_target[1], 1.0f, 1e-6f);
+        CHECK_NEAR(s.policy_target[0], 0.0f, 1e-6f);
+        CHECK_NEAR(s.policy_target[2], 0.0f, 1e-6f);
+        CHECK(s.action_mask.size() == 3);
+        // Action 1 must be legal at every step.
+        CHECK_NEAR(s.action_mask[1], 1.0f, 1e-6f);
+    }
+    // Value-to-go should be monotonically increasing (closer to terminal
+    // reward => higher discounted return).
+    for (size_t i = 1; i < sits.size(); ++i)
+        CHECK(sits[i].value_target >= sits[i - 1].value_target - 1e-5f);
+    // Final step: reward 1 with no further discount.
+    CHECK_NEAR(sits.back().value_target, 1.0f, 1e-5f);
+}
+
+TEST(bc_ingest_filters_below_min_return) {
+    using namespace brogameagent::grid;
+    CorridorState st;
+    auto env = make_corridor_for_bc(st);
+    // Heuristic that just stays — return 0, below threshold.
+    auto policy = [](const std::vector<float>&, const std::vector<int>&) { return 2; };
+    BCConfig cfg; cfg.rollout_horizon = 8; cfg.min_return = 0.5f;
+    std::vector<std::any> starts = { CorridorState{} };
+    auto sits = generate_bc_situations(env, policy, starts, cfg);
+    CHECK(sits.empty());
+}
+
+TEST(bc_ingest_drops_demonstrations_with_illegal_action) {
+    using namespace brogameagent::grid;
+    CorridorState st;
+    auto env = make_corridor_for_bc(st);
+    // Heuristic always picks "left", which is illegal at pos=0 (start state).
+    auto policy = [](const std::vector<float>&, const std::vector<int>&) { return 0; };
+    BCConfig cfg; cfg.rollout_horizon = 8; cfg.min_return = 0.0f;
+    std::vector<std::any> starts = { CorridorState{} };
+    auto sits = generate_bc_situations(env, policy, starts, cfg);
+    // Generation stops on the first illegal-action step; the trace was
+    // empty before that, so nothing is emitted.
+    CHECK(sits.empty());
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
