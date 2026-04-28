@@ -64,6 +64,7 @@ add_library(brogameagent STATIC
     # --- Grid-world / platformer training kit ---
     src/grid/obs_window.cpp
     src/grid/generic_recorder.cpp
+    src/grid/harness.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
 

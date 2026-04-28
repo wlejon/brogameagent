@@ -9,6 +9,7 @@
 #include <brogameagent/grid/shaping.h>
 #include <brogameagent/grid/bc_ingest.h>
 #include <brogameagent/grid/generic_recorder.h>
+#include <brogameagent/grid/harness.h>
 
 #include <cassert>
 #include <cstdio>
@@ -4739,6 +4740,109 @@ TEST(generic_recorder_handles_no_events_schema) {
         CHECK(std::get<int64_t>(f.rows[0][1]) == int64_t{100});
     }
     std::remove(path);
+}
+
+// ─── grid::GridTrainer Tests ───────────────────────────────────────────────
+
+TEST(harness_step_sync_drains_situations_and_runs_sgd) {
+    using namespace brogameagent::grid;
+    GridTrainerConfig cfg;
+    cfg.net.in_dim      = 4;
+    cfg.net.hidden      = {8, 8};
+    cfg.net.value_hidden = 4;
+    cfg.net.num_actions = 3;
+    cfg.net.seed        = 1;
+    cfg.buffer_capacity = 1024;
+    cfg.trainer.batch   = 4;
+    cfg.trainer.lr      = 0.01f;
+    cfg.trainer.publish_every = 4;
+    GridTrainer h(std::move(cfg));
+
+    // Push some hand-built situations.
+    for (int i = 0; i < 8; ++i) {
+        learn::GenericSituation s;
+        s.obs = {0.1f, 0.2f, 0.3f, 0.4f};
+        s.policy_target = {1.0f, 0.0f, 0.0f};
+        s.action_mask   = {1.0f, 1.0f, 1.0f};
+        s.value_target  = 0.5f;
+        h.ingest_situation(std::move(s));
+    }
+    h.step_sync(/*sgd_steps*/ 8);
+    auto st = h.stats();
+    CHECK(st.buffer_size >= 8);
+    CHECK(st.total_steps >= 1);
+    // publish_every=4, 8 steps → at least one publish event.
+    auto evs = h.poll_events();
+    bool saw_pub = false;
+    for (auto& e : evs)
+        if (e.kind == GridEvent::Kind::WeightsUpdated) { saw_pub = true; break; }
+    CHECK(saw_pub);
+    CHECK(h.weights().version() >= 1);
+}
+
+TEST(harness_episode_ingest_routes_to_best_and_failure_tape) {
+    using namespace brogameagent::grid;
+    GridTrainerConfig cfg;
+    cfg.net.in_dim      = 1; cfg.net.hidden = {4}; cfg.net.value_hidden = 4;
+    cfg.net.num_actions = 2;
+    cfg.best_window     = 4;
+    GridTrainer h(std::move(cfg));
+
+    EpisodeSummary good;
+    good.total_return  = 5.0f;
+    good.depth         = 20;
+    good.failed        = false;
+    good.start_snapshot = std::any{int{1}};
+    good.action_prefix = {1, 1, 1};
+    h.ingest_episode(std::move(good));
+
+    EpisodeSummary bad;
+    bad.total_return  = -1.0f;
+    bad.depth         = 5;
+    bad.failed        = true;
+    bad.failure_tail  = { {"S", 0}, {"S", 0} };
+    h.ingest_episode(std::move(bad));
+
+    h.step_sync(0);   // drain only
+
+    CHECK(h.best_crop().size() == 1);
+    CHECK(h.best_crop().sorted()[0]->depth == 20);
+    auto m = h.failure_tape().multipliers("S", 2);
+    CHECK(m[0] < 1.0f);   // penalty applied
+    CHECK(m[1] == 1.0f);
+    auto evs = h.poll_events();
+    int eps = 0;
+    for (auto& e : evs) if (e.kind == GridEvent::Kind::EpisodeIngested) ++eps;
+    CHECK(eps == 2);
+}
+
+TEST(harness_async_thread_runs_and_stops_clean) {
+    using namespace brogameagent::grid;
+    GridTrainerConfig cfg;
+    cfg.net.in_dim = 2; cfg.net.hidden = {4}; cfg.net.value_hidden = 4;
+    cfg.net.num_actions = 2;
+    cfg.trainer.batch = 2;
+    cfg.trainer.publish_every = 2;
+    cfg.steps_per_tick = 1;
+    GridTrainer h(std::move(cfg));
+    h.start();
+    for (int i = 0; i < 8; ++i) {
+        learn::GenericSituation s;
+        s.obs = {0.0f, 1.0f};
+        s.policy_target = {1.0f, 0.0f};
+        s.action_mask = {1.0f, 1.0f};
+        s.value_target = 0.0f;
+        h.ingest_situation(std::move(s));
+    }
+    // Give the thread a moment to drain + train.
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (h.stats().total_steps > 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(h.stats().total_steps > 0);
+    h.stop();
+    CHECK(!h.running());
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
