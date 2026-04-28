@@ -3986,6 +3986,189 @@ TEST(infoset_mcts_restores_world) {
     CHECK(planner.last_stats().iterations > 0);
 }
 
+// ─── GenericMcts Tests ──────────────────────────────────────────────────────
+//
+// Tiny corridor env: states 0..N-1 with a goal at N-1. Actions are
+// 0=left, 1=right, 2=stay. Step reward is -0.05 except entering the goal
+// which pays +1 and terminates. Optimal policy from any non-goal state is
+// "right". Used to verify that GenericMcts converges via random rollout
+// and via a learned value function, and that snapshot/restore preserves
+// the caller's pre-search state.
+
+namespace {
+
+struct CorridorEnv {
+    int pos    = 0;
+    int length = 6;
+
+    int  step_action(int a) {
+        if (a == 0) pos = std::max(0, pos - 1);
+        else if (a == 1) pos = std::min(length - 1, pos + 1);
+        // a == 2: stay.
+        return pos;
+    }
+    bool at_goal() const { return pos == length - 1; }
+};
+
+mcts::GenericEnv make_corridor_env(CorridorEnv& env) {
+    mcts::GenericEnv g;
+    g.num_actions = 3;
+    g.snapshot_fn = [&]() -> std::any { return env; };
+    g.restore_fn  = [&](const std::any& s) { env = std::any_cast<CorridorEnv>(s); };
+    g.step_fn     = [&](int a) -> mcts::GenericStepResult {
+        if (env.at_goal()) return {0.0f, true};
+        env.step_action(a);
+        const bool done = env.at_goal();
+        const float r = done ? 1.0f : -0.05f;
+        return {r, done};
+    };
+    g.legal_actions_fn = [&]() -> std::vector<int> { return {0, 1, 2}; };
+    g.observe_fn       = [&]() -> std::vector<float> {
+        return { static_cast<float>(env.pos) / static_cast<float>(env.length - 1) };
+    };
+    return g;
+}
+
+} // namespace
+
+TEST(generic_mcts_corridor_random_rollout_picks_right) {
+    CorridorEnv env;
+    env.pos = 0;
+    auto g = make_corridor_env(env);
+    mcts::GenericMcts m(std::move(g));
+    mcts::GenericMctsConfig cfg;
+    cfg.iterations    = 400;
+    cfg.rollout_depth = 8;
+    cfg.gamma         = 0.99f;
+    cfg.c_puct        = 1.5f;
+    m.set_config(cfg);
+
+    const int action = m.search();
+    CHECK(action == 1);                    // optimal
+    CHECK(m.last_stats().iterations == 400);
+    CHECK(m.last_stats().best_visits > 0);
+    // Search must leave the env exactly where the caller left it.
+    CHECK(env.pos == 0);
+}
+
+TEST(generic_mcts_corridor_value_fn_picks_right) {
+    CorridorEnv env;
+    env.pos = 2;
+    auto g = make_corridor_env(env);
+    mcts::GenericMcts m(std::move(g));
+    mcts::GenericMctsConfig cfg;
+    cfg.iterations = 200;
+    cfg.gamma      = 0.99f;
+    m.set_config(cfg);
+
+    // Value head: closer to goal ⇒ higher value, in [-1, 1].
+    m.set_value_fn([](const std::vector<float>& obs) -> float {
+        return obs.empty() ? 0.0f : 2.0f * obs[0] - 1.0f;
+    });
+
+    const int action = m.search();
+    CHECK(action == 1);
+    CHECK(env.pos == 2);                   // unchanged
+}
+
+TEST(generic_mcts_root_visits_normalize) {
+    CorridorEnv env;
+    auto g = make_corridor_env(env);
+    mcts::GenericMcts m(std::move(g));
+    mcts::GenericMctsConfig cfg;
+    cfg.iterations = 100;
+    m.set_config(cfg);
+    m.search();
+    const auto v = m.root_visits();
+    CHECK(v.size() == 3u);
+    float s = 0.0f;
+    for (float x : v) { CHECK(x >= 0.0f); s += x; }
+    CHECK_NEAR(s, 1.0f, 1e-4f);
+    // The "right" action (index 1) should dominate visits.
+    CHECK(v[1] > v[0]);
+    CHECK(v[1] > v[2]);
+}
+
+TEST(generic_mcts_advance_root_preserves_subtree) {
+    CorridorEnv env;
+    auto g = make_corridor_env(env);
+    mcts::GenericMcts m(std::move(g));
+    mcts::GenericMctsConfig cfg;
+    cfg.iterations = 200;
+    m.set_config(cfg);
+
+    const int a = m.search();
+    CHECK(a == 1);
+    const int tree_before = m.last_stats().tree_size;
+    CHECK(tree_before > 1);
+
+    // Commit the action on the real env, advance the tree, and search
+    // again — the second search should still pick right after subtree
+    // promotion.
+    env.step_action(a);
+    m.advance_root(a);
+    const int a2 = m.search();
+    CHECK(a2 == 1);
+}
+
+TEST(generic_mcts_prior_fn_biases_search) {
+    CorridorEnv env;
+    auto g = make_corridor_env(env);
+    mcts::GenericMcts m(std::move(g));
+    mcts::GenericMctsConfig cfg;
+    cfg.iterations = 60;
+    cfg.c_puct     = 2.0f;     // amplify the prior's effect
+    m.set_config(cfg);
+
+    // Adversarial prior pinning all probability mass on "left". With a
+    // small budget and an aggressive prior, search should follow the
+    // prior often enough that visits on left exceed visits on right.
+    m.set_prior_fn([](const std::vector<float>&,
+                      const std::vector<int>&) -> std::vector<float> {
+        return {1.0f, 0.0f, 0.0f};
+    });
+
+    m.search();
+    const auto v = m.root_visits();
+    CHECK(v[0] > v[1]);
+}
+
+TEST(generic_mcts_dirichlet_noise_explores_root) {
+    // Property: with an adversarial prior pinning all probability mass on
+    // one action, Dirichlet root noise must still allocate non-trivial
+    // visit budget to every legal action — that's what "exploration" means
+    // in the AlphaZero formulation. Whether right ultimately wins depends
+    // on the rollout signal; here we only test that no action is starved.
+    auto run = [](float dirichlet_alpha, float dirichlet_eps) {
+        CorridorEnv env;
+        auto g = make_corridor_env(env);
+        mcts::GenericMcts m(std::move(g));
+        mcts::GenericMctsConfig cfg;
+        cfg.iterations        = 200;
+        cfg.dirichlet_alpha   = dirichlet_alpha;
+        cfg.dirichlet_epsilon = dirichlet_eps;
+        cfg.seed              = 42ULL;
+        m.set_config(cfg);
+        m.set_prior_fn([](const std::vector<float>&,
+                          const std::vector<int>&) -> std::vector<float> {
+            return {1.0f, 0.0f, 0.0f};   // all mass on "left"
+        });
+        m.search();
+        return m.root_visits();
+    };
+
+    // Without noise: prior dominates, and "right"/"stay" can be near-zero.
+    const auto v_off = run(0.0f, 0.0f);
+    // With noise: every legal action must get some share.
+    const auto v_on = run(0.5f, 0.5f);
+    CHECK(v_on[0] > 0.0f);
+    CHECK(v_on[1] > 0.0f);
+    CHECK(v_on[2] > 0.0f);
+    // And "right" should be visited materially more under noise than
+    // without it — that's the whole point of mixing in exploration mass.
+    CHECK(v_on[1] > v_off[1]);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
