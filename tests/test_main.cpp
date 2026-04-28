@@ -5,6 +5,7 @@
 #include <brogameagent/grid/obs_window.h>
 #include <brogameagent/grid/frame_stack.h>
 #include <brogameagent/grid/failure_tape.h>
+#include <brogameagent/grid/best_crop.h>
 
 #include <cassert>
 #include <cstdio>
@@ -4443,6 +4444,80 @@ TEST(failure_tape_clear_resets_state) {
     CHECK(tape.size() == 0);
     auto m = tape.multipliers("S", 4);
     for (float v : m) CHECK_NEAR(v, 1.0f, 1e-6f);
+}
+
+// ─── grid::BestCrop Tests ──────────────────────────────────────────────────
+
+TEST(best_crop_orders_by_score) {
+    using namespace brogameagent::grid;
+    BestCropConfig cfg; cfg.capacity = 8; cfg.depth_bonus = 0.0f; cfg.age_decay = 0.0f;
+    BestCrop pool(cfg);
+    pool.push(std::any{1}, {}, /*score*/ 1.0f, 5);
+    pool.push(std::any{2}, {}, /*score*/ 5.0f, 5);
+    pool.push(std::any{3}, {}, /*score*/ 3.0f, 5);
+    auto sorted = pool.sorted();
+    CHECK(sorted.size() == 3);
+    CHECK_NEAR(sorted[0]->score, 5.0f, 1e-6f);
+    CHECK_NEAR(sorted[1]->score, 3.0f, 1e-6f);
+    CHECK_NEAR(sorted[2]->score, 1.0f, 1e-6f);
+}
+
+TEST(best_crop_capacity_drops_worst) {
+    using namespace brogameagent::grid;
+    BestCropConfig cfg; cfg.capacity = 2; cfg.age_decay = 0.0f;
+    BestCrop pool(cfg);
+    pool.push(std::any{}, {}, 1.0f, 0);
+    pool.push(std::any{}, {}, 5.0f, 0);
+    pool.push(std::any{}, {}, 3.0f, 0);   // pushes capacity over → drop 1.0
+    CHECK(pool.size() == 2);
+    auto sorted = pool.sorted();
+    CHECK_NEAR(sorted[0]->score, 5.0f, 1e-6f);
+    CHECK_NEAR(sorted[1]->score, 3.0f, 1e-6f);
+}
+
+TEST(best_crop_depth_bonus_breaks_tie) {
+    using namespace brogameagent::grid;
+    BestCropConfig cfg; cfg.capacity = 8; cfg.depth_bonus = 0.1f; cfg.age_decay = 0.0f;
+    BestCrop pool(cfg);
+    pool.push(std::any{}, {}, /*score*/ 5.0f, /*depth*/ 100);
+    pool.push(std::any{}, {}, /*score*/ 5.0f, /*depth*/ 10);
+    auto sorted = pool.sorted();
+    CHECK(sorted[0]->depth == 100);
+    CHECK(sorted[1]->depth == 10);
+}
+
+TEST(best_crop_age_decay_demotes_old_entries) {
+    using namespace brogameagent::grid;
+    BestCropConfig cfg; cfg.capacity = 8; cfg.depth_bonus = 0.0f; cfg.age_decay = 1.0f;
+    BestCrop pool(cfg);
+    pool.push(std::any{}, {}, 10.0f, 0);   // age 0 at push, will increase
+    // Push many newer-but-lower-score entries to age the first one out.
+    for (int i = 0; i < 20; ++i) pool.push(std::any{}, {}, 0.5f, 0);
+    auto sorted = pool.sorted();
+    // Head entry: score 0.5 with very small age beats score 10 - age*1.0.
+    // (10 - 20 = -10; vs 0.5 - 0 = 0.5)
+    CHECK_NEAR(sorted[0]->score, 0.5f, 1e-6f);
+}
+
+TEST(best_crop_seed_returns_snapshot_and_prefix) {
+    using namespace brogameagent::grid;
+    BestCrop pool({});
+    pool.push(std::any{int{42}}, {1, 2, 3}, /*score*/ 9.0f, 3);
+    std::mt19937_64 rng(0xC0DEull);
+    auto seed = pool.seed(rng);
+    CHECK(seed.snapshot.has_value());
+    CHECK(std::any_cast<int>(seed.snapshot) == 42);
+    CHECK(seed.prefix.size() == 3);
+    CHECK(seed.prefix[2] == 3);
+}
+
+TEST(best_crop_seed_empty_pool_is_default) {
+    using namespace brogameagent::grid;
+    BestCrop pool({});
+    std::mt19937_64 rng(1);
+    auto seed = pool.seed(rng);
+    CHECK(!seed.snapshot.has_value());
+    CHECK(seed.prefix.empty());
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
