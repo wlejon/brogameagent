@@ -6,6 +6,7 @@
 #include <brogameagent/grid/frame_stack.h>
 #include <brogameagent/grid/failure_tape.h>
 #include <brogameagent/grid/best_crop.h>
+#include <brogameagent/grid/shaping.h>
 
 #include <cassert>
 #include <cstdio>
@@ -4518,6 +4519,52 @@ TEST(best_crop_seed_empty_pool_is_default) {
     auto seed = pool.seed(rng);
     CHECK(!seed.snapshot.has_value());
     CHECK(seed.prefix.empty());
+}
+
+// ─── grid::Shaping Tests ───────────────────────────────────────────────────
+
+TEST(potential_shaper_returns_gamma_phi_diff) {
+    using namespace brogameagent::grid;
+    PotentialShaper sh(0.99f);
+    sh.reset(/*phi0*/ 1.0f);
+    float b = sh.step(2.0f);              // 0.99*2 - 1 = 0.98
+    CHECK_NEAR(b, 0.98f, 1e-5f);
+    b = sh.step(2.0f);                    // 0.99*2 - 2 = -0.02
+    CHECK_NEAR(b, -0.02f, 1e-5f);
+}
+
+TEST(potential_shaper_first_step_unprimed_returns_zero) {
+    using namespace brogameagent::grid;
+    PotentialShaper sh(0.99f);
+    float b = sh.step(5.0f);              // unprimed: latches, returns 0
+    CHECK_NEAR(b, 0.0f, 1e-6f);
+    b = sh.step(7.0f);                    // 0.99*7 - 5 = 1.93
+    CHECK_NEAR(b, 1.93f, 1e-5f);
+}
+
+TEST(stall_detector_fires_only_after_patience_samples_below_epsilon) {
+    using namespace brogameagent::grid;
+    StallDetector det(/*eps*/ 0.5f, /*patience*/ 4);
+    CHECK(!det.tick(0.0f));   // filling
+    CHECK(!det.tick(0.1f));
+    CHECK(!det.tick(0.2f));
+    // Now filled. Window = {0,0.1,0.2,X}; spread depends on next push.
+    CHECK(det.tick(0.3f));    // {0, 0.1, 0.2, 0.3} spread 0.3 < 0.5
+    CHECK(!det.tick(2.0f));   // {0.1, 0.2, 0.3, 2.0} spread 1.9 ≥ 0.5
+    CHECK(!det.tick(2.1f));   // still has 0.2 in window
+    CHECK(!det.tick(2.2f));   // still has 0.3
+    CHECK(det.tick(2.3f));    // {2.0,2.1,2.2,2.3} spread 0.3 < 0.5
+}
+
+TEST(stall_detector_reset_clears_window) {
+    using namespace brogameagent::grid;
+    StallDetector det(0.5f, 3);
+    det.tick(1.0f); det.tick(1.0f); det.tick(1.0f);
+    CHECK(det.tick(1.0f));    // stalled
+    det.reset();
+    CHECK(!det.tick(1.0f));   // refilling
+    CHECK(!det.tick(1.0f));
+    CHECK(det.tick(1.0f));    // stalled again
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
