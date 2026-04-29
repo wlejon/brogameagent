@@ -6,10 +6,35 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(MSVC)
-    add_compile_options(/MP /permissive- /utf-8)
+    # Restrict MSVC-only flags to CXX. nvcc forwards host args verbatim and
+    # things like /MP, /permissive-, /utf-8, /W4 either confuse its pipeline
+    # (single-input rule for /MP) or get parsed as nvcc options themselves.
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:/MP>
+        $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
+    )
     # Static CRT only when building standalone (not consumed as a subdirectory)
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+endif()
+
+# --- Optional CUDA backend ---
+option(BROGAMEAGENT_WITH_CUDA "Build GPU backend (CUDA)" OFF)
+if(BROGAMEAGENT_WITH_CUDA)
+    # RTX 4090 = sm_89. Set BEFORE enable_language(CUDA) so the language
+    # detection probes use the right arch and don't backfill sm_52.
+    if(NOT CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 89)
+    endif()
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    find_package(CUDAToolkit REQUIRED)
+    # Propagate static-CRT choice to nvcc-driven host compilation on MSVC.
+    if(MSVC AND DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+        set(CMAKE_CUDA_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
     endif()
 endif()
 
@@ -77,9 +102,30 @@ target_include_directories(brogameagent PRIVATE src)
 target_compile_features(brogameagent PUBLIC cxx_std_20)
 
 if(MSVC)
-    target_compile_options(brogameagent PRIVATE /W4)
+    target_compile_options(brogameagent PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4>)
 else()
-    target_compile_options(brogameagent PRIVATE -Wall -Wextra)
+    target_compile_options(brogameagent PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-Wextra>)
+endif()
+
+# --- GPU backend sources (gated; default OFF) ---
+if(BROGAMEAGENT_WITH_CUDA)
+    target_sources(brogameagent PRIVATE
+        src/nn/gpu/runtime.cu
+        src/nn/gpu/tensor.cu
+        src/nn/gpu/gemm.cu
+        src/nn/gpu/elementwise.cu
+        src/nn/gpu/softmax.cu
+        src/nn/gpu/layernorm.cu
+        src/nn/gpu/attention.cu
+        src/nn/gpu/optim.cu
+    )
+    target_link_libraries(brogameagent PUBLIC CUDA::cudart)
+    target_compile_definitions(brogameagent PUBLIC BGA_HAS_CUDA=1)
+    set_target_properties(brogameagent PROPERTIES
+        CUDA_STANDARD 17
+        CUDA_STANDARD_REQUIRED ON
+        CUDA_SEPARABLE_COMPILATION OFF
+    )
 endif()
 
 # --- Install / export ---
