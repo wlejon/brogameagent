@@ -4,6 +4,7 @@
 
 #include "brogameagent/nn/gpu/runtime.h"
 #include "brogameagent/nn/gpu/tensor.h"
+#include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/tensor.h"
 
 #include <chrono>
@@ -15,21 +16,32 @@ namespace brogameagent::learn {
 namespace gpu = brogameagent::nn::gpu;
 using brogameagent::nn::Tensor;
 
-BatchedInferenceServer::BatchedInferenceServer(
-    brogameagent::nn::PolicyValueNet* net, Config cfg)
+BatchedInferenceServer::BatchedInferenceServer(BatchedNet* net, Config cfg)
     : net_(net),
       cfg_(cfg),
-      in_dim_(net ? net->in_dim() : 0),
-      num_actions_(net ? net->num_actions() : 0) {
+      in_dim_(net ? net->input_dim() : 0),
+      num_actions_(net ? net->logits_dim() : 0) {
     if (!net_) throw std::runtime_error("BatchedInferenceServer: null net");
-    if (net_->device() != brogameagent::nn::Device::GPU) {
-        throw std::runtime_error(
-            "BatchedInferenceServer: net must be on Device::GPU");
-    }
     if (cfg_.max_batch_size < 1) cfg_.max_batch_size = 1;
     if (cfg_.max_wait_micros < 0) cfg_.max_wait_micros = 0;
     worker_ = std::thread(&BatchedInferenceServer::worker_loop_, this);
 }
+
+namespace {
+brogameagent::nn::PolicyValueNet* check_pvn_gpu_(
+    brogameagent::nn::PolicyValueNet* net) {
+    if (net && net->device() != brogameagent::nn::Device::GPU) {
+        throw std::runtime_error(
+            "BatchedInferenceServer: net must be on Device::GPU");
+    }
+    return net;
+}
+} // namespace
+
+BatchedInferenceServer::BatchedInferenceServer(
+    brogameagent::nn::PolicyValueNet* net, Config cfg)
+    : BatchedInferenceServer(static_cast<BatchedNet*>(check_pvn_gpu_(net)),
+                             cfg) {}
 
 BatchedInferenceServer::~BatchedInferenceServer() {
     {

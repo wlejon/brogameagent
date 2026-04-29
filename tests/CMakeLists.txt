@@ -175,4 +175,34 @@ if(BROGAMEAGENT_WITH_CUDA)
     endif()
     add_test(NAME brogameagent_gpu_mcts_server_test
              COMMAND brogameagent_gpu_mcts_server_test)
+
+    # SingleHeroNetTX::forward_batched parity test.
+    add_executable(brogameagent_gpu_tx_batched_test
+        gpu/test_single_hero_net_tx_batched.cpp
+    )
+    target_link_libraries(brogameagent_gpu_tx_batched_test PRIVATE brogameagent)
+    target_include_directories(brogameagent_gpu_tx_batched_test PRIVATE
+        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    if(MSVC)
+        target_compile_options(brogameagent_gpu_tx_batched_test PRIVATE /W4)
+    else()
+        target_compile_options(brogameagent_gpu_tx_batched_test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME brogameagent_gpu_tx_batched_test
+             COMMAND brogameagent_gpu_tx_batched_test)
+
+    # MCTS + BatchedInferenceServer integration with the TX net.
+    add_executable(brogameagent_gpu_mcts_server_tx_test
+        gpu/test_mcts_server_tx.cpp
+    )
+    target_link_libraries(brogameagent_gpu_mcts_server_tx_test PRIVATE brogameagent)
+    target_include_directories(brogameagent_gpu_mcts_server_tx_test PRIVATE
+        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    if(MSVC)
+        target_compile_options(brogameagent_gpu_mcts_server_tx_test PRIVATE /W4)
+    else()
+        target_compile_options(brogameagent_gpu_mcts_server_tx_test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME brogameagent_gpu_mcts_server_tx_test
+             COMMAND brogameagent_gpu_mcts_server_tx_test)
 endif()

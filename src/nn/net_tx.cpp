@@ -621,6 +621,65 @@ void SingleHeroNetTX::backward(const gpu::GpuTensor& dLogits) {
     }
 }
 
+// ─── Batched inference forward ────────────────────────────────────────────
+//
+// Naive implementation: loop over B rows, calling the single-sample GPU
+// forward(GpuTensor, GpuTensor&) path for each row, and copy each row's
+// logits / value into the batched output tensors via cudaMemcpy. This
+// preserves the "fully GPU-resident" pipeline and matches PVN's output
+// convention exactly so the BatchedInferenceServer is net-agnostic.
+//
+// We are explicitly *not* fusing the per-slot Linear projections into a
+// (B, K, D) batched op here — that's a future optimization and the project
+// brief calls it out.
+void SingleHeroNetTX::forward_batched(const gpu::GpuTensor& X_BD,
+                                      gpu::GpuTensor& logits_BL,
+                                      gpu::GpuTensor& values_B1) {
+    assert(device_ == Device::GPU);
+    const int B = X_BD.rows;
+    const int D_in = X_BD.cols;
+    assert(D_in == observation::TOTAL);
+    const int L = head_.total_logits();
+
+    if (logits_BL.rows != B || logits_BL.cols != L) logits_BL.resize(B, L);
+    if (values_B1.rows != B || values_B1.cols != 1) values_B1.resize(B, 1);
+
+    // Pull the whole input batch to host once. The single-sample path already
+    // download()'s x to compute slot validity, so funneling rows through it
+    // requires a host-resident view anyway.
+    Tensor X_h(B, D_in);
+    gpu::download(X_BD, X_h);
+    gpu::cuda_sync();
+
+    // Per-row scratch.
+    gpu::GpuTensor x_row_g, logits_row_g;
+    Tensor logits_h(1, L);
+    Tensor value_h(1, 1);
+    Tensor x_row_h(D_in, 1);
+
+    // Aggregate the B per-row outputs on host, then upload to the batched
+    // output tensors in one shot. This avoids the public-API gap of having
+    // no device-to-device row copy, while keeping correctness obvious.
+    Tensor logits_BL_h(B, L);
+    Tensor values_B1_h(B, 1);
+
+    for (int b = 0; b < B; ++b) {
+        for (int j = 0; j < D_in; ++j)
+            x_row_h.data[j] = X_h.data[static_cast<size_t>(b) * D_in + j];
+        gpu::upload(x_row_h, x_row_g);
+        forward(x_row_g, logits_row_g);
+        gpu::download(logits_row_g, logits_h);
+        gpu::download(value_head_.value_gpu(), value_h);
+        gpu::cuda_sync();
+        for (int j = 0; j < L; ++j)
+            logits_BL_h.data[static_cast<size_t>(b) * L + j] = logits_h.data[j];
+        values_B1_h.data[b] = value_h.data[0];
+    }
+
+    gpu::upload(logits_BL_h, logits_BL);
+    gpu::upload(values_B1_h, values_B1);
+}
+
 #endif // BGA_HAS_CUDA
 
 } // namespace brogameagent::nn

@@ -11,6 +11,7 @@
 
 #ifdef BGA_HAS_CUDA
 #include "gpu/tensor.h"
+#include "brogameagent/learn/batched_net.h"
 #endif
 
 #include <cstdint>
@@ -46,7 +47,11 @@ namespace brogameagent::nn {
 // logits at the boundary. The native GPU overloads (taking GpuTensor) avoid
 // even those.
 
-class SingleHeroNetTX : public ICircuit {
+class SingleHeroNetTX : public ICircuit
+#ifdef BGA_HAS_CUDA
+    , public brogameagent::learn::BatchedNet
+#endif
+{
 public:
     struct Config {
         int self_hidden = 32;
@@ -80,6 +85,19 @@ public:
 
     const gpu::GpuTensor& value_gpu() const { return value_head_.value_gpu(); }
     gpu::GpuTensor&       dValue_gpu()      { return value_head_.dValue_gpu(); }
+
+    // Batched-inference forward. Naive implementation: loops B times calling
+    // the single-sample GPU forward path. Correct and acceptable as a first
+    // cut — still amortizes upload/download of the batched logits/values
+    // tensors at the boundary, and lets the BatchedInferenceServer treat
+    // TX nets uniformly with PolicyValueNet.
+    void forward_batched(const gpu::GpuTensor& X_BD,
+                         gpu::GpuTensor& logits_BL,
+                         gpu::GpuTensor& values_B1) override;
+
+    // BatchedNet interface accessors.
+    int input_dim()  const override { return observation::TOTAL; }
+    int logits_dim() const override { return head_.total_logits(); }
 #endif
 
     int embed_dim()      const { return 3 * cfg_.d_model; }

@@ -4,6 +4,7 @@
 #include "brogameagent/nn/tensor.h"
 
 #ifdef BGA_HAS_CUDA
+#include "brogameagent/learn/batched_net.h"
 #include "brogameagent/learn/inference_server.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #include "brogameagent/nn/gpu/tensor.h"
@@ -64,12 +65,52 @@ EvalResult DirectBackend::evaluate(const std::vector<float>& obs) {
 }
 
 #ifdef BGA_HAS_CUDA
+// ─── DirectBatchedNetBackend ──────────────────────────────────────────────
+
+DirectBatchedNetBackend::DirectBatchedNetBackend(BatchedNet* net) : net_(net) {
+    if (!net_) throw std::runtime_error("DirectBatchedNetBackend: null net");
+}
+
+int DirectBatchedNetBackend::num_actions() const { return net_->logits_dim(); }
+int DirectBatchedNetBackend::in_dim()      const { return net_->input_dim(); }
+
+EvalResult DirectBatchedNetBackend::evaluate(const std::vector<float>& obs) {
+    const int D = net_->input_dim();
+    const int L = net_->logits_dim();
+    if (static_cast<int>(obs.size()) != D) {
+        throw std::runtime_error(
+            "DirectBatchedNetBackend::evaluate: obs.size() != net->input_dim()");
+    }
+    nn::Tensor host_X(1, D);
+    for (int i = 0; i < D; ++i) host_X.data[i] = obs[i];
+    nn::gpu::GpuTensor X_BD, logits_BD, values_B1;
+    nn::gpu::upload(host_X, X_BD);
+    net_->forward_batched(X_BD, logits_BD, values_B1);
+    nn::Tensor host_logits, host_values;
+    nn::gpu::download(logits_BD, host_logits);
+    nn::gpu::download(values_B1, host_values);
+    nn::gpu::cuda_sync();
+    EvalResult r;
+    r.logits.assign(L, 0.0f);
+    for (int j = 0; j < L; ++j) r.logits[j] = host_logits.data[j];
+    r.value = host_values.data[0];
+    return r;
+}
+
 // ─── ServerBackend ────────────────────────────────────────────────────────
 
 ServerBackend::ServerBackend(BatchedInferenceServer* server,
                              int num_actions, int in_dim)
     : server_(server), num_actions_(num_actions), in_dim_(in_dim) {
     if (!server_) throw std::runtime_error("ServerBackend: null server");
+}
+
+ServerBackend::ServerBackend(BatchedInferenceServer* server, BatchedNet* net)
+    : server_(server),
+      num_actions_(net ? net->logits_dim() : 0),
+      in_dim_(net ? net->input_dim() : 0) {
+    if (!server_) throw std::runtime_error("ServerBackend: null server");
+    if (!net)     throw std::runtime_error("ServerBackend: null net");
 }
 
 EvalResult ServerBackend::evaluate(const std::vector<float>& obs) {

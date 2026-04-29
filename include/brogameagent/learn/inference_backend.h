@@ -23,6 +23,7 @@ namespace brogameagent::learn {
 
 #ifdef BGA_HAS_CUDA
 class BatchedInferenceServer;
+class BatchedNet;
 #endif
 
 struct EvalResult {
@@ -56,11 +57,35 @@ private:
 };
 
 #ifdef BGA_HAS_CUDA
+// Synchronous direct call into any GPU-resident BatchedNet. Uses the
+// forward_batched path with B = 1. Useful when the net implementing
+// BatchedNet isn't a PolicyValueNet (e.g. SingleHeroNetTX).
+class DirectBatchedNetBackend : public IInferenceBackend {
+public:
+    explicit DirectBatchedNetBackend(BatchedNet* net);
+    EvalResult evaluate(const std::vector<float>& obs) override;
+    int num_actions() const override;
+    int in_dim() const override;
+
+private:
+    BatchedNet* net_;
+};
+#endif
+
+#ifdef BGA_HAS_CUDA
 // Submits requests to a BatchedInferenceServer. The caller owns the server.
+//
+// The server is net-agnostic — it talks to any BatchedNet under the hood —
+// so this backend works equally well with PolicyValueNet, SingleHeroNetTX,
+// or any future BatchedNet implementation.
 class ServerBackend : public IInferenceBackend {
 public:
     explicit ServerBackend(BatchedInferenceServer* server,
                            int num_actions, int in_dim);
+
+    // Convenience: derive num_actions/in_dim from a BatchedNet directly.
+    explicit ServerBackend(BatchedInferenceServer* server, BatchedNet* net);
+
     EvalResult evaluate(const std::vector<float>& obs) override;
     int num_actions() const override { return num_actions_; }
     int in_dim() const override { return in_dim_; }

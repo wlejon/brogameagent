@@ -9,7 +9,7 @@
 
 #ifdef BGA_HAS_CUDA
 
-#include "brogameagent/nn/policy_value_net.h"
+#include "brogameagent/learn/batched_net.h"
 
 #include <condition_variable>
 #include <future>
@@ -18,6 +18,8 @@
 #include <queue>
 #include <thread>
 #include <vector>
+
+namespace brogameagent::nn { class PolicyValueNet; }
 
 namespace brogameagent::learn {
 
@@ -29,11 +31,17 @@ public:
     };
 
     struct EvalResult {
-        std::vector<float> logits;   // length net->num_actions()
+        std::vector<float> logits;   // length net->logits_dim()
         float value = 0.0f;
     };
 
+    // Primary constructor — takes any BatchedNet implementation.
+    BatchedInferenceServer(BatchedNet* net, Config cfg);
+
+    // Back-compat overload for existing call sites that pass a
+    // PolicyValueNet*. Implemented as a thin upcast to BatchedNet*.
     BatchedInferenceServer(brogameagent::nn::PolicyValueNet* net, Config cfg);
+
     ~BatchedInferenceServer();
 
     BatchedInferenceServer(const BatchedInferenceServer&) = delete;
@@ -57,7 +65,7 @@ private:
     void worker_loop_();
     void run_batch_(std::vector<std::unique_ptr<Pending>>& batch);
 
-    brogameagent::nn::PolicyValueNet* net_;
+    BatchedNet* net_;
     Config cfg_;
     int in_dim_;
     int num_actions_;

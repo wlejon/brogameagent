@@ -6,6 +6,7 @@
 
 #ifdef BGA_HAS_CUDA
 #include "gpu/tensor.h"
+#include "brogameagent/learn/batched_net.h"
 #endif
 
 #include <cstdint>
@@ -41,7 +42,11 @@ namespace brogameagent::nn {
 //
 // Wire format: distinct magic from SingleHeroNet so we can't mix them up.
 
-class PolicyValueNet {
+class PolicyValueNet
+#ifdef BGA_HAS_CUDA
+    : public brogameagent::learn::BatchedNet
+#endif
+{
 public:
     struct Config {
         int in_dim = 0;                          // observation length
@@ -101,7 +106,11 @@ public:
     // pending backward. Parameters must already be on Device::GPU.
     void forward_batched(const gpu::GpuTensor& X_BD,
                          gpu::GpuTensor& logits_BL,
-                         gpu::GpuTensor& values_B1);
+                         gpu::GpuTensor& values_B1) override;
+
+    // BatchedNet interface accessors.
+    int input_dim()  const override { return cfg_.in_dim; }
+    int logits_dim() const override { return cfg_.num_actions; }
 #endif
 
     Device device() const { return device_; }
