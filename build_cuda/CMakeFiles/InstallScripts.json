@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/projects/brogameagent/build_cuda/cmake_install.cmake",
+		"D:/projects/brogameagent/build_cuda/tests/cmake_install.cmake",
+		"D:/projects/brogameagent/build_cuda/examples/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

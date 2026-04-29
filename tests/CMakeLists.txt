@@ -36,6 +36,19 @@ else()
 endif()
 add_test(NAME brogameagent_adam_test COMMAND brogameagent_adam_test)
 
+# SingleHeroNetTX CPU correctness (forward smoke, FD gradient, save/load).
+add_executable(brogameagent_single_hero_net_tx_test
+    test_single_hero_net_tx.cpp
+)
+target_link_libraries(brogameagent_single_hero_net_tx_test PRIVATE brogameagent)
+if(MSVC)
+    target_compile_options(brogameagent_single_hero_net_tx_test PRIVATE /W4)
+else()
+    target_compile_options(brogameagent_single_hero_net_tx_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME brogameagent_single_hero_net_tx_test
+         COMMAND brogameagent_single_hero_net_tx_test)
+
 if(BROGAMEAGENT_WITH_CUDA)
     add_executable(brogameagent_gpu_tensor_test
         gpu/test_gpu_tensor.cpp
@@ -87,6 +100,7 @@ if(BROGAMEAGENT_WITH_CUDA)
         layer_transformer_block
         layer_transformer_encoder
         layer_autoencoder
+        single_hero_net_tx
     )
     foreach(_name IN LISTS _bga_gpu_dispatch_tests)
         set(_target brogameagent_gpu_${_name}_dispatch_test)

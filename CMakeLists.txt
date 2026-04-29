@@ -84,6 +84,7 @@ add_library(brogameagent STATIC
     src/nn/feedforward.cpp
     src/nn/transformer_block.cpp
     src/nn/transformer_encoder.cpp
+    src/nn/net_tx.cpp
     # --- Learning primitives + adapters ---
     src/learn/trainer.cpp
     src/learn/generic_trainer.cpp
