@@ -10,6 +10,7 @@
 #include <brogameagent/grid/bc_ingest.h>
 #include <brogameagent/grid/generic_recorder.h>
 #include <brogameagent/grid/harness.h>
+#include <brogameagent/nn/factored.h>
 
 #include <cassert>
 #include <cstdio>
@@ -4977,6 +4978,93 @@ TEST(generic_trainer_factored_heads_drives_loss_down) {
 
     CHECK(first.samples == 4);
     CHECK(last.loss_policy < first.loss_policy * 0.5f);
+}
+
+TEST(factored_strides_row_major_last_head_fastest) {
+    auto s = nn::head_strides({3, 4, 2});
+    // strides = [4*2, 2, 1] = [8, 2, 1]
+    CHECK(s.size() == 3);
+    CHECK(s[0] == 8);
+    CHECK(s[1] == 2);
+    CHECK(s[2] == 1);
+    CHECK(nn::flat_action_count({3, 4, 2}) == 24);
+}
+
+TEST(factored_encode_decode_roundtrip) {
+    std::vector<int> sizes = {3, 4, 2};
+    auto strides = nn::head_strides(sizes);
+    int decoded[3];
+    for (int flat = 0; flat < 24; ++flat) {
+        nn::decode_flat_action(flat, sizes, strides, decoded);
+        CHECK(decoded[0] >= 0 && decoded[0] < 3);
+        CHECK(decoded[1] >= 0 && decoded[1] < 4);
+        CHECK(decoded[2] >= 0 && decoded[2] < 2);
+        CHECK(nn::encode_flat_action(decoded, strides, 3) == flat);
+    }
+}
+
+TEST(factored_to_flat_uniform_logits_yields_uniform_prior) {
+    // All logits equal → each per-head softmax is uniform → flat prior is
+    // uniform 1/total over the cartesian product.
+    std::vector<int> sizes = {3, 4};
+    std::vector<int> offsets = {0, 3, 7};
+    std::vector<float> logits(7, 0.0f);
+    std::vector<float> flat(12, 0.0f);
+    nn::factored_to_flat(logits.data(), sizes, offsets, flat.data());
+    const float expected = 1.0f / 12.0f;
+    for (int i = 0; i < 12; ++i) CHECK_NEAR(flat[i], expected, 1e-6f);
+    float sum = 0.0f;
+    for (float p : flat) sum += p;
+    CHECK_NEAR(sum, 1.0f, 1e-5f);
+}
+
+TEST(factored_to_flat_matches_per_head_product) {
+    // Hand-crafted per-head probs and verify the flat result equals the
+    // explicit product. Logits are arbitrary; we compute expected by
+    // softmaxing in the same way.
+    std::vector<int> sizes = {2, 3};
+    std::vector<int> offsets = {0, 2, 5};
+    std::vector<float> logits = {1.0f, 0.0f,    // head 0
+                                 2.0f, 1.0f, -1.0f}; // head 1
+    std::vector<float> flat(6, 0.0f);
+    nn::factored_to_flat(logits.data(), sizes, offsets, flat.data());
+
+    // Compute expected per-head probs.
+    auto sm = [](std::vector<float> v) {
+        float m = v[0];
+        for (float x : v) if (x > m) m = x;
+        float s = 0;
+        for (auto& x : v) { x = std::exp(x - m); s += x; }
+        for (auto& x : v) x /= s;
+        return v;
+    };
+    auto p0 = sm({1.0f, 0.0f});
+    auto p1 = sm({2.0f, 1.0f, -1.0f});
+    // Row-major: flat = a0 * 3 + a1.
+    for (int a0 = 0; a0 < 2; ++a0) {
+        for (int a1 = 0; a1 < 3; ++a1) {
+            CHECK_NEAR(flat[a0 * 3 + a1], p0[a0] * p1[a1], 1e-6f);
+        }
+    }
+}
+
+TEST(factored_to_flat_honors_per_head_mask) {
+    // Mask out one option per head; the flat prior should be 0 for any
+    // cartesian combination involving a masked sub-action.
+    std::vector<int> sizes = {2, 3};
+    std::vector<int> offsets = {0, 2, 5};
+    std::vector<float> logits(5, 0.0f);
+    // Mask: head0 disables a0=1; head1 disables a1=2.
+    std::vector<float> mask = {1, 0,    1, 1, 0};
+    std::vector<float> flat(6, 0.0f);
+    nn::factored_to_flat(logits.data(), sizes, offsets, flat.data(), mask.data());
+    // Surviving combinations: a0=0 with a1∈{0,1}. Each = 1.0 * 0.5 = 0.5.
+    CHECK_NEAR(flat[0 * 3 + 0], 0.5f, 1e-6f);
+    CHECK_NEAR(flat[0 * 3 + 1], 0.5f, 1e-6f);
+    CHECK_NEAR(flat[0 * 3 + 2], 0.0f, 1e-6f);
+    CHECK_NEAR(flat[1 * 3 + 0], 0.0f, 1e-6f);
+    CHECK_NEAR(flat[1 * 3 + 1], 0.0f, 1e-6f);
+    CHECK_NEAR(flat[1 * 3 + 2], 0.0f, 1e-6f);
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────

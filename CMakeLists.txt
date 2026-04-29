@@ -38,6 +38,7 @@ add_library(brogameagent STATIC
     src/info_set_mcts.cpp
     # --- NN circuits ---
     src/nn/ops.cpp
+    src/nn/factored.cpp
     src/nn/circuits.cpp
     src/nn/encoder.cpp
     src/nn/decoder.cpp
