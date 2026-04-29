@@ -1,7 +1,12 @@
 #pragma once
 
 #include "circuits.h"
+#include "device.h"
 #include "tensor.h"
+
+#ifdef BGA_HAS_CUDA
+#include "gpu/tensor.h"
+#endif
 
 #include <cstdint>
 #include <vector>
@@ -64,6 +69,31 @@ public:
     void forward(const Tensor& x, float& value, Tensor& logits);
     void backward(float dValue, const Tensor& dLogits);
 
+#ifdef BGA_HAS_CUDA
+    // GPU code path. Parameters must already be on Device::GPU (call to()).
+    //   x:      (in_dim, 1)
+    //   logits: (num_actions, 1)
+    // The scalar value prediction is left in the layer-owned cache; access
+    // it via value_gpu(). The caller must keep x alive until backward()
+    // (Linear caches a view of x).
+    void forward(const gpu::GpuTensor& x, gpu::GpuTensor& logits);
+
+    // Backward expects gradient on the value output written into a 1-element
+    // tensor returned by dValue_gpu() (caller writes (2/N)*(v_pred - v_tgt)
+    // or whatever loss derivative there).
+    //   dLogits: (num_actions, 1)
+    void backward(const gpu::GpuTensor& dLogits);
+
+    // Layer-owned scalar caches:
+    //   value_gpu()  — (1,1) post-tanh value prediction (read after forward).
+    //   dValue_gpu() — (1,1) gradient slot the caller writes BEFORE backward.
+    const gpu::GpuTensor& value_gpu()  const { return v_post_tanh_g_; }
+    gpu::GpuTensor&       dValue_gpu()       { return dPostTanh_g_; }
+#endif
+
+    Device device() const { return device_; }
+    void to(Device d);
+
     void zero_grad();
     void sgd_step(float lr, float momentum);
     void adam_step(float lr, float beta1, float beta2, float eps, int step);
@@ -113,6 +143,21 @@ private:
     //                   head, used as a half-open end.
     std::vector<int> head_sizes_;
     std::vector<int> head_offsets_;
+
+    Device device_ = Device::CPU;
+#ifdef BGA_HAS_CUDA
+    // GPU forward caches (layer-owned; sized at to(GPU) and reused).
+    std::vector<gpu::GpuTensor> trunk_raw_g_;
+    std::vector<gpu::GpuTensor> trunk_act_g_;
+    gpu::GpuTensor v_h_raw_g_, v_h_act_g_;
+    gpu::GpuTensor v_pre_tanh_g_, v_post_tanh_g_;
+    // Backward scratch (layer-owned to avoid per-step alloc).
+    gpu::GpuTensor dPostTanh_g_, dPreTanh_g_;
+    gpu::GpuTensor dVAct_g_, dVRaw_g_;
+    gpu::GpuTensor dTrunkFromV_g_, dTrunkFromP_g_;
+    gpu::GpuTensor dHAct_g_, dHRaw_g_, dPrev_g_;
+    gpu::GpuTensor dXdiscard_g_;  // discarded gradient at trunk input
+#endif
 };
 
 } // namespace brogameagent::nn

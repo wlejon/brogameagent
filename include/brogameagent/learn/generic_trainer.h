@@ -1,8 +1,13 @@
 #pragma once
 
 #include "generic_replay_buffer.h"
+#include "brogameagent/nn/device.h"
 #include "brogameagent/nn/net.h"             // WeightsHandle
 #include "brogameagent/nn/policy_value_net.h"
+
+#ifdef BGA_HAS_CUDA
+#include "brogameagent/nn/gpu/tensor.h"
+#endif
 
 #include <cstdint>
 #include <random>
@@ -22,6 +27,14 @@ struct GenericTrainerConfig {
     float    value_weight   = 1.0f;
     uint64_t rng_seed       = 0x1234567890ABCDEFULL;
     int      publish_every  = 100;
+    // Where compute happens. CPU is the default, byte-identical to the
+    // pre-GPU trainer. When set to GPU the trainer expects the net to have
+    // already been moved with net->to(Device::GPU); per-step it uploads obs,
+    // policy targets, masks, and value targets to layer-private GPU staging
+    // tensors and runs forward, loss, backward, and the optimizer step on
+    // device. Loss formulation matches CPU exactly (per-head softmax-xent
+    // mean-reduced; value MSE).
+    nn::Device device = nn::Device::CPU;
 };
 
 struct GenericTrainStep {
@@ -63,6 +76,12 @@ public:
 private:
     void maybe_publish();
 
+    GenericTrainStep step_cpu_();
+#ifdef BGA_HAS_CUDA
+    GenericTrainStep step_gpu_();
+    void ensure_gpu_staging_();
+#endif
+
     nn::PolicyValueNet*         net_    = nullptr;
     const GenericReplayBuffer*  buf_    = nullptr;
     nn::WeightsHandle*          handle_ = nullptr;
@@ -70,6 +89,23 @@ private:
     std::mt19937_64             rng_{0x1234567890ABCDEFULL};
     int                         steps_     = 0;
     int                         publishes_ = 0;
+    int                         adam_step_ = 0;     // unused (SGD), reserved
+
+#ifdef BGA_HAS_CUDA
+    // Reusable per-step GPU staging buffers, allocated lazily on first GPU
+    // step (sized from net->in_dim()/num_actions()). Shape never changes
+    // between steps so we don't re-resize.
+    nn::gpu::GpuTensor obs_g_;
+    nn::gpu::GpuTensor logits_g_;
+    nn::gpu::GpuTensor probs_g_;       // per-head softmax output (full width)
+    nn::gpu::GpuTensor dLog_g_;        // gradient on logits (full width)
+    nn::gpu::GpuTensor dLog_acc_g_;    // batch-accumulated dLog
+    nn::gpu::GpuTensor target_g_;
+    nn::gpu::GpuTensor mask_g_;        // optional; shape only matters when used
+    nn::gpu::GpuTensor v_tgt_g_;       // (1,1) value target (per-sample)
+    nn::gpu::GpuTensor dV_acc_g_;      // (1,1) accumulated value gradient
+    bool gpu_ready_ = false;
+#endif
 };
 
 } // namespace brogameagent::learn

@@ -1,8 +1,14 @@
 #include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/ops.h"
 
+#ifdef BGA_HAS_CUDA
+#include "brogameagent/nn/gpu/ops.h"
+#include "brogameagent/nn/gpu/runtime.h"
+#endif
+
 #include <cassert>
 #include <cstring>
+#include <utility>
 
 namespace brogameagent::nn {
 
@@ -134,6 +140,108 @@ void PolicyValueNet::backward(float dValue, const Tensor& dLogits) {
         // we discard (no upstream).
         dHAct = std::move(dPrev);
     }
+}
+
+#ifdef BGA_HAS_CUDA
+void PolicyValueNet::forward(const gpu::GpuTensor& x, gpu::GpuTensor& logits) {
+    assert(device_ == Device::GPU);
+
+    // Trunk: Linear → ReLU per layer. Caches owned by `this`.
+    const gpu::GpuTensor* h = &x;
+    for (size_t i = 0; i < trunk_.size(); ++i) {
+        trunk_[i].forward(*h, trunk_raw_g_[i]);
+        gpu::relu_forward_gpu(trunk_raw_g_[i], trunk_act_g_[i]);
+        h = &trunk_act_g_[i];
+    }
+
+    // Value head: Linear → ReLU → Linear → tanh. Result lives in
+    // v_post_tanh_g_ (accessible via value_gpu()).
+    v_fc1_.forward(*h, v_h_raw_g_);
+    gpu::relu_forward_gpu(v_h_raw_g_, v_h_act_g_);
+    v_fc2_.forward(v_h_act_g_, v_pre_tanh_g_);
+    gpu::tanh_forward_gpu(v_pre_tanh_g_, v_post_tanh_g_);
+
+    // Policy head.
+    p_fc_.forward(*h, logits);
+}
+
+void PolicyValueNet::backward(const gpu::GpuTensor& dLogits) {
+    assert(device_ == Device::GPU);
+
+    // ── Value head backward ───────────────────────────────────────────────
+    // Caller wrote d(loss)/d(value) into dPostTanh_g_ via dValue_gpu().
+    gpu::tanh_backward_gpu(v_post_tanh_g_, dPostTanh_g_, dPreTanh_g_);
+    v_fc2_.backward(dPreTanh_g_, dVAct_g_);
+    gpu::relu_backward_gpu(v_h_raw_g_, dVAct_g_, dVRaw_g_);
+    // Write straight into dHAct_g_ to avoid a device→device copy.
+    v_fc1_.backward(dVRaw_g_, dHAct_g_);
+
+    // ── Policy head backward ──────────────────────────────────────────────
+    p_fc_.backward(dLogits, dTrunkFromP_g_);
+
+    // dHAct += dTrunkFromP.
+    gpu::add_inplace_gpu(dHAct_g_, dTrunkFromP_g_);
+
+    // ── Walk trunk backwards. Ping-pong between dHAct_g_ and dPrev_g_ ────
+    gpu::GpuTensor* cur  = &dHAct_g_;
+    gpu::GpuTensor* next = &dPrev_g_;
+    for (int li = static_cast<int>(trunk_.size()) - 1; li >= 0; --li) {
+        gpu::relu_backward_gpu(trunk_raw_g_[li], *cur, dHRaw_g_);
+        if (li == 0) {
+            // Trunk-input gradient is discarded.
+            trunk_[li].backward(dHRaw_g_, dXdiscard_g_);
+        } else {
+            trunk_[li].backward(dHRaw_g_, *next);
+            std::swap(cur, next);
+        }
+    }
+}
+#endif
+
+void PolicyValueNet::to(Device d) {
+    if (d == device_) return;
+    device_require_cuda("PolicyValueNet");
+#ifdef BGA_HAS_CUDA
+    if (d == Device::GPU) {
+        for (auto& l : trunk_) l.to(Device::GPU);
+        v_fc1_.to(Device::GPU);
+        v_fc2_.to(Device::GPU);
+        p_fc_.to(Device::GPU);
+
+        // Allocate forward caches.
+        trunk_raw_g_.clear();
+        trunk_act_g_.clear();
+        trunk_raw_g_.resize(cfg_.hidden.size());
+        trunk_act_g_.resize(cfg_.hidden.size());
+        for (size_t i = 0; i < cfg_.hidden.size(); ++i) {
+            trunk_raw_g_[i].resize(cfg_.hidden[i], 1);
+            trunk_act_g_[i].resize(cfg_.hidden[i], 1);
+        }
+        v_h_raw_g_.resize(cfg_.value_hidden, 1);
+        v_h_act_g_.resize(cfg_.value_hidden, 1);
+        v_pre_tanh_g_.resize(1, 1);
+        v_post_tanh_g_.resize(1, 1);
+        dPostTanh_g_.resize(1, 1);
+        dPreTanh_g_.resize(1, 1);
+        dVAct_g_.resize(cfg_.value_hidden, 1);
+        dVRaw_g_.resize(cfg_.value_hidden, 1);
+        const int trunk_out = trunk_dim();
+        dTrunkFromV_g_.resize(trunk_out, 1);
+        dTrunkFromP_g_.resize(trunk_out, 1);
+        dHAct_g_.resize(trunk_out, 1);
+        // dHRaw and dPrev get re-sized inside backward as we walk layers.
+        dHRaw_g_.resize(cfg_.hidden.empty() ? 1 : cfg_.hidden.back(), 1);
+        dPrev_g_.resize(cfg_.in_dim, 1);
+        dXdiscard_g_.resize(cfg_.in_dim, 1);
+        device_ = Device::GPU;
+    } else {
+        for (auto& l : trunk_) l.to(Device::CPU);
+        v_fc1_.to(Device::CPU);
+        v_fc2_.to(Device::CPU);
+        p_fc_.to(Device::CPU);
+        device_ = Device::CPU;
+    }
+#endif
 }
 
 void PolicyValueNet::zero_grad() {

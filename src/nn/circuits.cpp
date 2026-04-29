@@ -1,5 +1,10 @@
 #include "brogameagent/nn/circuits.h"
 
+#ifdef BGA_HAS_CUDA
+#include "brogameagent/nn/gpu/ops.h"
+#include "brogameagent/nn/gpu/runtime.h"
+#endif
+
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -96,12 +101,75 @@ void Linear::backward(const Tensor& dY, Tensor& dX) {
     linear_backward(W_, x_cache_, dY, dX, dW_, dB_);
 }
 
+#ifdef BGA_HAS_CUDA
+void Linear::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
+    assert(device_ == Device::GPU);
+    // Cache a non-owning view of x so backward can read the same input. The
+    // caller must keep x alive between forward and backward (matches the CPU
+    // x_cache_ semantics where we stash a value copy).
+    x_cache_g_ = gpu::GpuTensor::view(x.data, x.rows, x.cols);
+    gpu::linear_forward_gpu(W_g_, b_g_, x, y);
+}
+
+void Linear::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
+    assert(device_ == Device::GPU);
+    gpu::linear_backward_gpu(W_g_, x_cache_g_, dY, dX, dW_g_, dB_g_);
+}
+#endif
+
+void Linear::to(Device d) {
+    if (d == device_) return;
+    device_require_cuda("Linear");
+#ifdef BGA_HAS_CUDA
+    if (d == Device::GPU) {
+        gpu::upload(W_, W_g_);
+        gpu::upload(b_, b_g_);
+        gpu::upload(dW_, dW_g_);
+        gpu::upload(dB_, dB_g_);
+        gpu::upload(vW_, vW_g_);
+        gpu::upload(vB_, vB_g_);
+        gpu::upload(mW_, mW_g_);
+        gpu::upload(mB_, mB_g_);
+        gpu::upload(vAW_, vAW_g_);
+        gpu::upload(vAB_, vAB_g_);
+        device_ = Device::GPU;
+    } else {
+        gpu::download(W_g_, W_);
+        gpu::download(b_g_, b_);
+        gpu::download(dW_g_, dW_);
+        gpu::download(dB_g_, dB_);
+        gpu::download(vW_g_, vW_);
+        gpu::download(vB_g_, vB_);
+        gpu::download(mW_g_, mW_);
+        gpu::download(mB_g_, mB_);
+        gpu::download(vAW_g_, vAW_);
+        gpu::download(vAB_g_, vAB_);
+        gpu::cuda_sync();
+        device_ = Device::CPU;
+    }
+#endif
+}
+
 void Linear::zero_grad() {
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        dW_g_.zero();
+        dB_g_.zero();
+        return;
+    }
+#endif
     dW_.zero();
     dB_.zero();
 }
 
 void Linear::sgd_step(float lr, float momentum) {
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        gpu::sgd_step_gpu(W_g_, dW_g_, vW_g_, lr, momentum);
+        gpu::sgd_step_gpu(b_g_, dB_g_, vB_g_, lr, momentum);
+        return;
+    }
+#endif
     const int nw = W_.size();
     float* w = W_.ptr();  float* vw = vW_.ptr(); const float* gw = dW_.ptr();
     for (int i = 0; i < nw; ++i) {
@@ -117,11 +185,27 @@ void Linear::sgd_step(float lr, float momentum) {
 }
 
 void Linear::adam_step(float lr, float beta1, float beta2, float eps, int step) {
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        gpu::adam_step_gpu(W_g_, dW_g_, mW_g_, vAW_g_, lr, beta1, beta2, eps, step);
+        gpu::adam_step_gpu(b_g_, dB_g_, mB_g_, vAB_g_, lr, beta1, beta2, eps, step);
+        return;
+    }
+#endif
     adam_step_cpu(W_, dW_, mW_, vAW_, lr, beta1, beta2, eps, step);
     adam_step_cpu(b_, dB_, mB_, vAB_, lr, beta1, beta2, eps, step);
 }
 
 void Linear::save_to(std::vector<uint8_t>& out) const {
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        // Sync host shadow before serializing.
+        auto* self = const_cast<Linear*>(this);
+        gpu::download(W_g_, self->W_);
+        gpu::download(b_g_, self->b_);
+        gpu::cuda_sync();
+    }
+#endif
     tensor_write(W_, out);
     tensor_write(b_, out);
 }
@@ -140,6 +224,20 @@ void Linear::load_from(const uint8_t* data, size_t& offset, size_t size) {
     vAB_.resize(b_.size(), 1);
     mW_.zero(); mB_.zero(); vAW_.zero(); vAB_.zero();
     x_cache_.resize(W_.cols, 1);
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        gpu::upload(W_, W_g_);
+        gpu::upload(b_, b_g_);
+        gpu::upload(dW_, dW_g_);
+        gpu::upload(dB_, dB_g_);
+        gpu::upload(vW_, vW_g_);
+        gpu::upload(vB_, vB_g_);
+        gpu::upload(mW_, mW_g_);
+        gpu::upload(mB_, mB_g_);
+        gpu::upload(vAW_, vAW_g_);
+        gpu::upload(vAB_, vAB_g_);
+    }
+#endif
 }
 
 } // namespace brogameagent::nn

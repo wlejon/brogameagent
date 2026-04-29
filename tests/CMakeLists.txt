@@ -114,4 +114,19 @@ if(BROGAMEAGENT_WITH_CUDA)
         endif()
         add_test(NAME ${_target} COMMAND ${_target})
     endforeach()
+
+    # End-to-end GPU smoke test for GenericExItTrainer.
+    add_executable(brogameagent_gpu_exit_trainer_test
+        gpu/test_exit_trainer_gpu.cpp
+    )
+    target_link_libraries(brogameagent_gpu_exit_trainer_test PRIVATE brogameagent)
+    target_include_directories(brogameagent_gpu_exit_trainer_test PRIVATE
+        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    if(MSVC)
+        target_compile_options(brogameagent_gpu_exit_trainer_test PRIVATE /W4)
+    else()
+        target_compile_options(brogameagent_gpu_exit_trainer_test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME brogameagent_gpu_exit_trainer_test
+             COMMAND brogameagent_gpu_exit_trainer_test)
 endif()

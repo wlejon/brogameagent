@@ -1,7 +1,12 @@
 #pragma once
 
+#include "device.h"
 #include "ops.h"
 #include "tensor.h"
+
+#ifdef BGA_HAS_CUDA
+#include "gpu/tensor.h"
+#endif
 
 #include <cstdint>
 #include <string>
@@ -47,8 +52,18 @@ public:
     void forward(const Tensor& x, Tensor& y);
     void backward(const Tensor& dY, Tensor& dX);
 
+#ifdef BGA_HAS_CUDA
+    // GPU code path. Parameters must already be on Device::GPU (call to()).
+    // Caller must keep `x` alive until backward() (the layer caches a view).
+    void forward(const gpu::GpuTensor& x, gpu::GpuTensor& y);
+    void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+#endif
+
     int in_dim() const  { return W_.cols; }
     int out_dim() const { return W_.rows; }
+
+    Device device() const { return device_; }
+    void to(Device d);
 
     const char* name() const override { return "Linear"; }
     int  num_params() const override { return W_.size() + b_.size(); }
@@ -70,6 +85,13 @@ public:
     Tensor&       dB()       { return dB_; }
     const Tensor& dB() const { return dB_; }
 
+#ifdef BGA_HAS_CUDA
+    gpu::GpuTensor&       W_g()       { return W_g_; }
+    gpu::GpuTensor&       b_g()       { return b_g_; }
+    gpu::GpuTensor&       dW_g()      { return dW_g_; }
+    gpu::GpuTensor&       dB_g()      { return dB_g_; }
+#endif
+
 private:
     Tensor W_, b_;
     Tensor dW_, dB_;
@@ -78,6 +100,19 @@ private:
     Tensor mW_, mB_;
     Tensor vAW_, vAB_;
     Tensor x_cache_;   // input stashed at forward, used by backward
+
+    Device device_ = Device::CPU;
+#ifdef BGA_HAS_CUDA
+    // GPU mirrors. Allocated lazily on to(GPU). x_cache_g_ is a non-owning
+    // view of the caller-provided x in forward(GpuTensor); backward consumes
+    // it. The caller must keep x alive between forward and backward.
+    gpu::GpuTensor W_g_, b_g_;
+    gpu::GpuTensor dW_g_, dB_g_;
+    gpu::GpuTensor vW_g_, vB_g_;
+    gpu::GpuTensor mW_g_, mB_g_;
+    gpu::GpuTensor vAW_g_, vAB_g_;
+    gpu::GpuTensor x_cache_g_;  // non-owning view; lifetime = caller's x
+#endif
 };
 
 // ─── ReLU / Tanh (stateless but cache input/output) ────────────────────────

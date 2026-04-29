@@ -197,6 +197,9 @@ if(BROGAMEAGENT_TOOLS)
     if(BROGAMEAGENT_WITH_CUDA)
         add_executable(nn_pretrain_ae_gpu tools/nn_pretrain_ae_gpu.cpp)
         target_link_libraries(nn_pretrain_ae_gpu PRIVATE brogameagent)
+
+        add_executable(nn_exit_gpu tools/nn_exit_gpu.cpp)
+        target_link_libraries(nn_exit_gpu PRIVATE brogameagent)
     endif()
 endif()
 
