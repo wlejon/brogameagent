@@ -33,6 +33,7 @@ public:
     int  num_params() const override;
     void zero_grad() override;
     void sgd_step(float lr, float momentum) override;
+    void adam_step(float lr, float beta1, float beta2, float eps, int step);
     void save_to(std::vector<uint8_t>& out) const override;
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
 
@@ -69,6 +70,14 @@ private:
     Tensor vW_ir_, vW_iz_, vW_in_;
     Tensor vW_hr_, vW_hz_, vW_hn_;
     Tensor vb_r_, vb_z_, vb_in_, vb_hn_;
+
+    // Adam moment buffers.
+    Tensor mW_ir_, mW_iz_, mW_in_;
+    Tensor mW_hr_, mW_hz_, mW_hn_;
+    Tensor mb_r_, mb_z_, mb_in_, mb_hn_;
+    Tensor vAW_ir_, vAW_iz_, vAW_in_;
+    Tensor vAW_hr_, vAW_hz_, vAW_hn_;
+    Tensor vAb_r_, vAb_z_, vAb_in_, vAb_hn_;
 
     // Caches for backward.
     Tensor x_cache_, h_prev_cache_;

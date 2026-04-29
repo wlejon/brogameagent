@@ -1,9 +1,14 @@
 #pragma once
 
 #include "decoder.h"
+#include "device.h"
 #include "encoder.h"
 #include "net.h"
 #include "tensor.h"
+
+#ifdef BGA_HAS_CUDA
+#include "gpu/tensor.h"
+#endif
 
 #include <cstdint>
 #include <vector>
@@ -15,6 +20,10 @@ namespace brogameagent::nn {
 // Unsupervised pretraining composite: DeepSetsEncoder -> DeepSetsDecoder.
 // Observation in, observation reconstruction out. Loss is masked MSE
 // (see reconstruction_loss in autoencoder.cpp).
+//
+// GPU dispatch: to(Device) recurses into encoder/decoder. The GPU
+// forward/backward route through the children's GPU overloads and use a
+// device-resident `embed` cache between them.
 
 class DeepSetsAutoencoder {
 public:
@@ -32,8 +41,17 @@ public:
     void forward(const Tensor& x, Tensor& x_hat);
     void backward(const Tensor& dX_hat);
 
+#ifdef BGA_HAS_CUDA
+    void forward(const gpu::GpuTensor& x, gpu::GpuTensor& x_hat);
+    void backward(const gpu::GpuTensor& dX_hat);
+#endif
+
+    Device device() const { return device_; }
+    void to(Device d);
+
     void zero_grad();
     void sgd_step(float lr, float momentum);
+    void adam_step(float lr, float beta1, float beta2, float eps, int step);
     int num_params() const;
 
     // Accessors.
@@ -56,6 +74,13 @@ private:
     DeepSetsDecoder dec_;
     Tensor embed_;       // cached forward output of encoder
     Tensor dEmbed_;      // scratch for backward
+
+    Device device_ = Device::CPU;
+#ifdef BGA_HAS_CUDA
+    gpu::GpuTensor embed_g_;
+    gpu::GpuTensor dEmbed_g_;
+    gpu::GpuTensor dX_obs_g_;   // discarded grad wrt observation; allocated once.
+#endif
 };
 
 // Compute masked reconstruction loss and gradient wrt the reconstruction.

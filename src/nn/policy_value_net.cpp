@@ -150,6 +150,13 @@ void PolicyValueNet::sgd_step(float lr, float momentum) {
     p_fc_.sgd_step(lr, momentum);
 }
 
+void PolicyValueNet::adam_step(float lr, float b1, float b2, float eps, int step) {
+    for (auto& l : trunk_) l.adam_step(lr, b1, b2, eps, step);
+    v_fc1_.adam_step(lr, b1, b2, eps, step);
+    v_fc2_.adam_step(lr, b1, b2, eps, step);
+    p_fc_.adam_step(lr, b1, b2, eps, step);
+}
+
 int PolicyValueNet::num_params() const {
     int n = 0;
     for (const auto& l : trunk_) n += l.num_params();

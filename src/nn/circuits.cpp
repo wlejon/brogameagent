@@ -1,9 +1,39 @@
 #include "brogameagent/nn/circuits.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstring>
 
 namespace brogameagent::nn {
+
+// ─── adam_step_cpu ─────────────────────────────────────────────────────────
+
+void adam_step_cpu(Tensor& param, const Tensor& grad, Tensor& m, Tensor& v,
+                   float lr, float beta1, float beta2, float eps, int step) {
+    assert(param.size() == grad.size());
+    assert(param.size() == m.size());
+    assert(param.size() == v.size());
+    assert(step >= 1);
+    const int n = param.size();
+    float* p  = param.ptr();
+    const float* g = grad.ptr();
+    float* mp = m.ptr();
+    float* vp = v.ptr();
+    const float bc1 = 1.0f - std::pow(beta1, static_cast<float>(step));
+    const float bc2 = 1.0f - std::pow(beta2, static_cast<float>(step));
+    const float inv_bc1 = 1.0f / bc1;
+    const float inv_bc2 = 1.0f / bc2;
+    for (int i = 0; i < n; ++i) {
+        const float gi = g[i];
+        const float mi = beta1 * mp[i] + (1.0f - beta1) * gi;
+        const float vi = beta2 * vp[i] + (1.0f - beta2) * gi * gi;
+        mp[i] = mi;
+        vp[i] = vi;
+        const float m_hat = mi * inv_bc1;
+        const float v_hat = vi * inv_bc2;
+        p[i] -= lr * m_hat / (std::sqrt(v_hat) + eps);
+    }
+}
 
 // ─── tensor_write / tensor_read ────────────────────────────────────────────
 
@@ -44,11 +74,17 @@ void Linear::init(int in_dim, int out_dim, uint64_t& rng_state) {
     dB_.resize(out_dim, 1);
     vW_.resize(out_dim, in_dim);
     vB_.resize(out_dim, 1);
+    mW_.resize(out_dim, in_dim);
+    mB_.resize(out_dim, 1);
+    vAW_.resize(out_dim, in_dim);
+    vAB_.resize(out_dim, 1);
     x_cache_.resize(in_dim, 1);
     xavier_init(W_, rng_state);
     b_.zero();
     dW_.zero(); dB_.zero();
     vW_.zero(); vB_.zero();
+    mW_.zero(); mB_.zero();
+    vAW_.zero(); vAB_.zero();
 }
 
 void Linear::forward(const Tensor& x, Tensor& y) {
@@ -80,6 +116,11 @@ void Linear::sgd_step(float lr, float momentum) {
     }
 }
 
+void Linear::adam_step(float lr, float beta1, float beta2, float eps, int step) {
+    adam_step_cpu(W_, dW_, mW_, vAW_, lr, beta1, beta2, eps, step);
+    adam_step_cpu(b_, dB_, mB_, vAB_, lr, beta1, beta2, eps, step);
+}
+
 void Linear::save_to(std::vector<uint8_t>& out) const {
     tensor_write(W_, out);
     tensor_write(b_, out);
@@ -93,6 +134,11 @@ void Linear::load_from(const uint8_t* data, size_t& offset, size_t size) {
     dB_.resize(b_.size(), 1);
     vW_.resize(W_.rows, W_.cols);
     vB_.resize(b_.size(), 1);
+    mW_.resize(W_.rows, W_.cols);
+    mB_.resize(b_.size(), 1);
+    vAW_.resize(W_.rows, W_.cols);
+    vAB_.resize(b_.size(), 1);
+    mW_.zero(); mB_.zero(); vAW_.zero(); vAB_.zero();
     x_cache_.resize(W_.cols, 1);
 }
 

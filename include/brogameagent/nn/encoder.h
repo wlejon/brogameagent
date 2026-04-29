@@ -1,8 +1,13 @@
 #pragma once
 
 #include "circuits.h"
+#include "device.h"
 #include "tensor.h"
 #include "brogameagent/observation.h"
+
+#ifdef BGA_HAS_CUDA
+#include "gpu/tensor.h"
+#endif
 
 #include <cstdint>
 
@@ -29,6 +34,10 @@ namespace brogameagent::nn {
 // identity is stable. Backward is hand-authored to match — each slot's dE
 // is distributed from the pool, scaled by 1/n_valid, and invalid slots
 // receive zero gradient.
+//
+// GPU dispatch: device_ tracks where parameters live. `to(Device)` migrates
+// host↔device. CPU forward/backward are unchanged. GPU overloads call
+// linear_*_gpu / relu_*_gpu / masked_mean_pool_*_gpu / concat_rows_gpu.
 
 class DeepSetsEncoder : public ICircuit {
 public:
@@ -47,12 +56,23 @@ public:
     void forward(const Tensor& x, Tensor& y);
     void backward(const Tensor& dY, Tensor& dX);
 
+#ifdef BGA_HAS_CUDA
+    void forward(const gpu::GpuTensor& x, gpu::GpuTensor& y);
+    void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+#endif
+
+    Device device() const { return device_; }
+    void to(Device d);
+
     const char* name() const override { return "DeepSetsEncoder"; }
     int  num_params() const override;
     void zero_grad() override;
     void sgd_step(float lr, float momentum) override;
+    void adam_step(float lr, float beta1, float beta2, float eps, int step);
     void save_to(std::vector<uint8_t>& out) const override;
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
+
+    const Config& config() const { return cfg_; }
 
 private:
     Config cfg_{};
@@ -77,6 +97,48 @@ private:
 
     // scratch for per-slot backward (input grad for an entire slot row)
     Tensor slot_grad_in_;
+
+    Device device_ = Device::CPU;
+#ifdef BGA_HAS_CUDA
+    // ── GPU mirrors ────────────────────────────────────────────────────────
+    // Per-Linear weights/grads/velocities.
+    gpu::GpuTensor self_W1_g_, self_b1_g_, self_W2_g_, self_b2_g_;
+    gpu::GpuTensor self_dW1_g_, self_db1_g_, self_dW2_g_, self_db2_g_;
+    gpu::GpuTensor self_vW1_g_, self_vb1_g_, self_vW2_g_, self_vb2_g_;
+
+    gpu::GpuTensor enemy_W1_g_, enemy_b1_g_, enemy_W2_g_, enemy_b2_g_;
+    gpu::GpuTensor enemy_dW1_g_, enemy_db1_g_, enemy_dW2_g_, enemy_db2_g_;
+    gpu::GpuTensor enemy_vW1_g_, enemy_vb1_g_, enemy_vW2_g_, enemy_vb2_g_;
+
+    gpu::GpuTensor ally_W1_g_, ally_b1_g_, ally_W2_g_, ally_b2_g_;
+    gpu::GpuTensor ally_dW1_g_, ally_db1_g_, ally_dW2_g_, ally_db2_g_;
+    gpu::GpuTensor ally_vW1_g_, ally_vb1_g_, ally_vW2_g_, ally_vb2_g_;
+
+    // Forward caches on GPU.
+    gpu::GpuTensor x_g_cache_;        // (TOTAL, 1) — clone of forward x
+    gpu::GpuTensor self_h_raw_g_;     // (hidden, 1) — pre-relu
+    gpu::GpuTensor self_h_g_;         // (hidden, 1) — post-relu
+    gpu::GpuTensor self_z_g_;         // (embed_dim, 1)
+
+    // Per-slot caches: each stored as a (K, hidden) and (K, embed_dim) matrix
+    // packed by row (slot k occupies row k). Per-slot Linear forward writes
+    // into row-views of these matrices.
+    gpu::GpuTensor e_h_raw_g_;        // (K_ENEMIES, hidden)
+    gpu::GpuTensor e_h_g_;            // (K_ENEMIES, hidden)
+    gpu::GpuTensor e_z_g_;            // (K_ENEMIES, embed_dim)
+
+    gpu::GpuTensor a_h_raw_g_;        // (K_ALLIES, hidden)
+    gpu::GpuTensor a_h_g_;            // (K_ALLIES, hidden)
+    gpu::GpuTensor a_z_g_;            // (K_ALLIES, embed_dim)
+
+    // Pool inputs / outputs.
+    gpu::GpuTensor pooled_e_g_;       // (embed_dim, 1)
+    gpu::GpuTensor pooled_a_g_;       // (embed_dim, 1)
+
+    // Mask buffers on device (one float per slot).
+    gpu::GpuTensor e_mask_g_;         // (K_ENEMIES, 1)
+    gpu::GpuTensor a_mask_g_;         // (K_ALLIES, 1)
+#endif
 };
 
 } // namespace brogameagent::nn

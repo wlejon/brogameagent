@@ -41,6 +41,9 @@ public:
     int  num_params() const override { return fc1_.num_params() + fc2_.num_params(); }
     void zero_grad() override { fc1_.zero_grad(); fc2_.zero_grad(); }
     void sgd_step(float lr, float m) override { fc1_.sgd_step(lr, m); fc2_.sgd_step(lr, m); }
+    void adam_step(float lr, float b1, float b2, float eps, int step) {
+        fc1_.adam_step(lr, b1, b2, eps, step); fc2_.adam_step(lr, b1, b2, eps, step);
+    }
     void save_to(std::vector<uint8_t>& out) const override { fc1_.save_to(out); fc2_.save_to(out); }
     void load_from(const uint8_t* d, size_t& o, size_t s) override {
         fc1_.load_from(d, o, s); fc2_.load_from(d, o, s);

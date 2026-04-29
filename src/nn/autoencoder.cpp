@@ -1,5 +1,9 @@
 #include "brogameagent/nn/autoencoder.h"
 
+#ifdef BGA_HAS_CUDA
+#include "brogameagent/nn/gpu/runtime.h"
+#endif
+
 #include <cassert>
 #include <cstring>
 
@@ -33,6 +37,42 @@ void DeepSetsAutoencoder::backward(const Tensor& dX_hat) {
     // dX_obs discarded — no upstream consumer for the raw observation grad.
 }
 
+#ifdef BGA_HAS_CUDA
+void DeepSetsAutoencoder::forward(const gpu::GpuTensor& x, gpu::GpuTensor& x_hat) {
+    assert(device_ == Device::GPU);
+    if (embed_g_.rows != enc_.out_dim() || embed_g_.cols != 1)
+        embed_g_.resize(enc_.out_dim(), 1);
+    enc_.forward(x, embed_g_);
+    dec_.forward(embed_g_, x_hat);
+}
+
+void DeepSetsAutoencoder::backward(const gpu::GpuTensor& dX_hat) {
+    assert(device_ == Device::GPU);
+    if (dEmbed_g_.rows != enc_.out_dim() || dEmbed_g_.cols != 1)
+        dEmbed_g_.resize(enc_.out_dim(), 1);
+    if (dX_obs_g_.rows != observation::TOTAL || dX_obs_g_.cols != 1)
+        dX_obs_g_.resize(observation::TOTAL, 1);
+    dec_.backward(dX_hat, dEmbed_g_);
+    enc_.backward(dEmbed_g_, dX_obs_g_);
+    // dX_obs_g_ discarded — no upstream consumer.
+}
+#endif
+
+void DeepSetsAutoencoder::to(Device d) {
+    if (d == device_) return;
+    device_require_cuda("DeepSetsAutoencoder");
+    enc_.to(d);
+    dec_.to(d);
+#ifdef BGA_HAS_CUDA
+    if (d == Device::GPU) {
+        embed_g_.resize(enc_.out_dim(), 1);
+        dEmbed_g_.resize(enc_.out_dim(), 1);
+        dX_obs_g_.resize(observation::TOTAL, 1);
+    }
+#endif
+    device_ = d;
+}
+
 void DeepSetsAutoencoder::zero_grad() {
     enc_.zero_grad();
     dec_.zero_grad();
@@ -41,6 +81,11 @@ void DeepSetsAutoencoder::zero_grad() {
 void DeepSetsAutoencoder::sgd_step(float lr, float momentum) {
     enc_.sgd_step(lr, momentum);
     dec_.sgd_step(lr, momentum);
+}
+
+void DeepSetsAutoencoder::adam_step(float lr, float b1, float b2, float eps, int step) {
+    enc_.adam_step(lr, b1, b2, eps, step);
+    dec_.adam_step(lr, b1, b2, eps, step);
 }
 
 int DeepSetsAutoencoder::num_params() const {

@@ -40,6 +40,7 @@ public:
     int  num_params() const override;
     void zero_grad() override;
     void sgd_step(float lr, float momentum) override;
+    void adam_step(float lr, float beta1, float beta2, float eps, int step);
     void save_to(std::vector<uint8_t>& out) const override;
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
 

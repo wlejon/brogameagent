@@ -33,6 +33,19 @@ void GRUCell::init(int in_dim, int hidden, uint64_t& rng_state) {
     vW_hr_.resize(H, H); vW_hz_.resize(H, H); vW_hn_.resize(H, H);
     vb_r_.resize(H, 1); vb_z_.resize(H, 1); vb_in_.resize(H, 1); vb_hn_.resize(H, 1);
 
+    mW_ir_.resize(H, I); mW_iz_.resize(H, I); mW_in_.resize(H, I);
+    mW_hr_.resize(H, H); mW_hz_.resize(H, H); mW_hn_.resize(H, H);
+    mb_r_.resize(H, 1); mb_z_.resize(H, 1); mb_in_.resize(H, 1); mb_hn_.resize(H, 1);
+    vAW_ir_.resize(H, I); vAW_iz_.resize(H, I); vAW_in_.resize(H, I);
+    vAW_hr_.resize(H, H); vAW_hz_.resize(H, H); vAW_hn_.resize(H, H);
+    vAb_r_.resize(H, 1); vAb_z_.resize(H, 1); vAb_in_.resize(H, 1); vAb_hn_.resize(H, 1);
+    mW_ir_.zero(); mW_iz_.zero(); mW_in_.zero();
+    mW_hr_.zero(); mW_hz_.zero(); mW_hn_.zero();
+    mb_r_.zero(); mb_z_.zero(); mb_in_.zero(); mb_hn_.zero();
+    vAW_ir_.zero(); vAW_iz_.zero(); vAW_in_.zero();
+    vAW_hr_.zero(); vAW_hz_.zero(); vAW_hn_.zero();
+    vAb_r_.zero(); vAb_z_.zero(); vAb_in_.zero(); vAb_hn_.zero();
+
     x_cache_.resize(I, 1);
     h_prev_cache_.resize(H, 1);
     r_.resize(H, 1); z_.resize(H, 1); n_.resize(H, 1);
@@ -179,6 +192,19 @@ void GRUCell::sgd_step(float lr, float momentum) {
     sgd_one(b_hn_, vb_hn_, db_hn_, lr, momentum);
 }
 
+void GRUCell::adam_step(float lr, float b1, float b2, float eps, int step) {
+    adam_step_cpu(W_ir_, dW_ir_, mW_ir_, vAW_ir_, lr, b1, b2, eps, step);
+    adam_step_cpu(W_iz_, dW_iz_, mW_iz_, vAW_iz_, lr, b1, b2, eps, step);
+    adam_step_cpu(W_in_, dW_in_, mW_in_, vAW_in_, lr, b1, b2, eps, step);
+    adam_step_cpu(W_hr_, dW_hr_, mW_hr_, vAW_hr_, lr, b1, b2, eps, step);
+    adam_step_cpu(W_hz_, dW_hz_, mW_hz_, vAW_hz_, lr, b1, b2, eps, step);
+    adam_step_cpu(W_hn_, dW_hn_, mW_hn_, vAW_hn_, lr, b1, b2, eps, step);
+    adam_step_cpu(b_r_,  db_r_,  mb_r_,  vAb_r_,  lr, b1, b2, eps, step);
+    adam_step_cpu(b_z_,  db_z_,  mb_z_,  vAb_z_,  lr, b1, b2, eps, step);
+    adam_step_cpu(b_in_, db_in_, mb_in_, vAb_in_, lr, b1, b2, eps, step);
+    adam_step_cpu(b_hn_, db_hn_, mb_hn_, vAb_hn_, lr, b1, b2, eps, step);
+}
+
 void GRUCell::save_to(std::vector<uint8_t>& out) const {
     tensor_write(W_ir_, out); tensor_write(W_iz_, out); tensor_write(W_in_, out);
     tensor_write(W_hr_, out); tensor_write(W_hz_, out); tensor_write(W_hn_, out);
@@ -196,6 +222,18 @@ void GRUCell::load_from(const uint8_t* data, size_t& offset, size_t size) {
     vW_ir_.resize(H, I); vW_iz_.resize(H, I); vW_in_.resize(H, I);
     vW_hr_.resize(H, H); vW_hz_.resize(H, H); vW_hn_.resize(H, H);
     vb_r_.resize(H, 1); vb_z_.resize(H, 1); vb_in_.resize(H, 1); vb_hn_.resize(H, 1);
+    mW_ir_.resize(H, I); mW_iz_.resize(H, I); mW_in_.resize(H, I);
+    mW_hr_.resize(H, H); mW_hz_.resize(H, H); mW_hn_.resize(H, H);
+    mb_r_.resize(H, 1); mb_z_.resize(H, 1); mb_in_.resize(H, 1); mb_hn_.resize(H, 1);
+    vAW_ir_.resize(H, I); vAW_iz_.resize(H, I); vAW_in_.resize(H, I);
+    vAW_hr_.resize(H, H); vAW_hz_.resize(H, H); vAW_hn_.resize(H, H);
+    vAb_r_.resize(H, 1); vAb_z_.resize(H, 1); vAb_in_.resize(H, 1); vAb_hn_.resize(H, 1);
+    mW_ir_.zero(); mW_iz_.zero(); mW_in_.zero();
+    mW_hr_.zero(); mW_hz_.zero(); mW_hn_.zero();
+    mb_r_.zero(); mb_z_.zero(); mb_in_.zero(); mb_hn_.zero();
+    vAW_ir_.zero(); vAW_iz_.zero(); vAW_in_.zero();
+    vAW_hr_.zero(); vAW_hz_.zero(); vAW_hn_.zero();
+    vAb_r_.zero(); vAb_z_.zero(); vAb_in_.zero(); vAb_hn_.zero();
     x_cache_.resize(I, 1);
     h_prev_cache_.resize(H, 1);
     r_.resize(H, 1); z_.resize(H, 1); n_.resize(H, 1); hn_pre_.resize(H, 1);

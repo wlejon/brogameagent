@@ -61,6 +61,13 @@ void SingleHeroNetST::sgd_step(float lr, float momentum) {
     head_.sgd_step(lr, momentum);
 }
 
+void SingleHeroNetST::adam_step(float lr, float b1, float b2, float eps, int step) {
+    enc_.adam_step(lr, b1, b2, eps, step);
+    trunk_.adam_step(lr, b1, b2, eps, step);
+    value_head_.adam_step(lr, b1, b2, eps, step);
+    head_.adam_step(lr, b1, b2, eps, step);
+}
+
 int SingleHeroNetST::num_params() const {
     return enc_.num_params() + trunk_.num_params()
          + value_head_.num_params() + head_.num_params();

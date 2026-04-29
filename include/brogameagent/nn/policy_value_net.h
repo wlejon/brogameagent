@@ -66,6 +66,7 @@ public:
 
     void zero_grad();
     void sgd_step(float lr, float momentum);
+    void adam_step(float lr, float beta1, float beta2, float eps, int step);
 
     int in_dim()       const { return cfg_.in_dim; }
     int num_actions()  const { return cfg_.num_actions; }

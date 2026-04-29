@@ -3,6 +3,7 @@
 #include "tensor.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace brogameagent::nn::gpu {
 
@@ -165,6 +166,147 @@ void attention_backward_gpu(const GpuTensor& dO,
                             GpuTensor& dWq, GpuTensor& dWk,
                             GpuTensor& dWv, GpuTensor& dWo);
 
+// ─── Subagent A: multi-head self-attention ─────────────────────────────────
+
+// Multi-head scaled dot-product self-attention. Mirrors the CPU
+// MultiHeadAttention class. Square (D, D) projections internally split into
+// h heads of head_dim = D / h. h must divide D.
+//
+//   X:   (K, D) input
+//   Wq, Wk, Wv, Wo: each (D, D). Each Wq/Wk/Wv is treated as h stacked
+//                   per-head row slices of shape (head_dim, D).
+//   d_mask: optional length-K device pointer (1 valid, 0 invalid). May be
+//           null. Same semantics as single-head: invalid keys excluded from
+//           softmax denom; invalid query rows produce zero output.
+//   num_heads: number of attention heads.
+//   O:   (K, D) output, resized if mis-shaped.
+//
+// Caches for backward (out-parameters; resized if mis-shaped):
+//   Qh:    (h * K, head_dim) — head h occupies rows [h*K, (h+1)*K)
+//   Kh:    (h * K, head_dim)
+//   Vh:    (h * K, head_dim)
+//   Attnh: (h * K, K)        — per-head softmax weights, same row partition
+//   Yconcat: (K, D)          — pre-Wo concat of per-head outputs
+void mha_forward_gpu(const GpuTensor& X,
+                     const GpuTensor& Wq, const GpuTensor& Wk,
+                     const GpuTensor& Wv, const GpuTensor& Wo,
+                     const float* d_mask,
+                     int num_heads,
+                     GpuTensor& Qh, GpuTensor& Kh, GpuTensor& Vh,
+                     GpuTensor& Attnh, GpuTensor& Yconcat,
+                     GpuTensor& O);
+
+// Multi-head attention backward.
+//   dO: (K, D) upstream
+//   X, Qh, Kh, Vh, Attnh, Yconcat: forward caches
+//   Wq, Wk, Wv, Wo: forward weights (each (D, D))
+//   d_mask: same mask used in forward (or null)
+//   num_heads: must match forward
+//   dX: (K, D) output, *overwritten*
+//   dWq, dWk, dWv, dWo: (D, D) accumulated into — caller zeros
+void mha_backward_gpu(const GpuTensor& dO,
+                      const GpuTensor& X,
+                      const GpuTensor& Qh, const GpuTensor& Kh,
+                      const GpuTensor& Vh, const GpuTensor& Attnh,
+                      const GpuTensor& Yconcat,
+                      const GpuTensor& Wq, const GpuTensor& Wk,
+                      const GpuTensor& Wv, const GpuTensor& Wo,
+                      const float* d_mask,
+                      int num_heads,
+                      GpuTensor& dX,
+                      GpuTensor& dWq, GpuTensor& dWk,
+                      GpuTensor& dWv, GpuTensor& dWo);
+
+// ─── Subagent C: pooling, losses, embedding, concat ────────────────────────
+
+// Masked mean-pool forward over rows of a (K, D) matrix.
+//   X:    (K, D)  input matrix
+//   mask: device pointer to K floats (1.0 valid, 0.0 invalid). May be null —
+//         null means all rows are valid.
+//   y:    (D, 1)  output vector, resized if mis-shaped.
+//
+// Semantics: y[j] = (1 / num_valid) * sum_{k : mask[k]==1} X[k, j].
+// If num_valid == 0 the output is filled with zeros (matching how
+// `DeepSetsEncoder` and `SetTransformerEncoder` skip the *= inv step when
+// the count is zero).
+void masked_mean_pool_forward_gpu(const GpuTensor& X, const float* d_mask,
+                                  GpuTensor& y);
+
+// Masked mean-pool backward.
+//   dY:   (D, 1) upstream gradient
+//   mask: same mask used in forward (or null)
+//   K:    number of rows in the original X (we don't carry X around)
+//   dX:   (K, D) output, *overwritten* (NOT accumulated). Invalid rows are
+//         set to exactly zero. Valid rows receive dY / num_valid.
+//         If num_valid == 0, dX is zeroed entirely.
+void masked_mean_pool_backward_gpu(const GpuTensor& dY, const float* d_mask,
+                                   int K, GpuTensor& dX);
+
+// Vector MSE forward.
+//   pred, target: length-N flat tensors (any 2D shape with N elements).
+// Returns: scalar loss = mean((pred - target)^2) = (1/N) * sum (p - t)^2.
+// (Note: CPU `mse_scalar` is per-scalar 0.5*d^2 with grad = d. We adopt
+// MEAN-of-squared-diffs for the vector form because that's the standard
+// autoencoder reconstruction loss and decouples the gradient magnitude from
+// N. The backward gradient is dPred = (2 / N) * (pred - target).)
+float mse_vec_forward_gpu(const GpuTensor& pred, const GpuTensor& target);
+
+// Vector MSE backward.
+//   pred, target: forward inputs
+//   dPred: same shape as pred, *overwritten*
+//   dPred[i] = (2 / N) * (pred[i] - target[i]).
+void mse_vec_backward_gpu(const GpuTensor& pred, const GpuTensor& target,
+                          GpuTensor& dPred);
+
+// Fused softmax + cross-entropy, mirroring CPU `softmax_xent_segment`.
+//   logits:  length-N
+//   target:  length-N (soft or one-hot; values typically in [0,1] summing to
+//            1 over valid entries)
+//   d_mask:  optional length-N mask (1 valid / 0 invalid). May be null.
+//   probs:   length-N output (softmax over valid entries, 0 on invalid).
+//            Resized if mis-shaped.
+//   dLogits: length-N output (probs - target on valid; 0 on invalid).
+//            Resized if mis-shaped.
+// Returns: scalar loss = -sum_i (mask[i] ? target[i] * log(max(probs[i],
+// 1e-12)) : 0). Caller guarantees at least one valid entry under mask.
+float softmax_xent_fused_gpu(const GpuTensor& logits, const GpuTensor& target,
+                             const float* d_mask,
+                             GpuTensor& probs, GpuTensor& dLogits);
+
+// Embedding lookup forward.
+//   table:    (V, D) embedding matrix
+//   d_idx:    device pointer to B int32 indices, each in [0, V).
+//   B:        number of indices (== rows of `out`).
+//   out:      (B, D), resized if mis-shaped. out[b, :] = table[d_idx[b], :].
+void embedding_lookup_forward_gpu(const GpuTensor& table,
+                                  const int32_t* d_idx, int B,
+                                  GpuTensor& out);
+
+// Embedding lookup backward — scatter-accumulate.
+//   dOut:   (B, D) upstream
+//   d_idx:  same indices used in forward (length B)
+//   B:      number of indices
+//   dTable: (V, D), accumulated into (caller zeros). Multiple lookups of the
+//           same row sum their grads via atomicAdd.
+void embedding_lookup_backward_gpu(const GpuTensor& dOut,
+                                   const int32_t* d_idx, int B,
+                                   GpuTensor& dTable);
+
+// Concatenate flat tensors end-to-end.
+//   parts: list of tensors, each treated as a flat buffer of size parts[i]->size().
+//   out:   resized to (total, 1) where total = sum of part sizes.
+// Layout: out[off_i .. off_i + size_i) = parts[i] flattened.
+void concat_rows_gpu(const std::vector<const GpuTensor*>& parts,
+                     GpuTensor& out);
+
+// Inverse of concat_rows_gpu: copy disjoint segments of `in` back into the
+// flat buffers of `parts`. Each parts[i] is *overwritten* (not accumulated)
+// with the corresponding segment of `in`. Sizes of `parts` must be unchanged
+// from the concat call. The function assumes parts[i]->size() segments laid
+// end-to-end starting at offset 0 in `in`.
+void split_rows_gpu(const GpuTensor& in,
+                    const std::vector<GpuTensor*>& parts);
+
 // SGD with momentum, in-place:
 //   velocity = momentum * velocity + grad
 //   param   -= lr * velocity
@@ -172,5 +314,15 @@ void attention_backward_gpu(const GpuTensor& dO,
 // caller is responsible for grad zeroing between batches.
 void sgd_step_gpu(GpuTensor& param, GpuTensor& grad, GpuTensor& velocity,
                   float lr, float momentum);
+
+// Adam optimizer step, in-place. Mirrors adam_step_cpu in circuits.h:
+//   m = beta1 * m + (1 - beta1) * g
+//   v = beta2 * v + (1 - beta2) * g^2
+//   param -= lr * (m / (1 - beta1^step)) / (sqrt(v / (1 - beta2^step)) + eps)
+// `step` is a 1-based step counter for bias correction. All four tensors must
+// have identical shape.
+void adam_step_gpu(GpuTensor& param, const GpuTensor& grad,
+                   GpuTensor& m, GpuTensor& v,
+                   float lr, float beta1, float beta2, float eps, int step);
 
 } // namespace brogameagent::nn::gpu

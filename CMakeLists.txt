@@ -80,6 +80,10 @@ add_library(brogameagent STATIC
     src/nn/heads_dist.cpp
     src/nn/ensemble.cpp
     src/nn/forward_model.cpp
+    src/nn/multi_head_attention.cpp
+    src/nn/feedforward.cpp
+    src/nn/transformer_block.cpp
+    src/nn/transformer_encoder.cpp
     # --- Learning primitives + adapters ---
     src/learn/trainer.cpp
     src/learn/generic_trainer.cpp
@@ -118,6 +122,12 @@ if(BROGAMEAGENT_WITH_CUDA)
         src/nn/gpu/layernorm.cu
         src/nn/gpu/attention.cu
         src/nn/gpu/optim.cu
+        src/nn/gpu/adam.cu
+        src/nn/gpu/reduce.cu
+        src/nn/gpu/loss.cu
+        src/nn/gpu/embedding.cu
+        src/nn/gpu/concat.cu
+        src/nn/gpu/mha.cu
     )
     target_link_libraries(brogameagent PUBLIC CUDA::cudart)
     target_compile_definitions(brogameagent PUBLIC BGA_HAS_CUDA=1)
@@ -182,6 +192,11 @@ if(BROGAMEAGENT_TOOLS)
 
     add_executable(nn_pretrain_ae tools/nn_pretrain_ae.cpp)
     target_link_libraries(nn_pretrain_ae PRIVATE brogameagent)
+
+    if(BROGAMEAGENT_WITH_CUDA)
+        add_executable(nn_pretrain_ae_gpu tools/nn_pretrain_ae_gpu.cpp)
+        target_link_libraries(nn_pretrain_ae_gpu PRIVATE brogameagent)
+    endif()
 endif()
 
 # Tests

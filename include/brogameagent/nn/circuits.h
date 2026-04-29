@@ -54,6 +54,9 @@ public:
     int  num_params() const override { return W_.size() + b_.size(); }
     void zero_grad() override;
     void sgd_step(float lr, float momentum) override;
+    // Adam optimizer step; uses per-parameter m/v moment buffers. `step` is a
+    // 1-based step counter for bias correction. See adam_step_cpu().
+    void adam_step(float lr, float beta1, float beta2, float eps, int step);
     void save_to(std::vector<uint8_t>& out) const override;
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
 
@@ -71,6 +74,9 @@ private:
     Tensor W_, b_;
     Tensor dW_, dB_;
     Tensor vW_, vB_;   // SGD momentum velocities
+    // Adam moment buffers (m: first moment, v_a: second moment).
+    Tensor mW_, mB_;
+    Tensor vAW_, vAB_;
     Tensor x_cache_;   // input stashed at forward, used by backward
 };
 
@@ -89,6 +95,7 @@ public:
     int  num_params() const override { return 0; }
     void zero_grad() override {}
     void sgd_step(float, float) override {}
+    void adam_step(float, float, float, float, int) {}
     void save_to(std::vector<uint8_t>&) const override {}
     void load_from(const uint8_t*, size_t&, size_t) override {}
 private:
@@ -108,6 +115,7 @@ public:
     int  num_params() const override { return 0; }
     void zero_grad() override {}
     void sgd_step(float, float) override {}
+    void adam_step(float, float, float, float, int) {}
     void save_to(std::vector<uint8_t>&) const override {}
     void load_from(const uint8_t*, size_t&, size_t) override {}
 private:
@@ -127,6 +135,7 @@ public:
     int  num_params() const override { return 0; }
     void zero_grad() override {}
     void sgd_step(float, float) override {}
+    void adam_step(float, float, float, float, int) {}
     void save_to(std::vector<uint8_t>&) const override {}
     void load_from(const uint8_t*, size_t&, size_t) override {}
 private:
@@ -137,5 +146,19 @@ private:
 
 void tensor_write(const Tensor& t, std::vector<uint8_t>& out);
 void tensor_read(Tensor& t, const uint8_t* data, size_t& offset, size_t size);
+
+// ─── Optimizer helpers ────────────────────────────────────────────────────
+//
+// adam_step_cpu performs a single Adam update in place over a flat parameter
+// buffer:
+//   m = beta1 * m + (1 - beta1) * g
+//   v = beta2 * v + (1 - beta2) * g^2
+//   m_hat = m / (1 - beta1^step)
+//   v_hat = v / (1 - beta2^step)
+//   param -= lr * m_hat / (sqrt(v_hat) + eps)
+// `step` is a 1-based step counter (the trainer increments it before calling).
+// All four tensors must have identical shape.
+void adam_step_cpu(Tensor& param, const Tensor& grad, Tensor& m, Tensor& v,
+                   float lr, float beta1, float beta2, float eps, int step);
 
 } // namespace brogameagent::nn

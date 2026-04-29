@@ -1,6 +1,11 @@
 #include "brogameagent/nn/attention.h"
 #include "brogameagent/nn/ops.h"
 
+#ifdef BGA_HAS_CUDA
+#include "brogameagent/nn/gpu/ops.h"
+#include "brogameagent/nn/gpu/runtime.h"
+#endif
+
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -29,6 +34,10 @@ void ScaledDotProductAttention::init(int n_slots, int dim, uint64_t& rng_state, 
     Wq_.resize(d_, d_); Wk_.resize(d_, d_); Wv_.resize(d_, d_); Wo_.resize(d_, d_);
     dWq_.resize(d_, d_); dWk_.resize(d_, d_); dWv_.resize(d_, d_); dWo_.resize(d_, d_);
     vWq_.resize(d_, d_); vWk_.resize(d_, d_); vWv_.resize(d_, d_); vWo_.resize(d_, d_);
+    mWq_.resize(d_, d_); mWk_.resize(d_, d_); mWv_.resize(d_, d_); mWo_.resize(d_, d_);
+    vAWq_.resize(d_, d_); vAWk_.resize(d_, d_); vAWv_.resize(d_, d_); vAWo_.resize(d_, d_);
+    mWq_.zero(); mWk_.zero(); mWv_.zero(); mWo_.zero();
+    vAWq_.zero(); vAWk_.zero(); vAWv_.zero(); vAWo_.zero();
     xavier_init(Wq_, rng_state);
     xavier_init(Wk_, rng_state);
     xavier_init(Wv_, rng_state);
@@ -194,7 +203,81 @@ void ScaledDotProductAttention::backward(const Tensor& dO, Tensor& dX) {
     }
 }
 
+#ifdef BGA_HAS_CUDA
+void ScaledDotProductAttention::forward(const gpu::GpuTensor& X,
+                                        const float* mask_dev,
+                                        gpu::GpuTensor& O) {
+    assert(device_ == Device::GPU);
+    last_mask_dev_ = mask_dev;
+    // Ensure cache mirrors are sized.
+    if (X_cache_g_.rows != n_ || X_cache_g_.cols != d_) X_cache_g_.resize(n_, d_);
+    if (Q_g_.rows != n_ || Q_g_.cols != d_) Q_g_.resize(n_, d_);
+    if (K_g_.rows != n_ || K_g_.cols != d_) K_g_.resize(n_, d_);
+    if (V_g_.rows != n_ || V_g_.cols != d_) V_g_.resize(n_, d_);
+    if (Attn_g_.rows != n_ || Attn_g_.cols != n_) Attn_g_.resize(n_, n_);
+    if (Y_g_.rows != n_ || Y_g_.cols != d_) Y_g_.resize(n_, d_);
+    // X_cache_g_ holds the forward input by value-copy via clone-on-attention?
+    // The kernel API takes X directly and reads it for backward via the
+    // separate gX argument. We keep X_cache_g_ as a clone so the layer owns
+    // a stable reference for backward (matches CPU semantics where X_cache_
+    // shadows the caller's X).
+    X_cache_g_ = X.clone();
+    gpu::attention_forward_gpu(X, Wq_g_, Wk_g_, Wv_g_, Wo_g_,
+                               mask_dev,
+                               Q_g_, K_g_, V_g_, Attn_g_, Y_g_, O);
+}
+
+void ScaledDotProductAttention::backward(const gpu::GpuTensor& dO,
+                                         gpu::GpuTensor& dX) {
+    assert(device_ == Device::GPU);
+    gpu::attention_backward_gpu(dO, X_cache_g_, Q_g_, K_g_, V_g_, Attn_g_, Y_g_,
+                                Wq_g_, Wk_g_, Wv_g_, Wo_g_,
+                                last_mask_dev_,
+                                dX,
+                                dWq_g_, dWk_g_, dWv_g_, dWo_g_);
+}
+#endif
+
+void ScaledDotProductAttention::to(Device d) {
+    if (d == device_) return;
+    device_require_cuda("ScaledDotProductAttention");
+#ifdef BGA_HAS_CUDA
+    if (d == Device::GPU) {
+        gpu::upload(Wq_, Wq_g_); gpu::upload(Wk_, Wk_g_);
+        gpu::upload(Wv_, Wv_g_); gpu::upload(Wo_, Wo_g_);
+        gpu::upload(dWq_, dWq_g_); gpu::upload(dWk_, dWk_g_);
+        gpu::upload(dWv_, dWv_g_); gpu::upload(dWo_, dWo_g_);
+        gpu::upload(vWq_, vWq_g_); gpu::upload(vWk_, vWk_g_);
+        gpu::upload(vWv_, vWv_g_); gpu::upload(vWo_, vWo_g_);
+        gpu::upload(mWq_, mWq_g_); gpu::upload(mWk_, mWk_g_);
+        gpu::upload(mWv_, mWv_g_); gpu::upload(mWo_, mWo_g_);
+        gpu::upload(vAWq_, vAWq_g_); gpu::upload(vAWk_, vAWk_g_);
+        gpu::upload(vAWv_, vAWv_g_); gpu::upload(vAWo_, vAWo_g_);
+        device_ = Device::GPU;
+    } else {
+        gpu::download(Wq_g_, Wq_); gpu::download(Wk_g_, Wk_);
+        gpu::download(Wv_g_, Wv_); gpu::download(Wo_g_, Wo_);
+        gpu::download(dWq_g_, dWq_); gpu::download(dWk_g_, dWk_);
+        gpu::download(dWv_g_, dWv_); gpu::download(dWo_g_, dWo_);
+        gpu::download(vWq_g_, vWq_); gpu::download(vWk_g_, vWk_);
+        gpu::download(vWv_g_, vWv_); gpu::download(vWo_g_, vWo_);
+        gpu::download(mWq_g_, mWq_); gpu::download(mWk_g_, mWk_);
+        gpu::download(mWv_g_, mWv_); gpu::download(mWo_g_, mWo_);
+        gpu::download(vAWq_g_, vAWq_); gpu::download(vAWk_g_, vAWk_);
+        gpu::download(vAWv_g_, vAWv_); gpu::download(vAWo_g_, vAWo_);
+        gpu::cuda_sync();
+        device_ = Device::CPU;
+    }
+#endif
+}
+
 void ScaledDotProductAttention::zero_grad() {
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        dWq_g_.zero(); dWk_g_.zero(); dWv_g_.zero(); dWo_g_.zero();
+        return;
+    }
+#endif
     dWq_.zero(); dWk_.zero(); dWv_.zero(); dWo_.zero();
 }
 
@@ -208,13 +291,47 @@ static void sgd_mat(Tensor& W, Tensor& vW, const Tensor& dW, float lr, float mom
 }
 
 void ScaledDotProductAttention::sgd_step(float lr, float momentum) {
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        gpu::sgd_step_gpu(Wq_g_, dWq_g_, vWq_g_, lr, momentum);
+        gpu::sgd_step_gpu(Wk_g_, dWk_g_, vWk_g_, lr, momentum);
+        gpu::sgd_step_gpu(Wv_g_, dWv_g_, vWv_g_, lr, momentum);
+        gpu::sgd_step_gpu(Wo_g_, dWo_g_, vWo_g_, lr, momentum);
+        return;
+    }
+#endif
     sgd_mat(Wq_, vWq_, dWq_, lr, momentum);
     sgd_mat(Wk_, vWk_, dWk_, lr, momentum);
     sgd_mat(Wv_, vWv_, dWv_, lr, momentum);
     sgd_mat(Wo_, vWo_, dWo_, lr, momentum);
 }
 
+void ScaledDotProductAttention::adam_step(float lr, float beta1, float beta2,
+                                          float eps, int step) {
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        gpu::adam_step_gpu(Wq_g_, dWq_g_, mWq_g_, vAWq_g_, lr, beta1, beta2, eps, step);
+        gpu::adam_step_gpu(Wk_g_, dWk_g_, mWk_g_, vAWk_g_, lr, beta1, beta2, eps, step);
+        gpu::adam_step_gpu(Wv_g_, dWv_g_, mWv_g_, vAWv_g_, lr, beta1, beta2, eps, step);
+        gpu::adam_step_gpu(Wo_g_, dWo_g_, mWo_g_, vAWo_g_, lr, beta1, beta2, eps, step);
+        return;
+    }
+#endif
+    adam_step_cpu(Wq_, dWq_, mWq_, vAWq_, lr, beta1, beta2, eps, step);
+    adam_step_cpu(Wk_, dWk_, mWk_, vAWk_, lr, beta1, beta2, eps, step);
+    adam_step_cpu(Wv_, dWv_, mWv_, vAWv_, lr, beta1, beta2, eps, step);
+    adam_step_cpu(Wo_, dWo_, mWo_, vAWo_, lr, beta1, beta2, eps, step);
+}
+
 void ScaledDotProductAttention::save_to(std::vector<uint8_t>& out) const {
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        auto* self = const_cast<ScaledDotProductAttention*>(this);
+        gpu::download(Wq_g_, self->Wq_); gpu::download(Wk_g_, self->Wk_);
+        gpu::download(Wv_g_, self->Wv_); gpu::download(Wo_g_, self->Wo_);
+        gpu::cuda_sync();
+    }
+#endif
     tensor_write(Wq_, out);
     tensor_write(Wk_, out);
     tensor_write(Wv_, out);
@@ -229,6 +346,24 @@ void ScaledDotProductAttention::load_from(const uint8_t* data, size_t& offset, s
     d_ = Wq_.rows;
     dWq_.resize(d_, d_); dWk_.resize(d_, d_); dWv_.resize(d_, d_); dWo_.resize(d_, d_);
     vWq_.resize(d_, d_); vWk_.resize(d_, d_); vWv_.resize(d_, d_); vWo_.resize(d_, d_);
+    mWq_.resize(d_, d_); mWk_.resize(d_, d_); mWv_.resize(d_, d_); mWo_.resize(d_, d_);
+    vAWq_.resize(d_, d_); vAWk_.resize(d_, d_); vAWv_.resize(d_, d_); vAWo_.resize(d_, d_);
+    mWq_.zero(); mWk_.zero(); mWv_.zero(); mWo_.zero();
+    vAWq_.zero(); vAWk_.zero(); vAWv_.zero(); vAWo_.zero();
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        gpu::upload(Wq_, Wq_g_); gpu::upload(Wk_, Wk_g_);
+        gpu::upload(Wv_, Wv_g_); gpu::upload(Wo_, Wo_g_);
+        gpu::upload(dWq_, dWq_g_); gpu::upload(dWk_, dWk_g_);
+        gpu::upload(dWv_, dWv_g_); gpu::upload(dWo_, dWo_g_);
+        gpu::upload(vWq_, vWq_g_); gpu::upload(vWk_, vWk_g_);
+        gpu::upload(vWv_, vWv_g_); gpu::upload(vWo_, vWo_g_);
+        gpu::upload(mWq_, mWq_g_); gpu::upload(mWk_, mWk_g_);
+        gpu::upload(mWv_, mWv_g_); gpu::upload(mWo_, mWo_g_);
+        gpu::upload(vAWq_, vAWq_g_); gpu::upload(vAWk_, vAWk_g_);
+        gpu::upload(vAWv_, vAWv_g_); gpu::upload(vAWo_, vAWo_g_);
+    }
+#endif
 }
 
 } // namespace brogameagent::nn

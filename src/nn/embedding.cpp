@@ -10,6 +10,9 @@ void Embedding::init(int vocab, int dim, uint64_t& rng_state) {
     W_.resize(vocab, dim);
     dW_.resize(vocab, dim);
     vW_.resize(vocab, dim);
+    mW_.resize(vocab, dim);
+    vAW_.resize(vocab, dim);
+    mW_.zero(); vAW_.zero();
     xavier_init(W_, rng_state);
 }
 
@@ -40,6 +43,10 @@ void Embedding::sgd_step(float lr, float momentum) {
     }
 }
 
+void Embedding::adam_step(float lr, float beta1, float beta2, float eps, int step) {
+    adam_step_cpu(W_, dW_, mW_, vAW_, lr, beta1, beta2, eps, step);
+}
+
 void Embedding::save_to(std::vector<uint8_t>& out) const {
     tensor_write(W_, out);
 }
@@ -48,6 +55,9 @@ void Embedding::load_from(const uint8_t* data, size_t& offset, size_t size) {
     tensor_read(W_, data, offset, size);
     dW_.resize(W_.rows, W_.cols);
     vW_.resize(W_.rows, W_.cols);
+    mW_.resize(W_.rows, W_.cols);
+    vAW_.resize(W_.rows, W_.cols);
+    mW_.zero(); vAW_.zero();
 }
 
 } // namespace brogameagent::nn

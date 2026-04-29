@@ -45,6 +45,7 @@ public:
 
     void zero_grad();
     void sgd_step(float lr, float momentum);
+    void adam_step(float lr, float beta1, float beta2, float eps, int step);
 
     int embed_dim() const { return enc_.out_dim(); }
     int trunk_dim() const { return cfg_.trunk_hidden; }

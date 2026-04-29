@@ -70,6 +70,14 @@ void SetTransformerEncoder::sgd_step(float lr, float m) {
     for (auto& ln : ally_ln_) ln.sgd_step(lr, m);
 }
 
+void SetTransformerEncoder::adam_step(float lr, float b1, float b2, float eps, int step) {
+    self_fc1_.adam_step(lr, b1, b2, eps, step); self_fc2_.adam_step(lr, b1, b2, eps, step);
+    enemy_proj_.adam_step(lr, b1, b2, eps, step); enemy_attn_.adam_step(lr, b1, b2, eps, step);
+    for (auto& ln : enemy_ln_) ln.adam_step(lr, b1, b2, eps, step);
+    ally_proj_.adam_step(lr, b1, b2, eps, step); ally_attn_.adam_step(lr, b1, b2, eps, step);
+    for (auto& ln : ally_ln_) ln.adam_step(lr, b1, b2, eps, step);
+}
+
 void SetTransformerEncoder::save_to(std::vector<uint8_t>& out) const {
     self_fc1_.save_to(out); self_fc2_.save_to(out);
     enemy_proj_.save_to(out); enemy_attn_.save_to(out);
