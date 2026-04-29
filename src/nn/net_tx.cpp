@@ -623,61 +623,177 @@ void SingleHeroNetTX::backward(const gpu::GpuTensor& dLogits) {
 
 // ─── Batched inference forward ────────────────────────────────────────────
 //
-// Naive implementation: loop over B rows, calling the single-sample GPU
-// forward(GpuTensor, GpuTensor&) path for each row, and copy each row's
-// logits / value into the batched output tensors via cudaMemcpy. This
-// preserves the "fully GPU-resident" pipeline and matches PVN's output
-// convention exactly so the BatchedInferenceServer is net-agnostic.
+// Stages every batch element's input on host once, builds slot-validity
+// masks for all rows in a single sweep, then drives the network end-to-end
+// on device:
 //
-// We are explicitly *not* fusing the per-slot Linear projections into a
-// (B, K, D) batched op here — that's a future optimization and the project
-// brief calls it out.
+//   • self stream  — three batched ops (Linear, ReLU, Linear) over (B, ·).
+//   • per-slot enemy/ally projections — one batched Linear each producing
+//     (B*K, D), eliminating the K_ENEMIES + K_ALLIES individual launches
+//     the prior naive loop was making per batch row.
+//   • encoder + masked mean-pool — looped per batch row but with no host
+//     blocks; encoder forwards queue into the default stream and pooled
+//     outputs land directly in (B, D) row-views via non-owning GpuTensor
+//     views.
+//   • concat / trunk / ReLU — one launch each (concat is cudaMemcpy2DAsync
+//     per part).
+//   • heads — value/policy heads aren't yet batched, so loop B times
+//     queuing kernels into the stream; per-row outputs are gathered into
+//     values_B1 / logits_BL via small device-to-device chunk copies. No
+//     host syncs in the loop.
+//
+// The remaining serialization point is the encoder (B forwards back to
+// back) and the heads loop — both are fixed by adding (B, K, D) batched
+// kernels to MHA / LayerNorm / FF and a batched value+policy head, which
+// is a separate, much larger change.
 void SingleHeroNetTX::forward_batched(const gpu::GpuTensor& X_BD,
                                       gpu::GpuTensor& logits_BL,
                                       gpu::GpuTensor& values_B1) {
     assert(device_ == Device::GPU);
-    const int B = X_BD.rows;
+    const int B    = X_BD.rows;
     const int D_in = X_BD.cols;
     assert(D_in == observation::TOTAL);
-    const int L = head_.total_logits();
+    const int D    = cfg_.d_model;
+    const int TH   = cfg_.trunk_hidden;
+    const int L    = head_.total_logits();
+    const int K_E  = observation::K_ENEMIES;
+    const int K_A  = observation::K_ALLIES;
+    const int F_E  = observation::ENEMY_FEATURES;
+    const int F_A  = observation::ALLY_FEATURES;
+    const int F_S  = observation::SELF_FEATURES;
 
     if (logits_BL.rows != B || logits_BL.cols != L) logits_BL.resize(B, L);
     if (values_B1.rows != B || values_B1.cols != 1) values_B1.resize(B, 1);
+    if (B == 0) return;
 
-    // Pull the whole input batch to host once. The single-sample path already
-    // download()'s x to compute slot validity, so funneling rows through it
-    // requires a host-resident view anyway.
+    // ── 1. Single download of the whole input batch. ──
     Tensor X_h(B, D_in);
     gpu::download(X_BD, X_h);
     gpu::cuda_sync();
 
-    // Per-row scratch.
-    gpu::GpuTensor x_row_g, logits_row_g;
-    Tensor logits_h(1, L);
-    Tensor value_h(1, 1);
-    Tensor x_row_h(D_in, 1);
+    // ── 2. Build all host staging buffers in one pass. ──
+    Tensor self_in_h (B,           F_S);
+    Tensor enemy_in_h(B * K_E,     F_E);
+    Tensor ally_in_h (B * K_A,     F_A);
+    Tensor e_masks_h (B * K_E,     1);
+    Tensor a_masks_h (B * K_A,     1);
+    enemy_in_h.zero();
+    ally_in_h.zero();
+    e_masks_h.zero();
+    a_masks_h.zero();
 
-    // Aggregate the B per-row outputs on host, then upload to the batched
-    // output tensors in one shot. This avoids the public-API gap of having
-    // no device-to-device row copy, while keeping correctness obvious.
-    Tensor logits_BL_h(B, L);
-    Tensor values_B1_h(B, 1);
-
+    const int off_e = F_S;
+    const int off_a = off_e + K_E * F_E;
     for (int b = 0; b < B; ++b) {
-        for (int j = 0; j < D_in; ++j)
-            x_row_h.data[j] = X_h.data[static_cast<size_t>(b) * D_in + j];
-        gpu::upload(x_row_h, x_row_g);
-        forward(x_row_g, logits_row_g);
-        gpu::download(logits_row_g, logits_h);
-        gpu::download(value_head_.value_gpu(), value_h);
-        gpu::cuda_sync();
-        for (int j = 0; j < L; ++j)
-            logits_BL_h.data[static_cast<size_t>(b) * L + j] = logits_h.data[j];
-        values_B1_h.data[b] = value_h.data[0];
+        for (int j = 0; j < F_S; ++j)
+            self_in_h(b, j) = X_h(b, j);
+        for (int k = 0; k < K_E; ++k) {
+            const int base = off_e + k * F_E;
+            const int row  = b * K_E + k;
+            if (X_h(b, base) > 0.5f) {
+                e_masks_h[row] = 1.0f;
+                for (int j = 0; j < F_E; ++j)
+                    enemy_in_h(row, j) = X_h(b, base + j);
+            }
+        }
+        for (int k = 0; k < K_A; ++k) {
+            const int base = off_a + k * F_A;
+            const int row  = b * K_A + k;
+            if (X_h(b, base) > 0.5f) {
+                a_masks_h[row] = 1.0f;
+                for (int j = 0; j < F_A; ++j)
+                    ally_in_h(row, j) = X_h(b, base + j);
+            }
+        }
     }
 
-    gpu::upload(logits_BL_h, logits_BL);
-    gpu::upload(values_B1_h, values_B1);
+    // ── 3. Single uploads of staging buffers. ──
+    gpu::GpuTensor self_in_g, enemy_in_g, ally_in_g, e_masks_g, a_masks_g;
+    gpu::upload(self_in_h,  self_in_g);
+    gpu::upload(enemy_in_h, enemy_in_g);
+    gpu::upload(ally_in_h,  ally_in_g);
+    gpu::upload(e_masks_h,  e_masks_g);
+    gpu::upload(a_masks_h,  a_masks_g);
+
+    // ── 4. Batched self stream. ──
+    gpu::GpuTensor self_h_raw(B, cfg_.self_hidden);
+    gpu::GpuTensor self_h_act(B, cfg_.self_hidden);
+    gpu::GpuTensor self_z    (B, D);
+    gpu::linear_forward_batched_gpu(self_fc1_.W_g(), self_fc1_.b_g(),
+                                    self_in_g, self_h_raw);
+    gpu::relu_forward_batched_gpu(self_h_raw, self_h_act);
+    gpu::linear_forward_batched_gpu(self_fc2_.W_g(), self_fc2_.b_g(),
+                                    self_h_act, self_z);
+
+    // ── 5. Batched per-slot projections — one launch per stream. ──
+    gpu::GpuTensor enemy_proj(B * K_E, D);
+    gpu::GpuTensor ally_proj (B * K_A, D);
+    gpu::linear_forward_batched_gpu(enemy_proj_.W_g(), enemy_proj_.b_g(),
+                                    enemy_in_g, enemy_proj);
+    gpu::linear_forward_batched_gpu(ally_proj_.W_g(),  ally_proj_.b_g(),
+                                    ally_in_g,  ally_proj);
+
+    // ── 6. Batched encoder forwards (one call each). The encoders use
+    //   forward_inference_batched, which dispatches the LayerNorm and
+    //   FeedForward in single kernel launches over (B*K, D) and loops MHA
+    //   per batch element — no host syncs. After the encoder, the masked
+    //   mean-pool is still per-batch but every kernel queues async into
+    //   the default stream.                                                ──
+    gpu::GpuTensor enemy_enc_out(B * K_E, D);
+    gpu::GpuTensor ally_enc_out (B * K_A, D);
+    enemy_enc_.forward_inference_batched(enemy_proj, e_masks_g.data,
+                                          enemy_enc_out, B, K_E);
+    ally_enc_ .forward_inference_batched(ally_proj,  a_masks_g.data,
+                                          ally_enc_out,  B, K_A);
+
+    gpu::GpuTensor enemy_pooled_BD(B, D);
+    gpu::GpuTensor ally_pooled_BD (B, D);
+    for (int b = 0; b < B; ++b) {
+        gpu::GpuTensor e_view = gpu::GpuTensor::view(
+            enemy_enc_out.data + static_cast<size_t>(b) * K_E * D, K_E, D);
+        const float* e_mask_b = e_masks_g.data + b * K_E;
+        gpu::GpuTensor pool_view_e = gpu::GpuTensor::view(
+            enemy_pooled_BD.data + static_cast<size_t>(b) * D, D, 1);
+        gpu::masked_mean_pool_forward_gpu(e_view, e_mask_b, pool_view_e);
+
+        gpu::GpuTensor a_view = gpu::GpuTensor::view(
+            ally_enc_out.data + static_cast<size_t>(b) * K_A * D, K_A, D);
+        const float* a_mask_b = a_masks_g.data + b * K_A;
+        gpu::GpuTensor pool_view_a = gpu::GpuTensor::view(
+            ally_pooled_BD.data + static_cast<size_t>(b) * D, D, 1);
+        gpu::masked_mean_pool_forward_gpu(a_view, a_mask_b, pool_view_a);
+    }
+
+    // ── 7. Batched concat (B, 3D). ──
+    gpu::GpuTensor concat_B3D;
+    {
+        std::vector<const gpu::GpuTensor*> parts{
+            &self_z, &enemy_pooled_BD, &ally_pooled_BD};
+        gpu::concat_batched_rows_gpu(parts, concat_B3D);
+    }
+
+    // ── 8. Batched trunk. ──
+    gpu::GpuTensor trunk_raw(B, TH);
+    gpu::GpuTensor trunk_act(B, TH);
+    gpu::linear_forward_batched_gpu(trunk_.W_g(), trunk_.b_g(),
+                                    concat_B3D, trunk_raw);
+    gpu::relu_forward_batched_gpu(trunk_raw, trunk_act);
+
+    // ── 9. Per-batch heads. ValueHead writes to its single (1,1) buffer;
+    //   each iteration's value is captured into values_B1[b] via a
+    //   stream-ordered D2D copy before the next iteration overwrites it.
+    //   Policy logits go directly into a row-view of logits_BL.            ──
+    for (int b = 0; b < B; ++b) {
+        gpu::GpuTensor trunk_view = gpu::GpuTensor::view(
+            trunk_act.data + static_cast<size_t>(b) * TH, TH, 1);
+        gpu::GpuTensor logits_view = gpu::GpuTensor::view(
+            logits_BL.data + static_cast<size_t>(b) * L, L, 1);
+        value_head_.forward(trunk_view);
+        gpu::copy_d2d_gpu(value_head_.value_gpu(), 0, values_B1, b, 1);
+        head_.forward(trunk_view, logits_view);
+    }
+
+    gpu::cuda_sync();
 }
 
 #endif // BGA_HAS_CUDA

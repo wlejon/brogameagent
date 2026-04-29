@@ -162,6 +162,11 @@ void TransformerBlock::RowLN::backward(const gpu::GpuTensor& dY, gpu::GpuTensor&
                                     dx_row, dGamma_g, dBeta_g);
     }
 }
+
+void TransformerBlock::RowLN::forward_inference_batched(
+        const gpu::GpuTensor& X_RD, gpu::GpuTensor& Y_RD) {
+    gpu::layernorm_forward_inference_batched_gpu(X_RD, gamma_g, beta_g, Y_RD, eps);
+}
 #endif
 
 void TransformerBlock::RowLN::to(Device d) {
@@ -439,6 +444,45 @@ void TransformerBlock::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
         mha_.backward(d_pre_ln1, dX_from_mha);
         dX = std::move(d_pre_ln1);
         gpu::add_inplace_gpu(dX, dX_from_mha);
+    }
+}
+
+void TransformerBlock::forward_inference_batched(
+        const gpu::GpuTensor& X_RD, const float* mask_R_dev,
+        gpu::GpuTensor& Y_RD, int B, int K) {
+    const int D = cfg_.dim;
+    const int R = B * K;
+    if (Y_RD.rows != R || Y_RD.cols != D) Y_RD.resize(R, D);
+    if (R == 0) return;
+
+    if (cfg_.norm == NormPlacement::PreNorm) {
+        // a = X + MHA(LN1(X), mask)
+        gpu::GpuTensor LN_out(R, D);
+        gpu::GpuTensor MHA_out(R, D);
+        ln1_.forward_inference_batched(X_RD, LN_out);
+        mha_.forward_inference_batched(LN_out, mask_R_dev, MHA_out, B, K);
+        gpu::copy_d2d_gpu(X_RD, 0, Y_RD, 0, R * D);
+        gpu::add_inplace_gpu(Y_RD, MHA_out);
+        // Y += FF(LN2(Y))
+        gpu::GpuTensor LN2_out(R, D);
+        gpu::GpuTensor FF_out (R, D);
+        ln2_.forward_inference_batched(Y_RD, LN2_out);
+        ff_ .forward_inference_batched(LN2_out, FF_out);
+        gpu::add_inplace_gpu(Y_RD, FF_out);
+    } else {
+        // post-norm: a = LN1(X + MHA(X, mask)); Y = LN2(a + FF(a))
+        gpu::GpuTensor MHA_out(R, D);
+        mha_.forward_inference_batched(X_RD, mask_R_dev, MHA_out, B, K);
+        gpu::GpuTensor tmp(R, D);
+        gpu::copy_d2d_gpu(X_RD, 0, tmp, 0, R * D);
+        gpu::add_inplace_gpu(tmp, MHA_out);
+        gpu::GpuTensor a(R, D);
+        ln1_.forward_inference_batched(tmp, a);
+        gpu::GpuTensor FF_out(R, D);
+        ff_.forward_inference_batched(a, FF_out);
+        gpu::copy_d2d_gpu(a, 0, tmp, 0, R * D);
+        gpu::add_inplace_gpu(tmp, FF_out);
+        ln2_.forward_inference_batched(tmp, Y_RD);
     }
 }
 #endif

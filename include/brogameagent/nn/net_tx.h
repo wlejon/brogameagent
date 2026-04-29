@@ -86,11 +86,15 @@ public:
     const gpu::GpuTensor& value_gpu() const { return value_head_.value_gpu(); }
     gpu::GpuTensor&       dValue_gpu()      { return value_head_.dValue_gpu(); }
 
-    // Batched-inference forward. Naive implementation: loops B times calling
-    // the single-sample GPU forward path. Correct and acceptable as a first
-    // cut — still amortizes upload/download of the batched logits/values
-    // tensors at the boundary, and lets the BatchedInferenceServer treat
-    // TX nets uniformly with PolicyValueNet.
+    // Batched-inference forward. The whole input is downloaded once,
+    // staging buffers are built in a single host pass, and the network
+    // runs end-to-end on device: self stream and per-slot projections are
+    // truly batched (one Linear launch each); the encoder + masked
+    // mean-pool and the heads are still looped per batch element but
+    // queue into the default stream without host blocks. Outputs are
+    // gathered into logits_BL / values_B1 via stream-ordered D2D copies.
+    // Further speedups require batched (B, K, D) MHA / LayerNorm / FF
+    // kernels and a batched value+policy head.
     void forward_batched(const gpu::GpuTensor& X_BD,
                          gpu::GpuTensor& logits_BL,
                          gpu::GpuTensor& values_B1) override;

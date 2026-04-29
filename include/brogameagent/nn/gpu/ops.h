@@ -307,6 +307,35 @@ void concat_rows_gpu(const std::vector<const GpuTensor*>& parts,
 void split_rows_gpu(const GpuTensor& in,
                     const std::vector<GpuTensor*>& parts);
 
+// Batched column-block concat. Each part is shape (B, d_i) for the same B;
+// out becomes (B, sum_i d_i) with parts laid as column blocks per row:
+//   out[b, off_i + j] = parts[i][b, j].
+// Implemented via cudaMemcpy2DAsync per part — bandwidth-bound, no kernel
+// launches. Use for batched per-row concat in inference.
+void concat_batched_rows_gpu(const std::vector<const GpuTensor*>& parts,
+                             GpuTensor& out);
+
+// Single-stream device-to-device chunk copy. Copies `n` floats from
+// src.data + src_off into dst.data + dst_off. Both tensors are treated as
+// flat float buffers regardless of (rows, cols). Async on the default stream.
+void copy_d2d_gpu(const GpuTensor& src, int src_off,
+                  GpuTensor& dst,       int dst_off,
+                  int n);
+
+// Inference-only batched LayerNorm forward. Processes R independent rows
+// of length D in a single launch (one block per row). Does not cache xhat
+// or read mean/rstd back to host — no syncs. Use when backward isn't
+// needed; the existing layernorm_forward_gpu remains for training.
+//   X_RD:   (R, D) input
+//   gamma:  (D,) scale
+//   beta:   (D,) shift
+//   Y_RD:   (R, D), resized if mis-shaped
+void layernorm_forward_inference_batched_gpu(const GpuTensor& X_RD,
+                                              const GpuTensor& gamma,
+                                              const GpuTensor& beta,
+                                              GpuTensor& Y_RD,
+                                              float eps);
+
 // SGD with momentum, in-place:
 //   velocity = momentum * velocity + grad
 //   param   -= lr * velocity

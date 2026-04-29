@@ -53,6 +53,12 @@ public:
 #ifdef BGA_HAS_CUDA
     void forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+
+    // Inference-only batched forward. Input/output (R, D); FF is purely
+    // position-wise so we just call batched Linear→ReLU→Linear over R rows
+    // in three launches. Allocates two scratch (R, d_ff) tensors per call.
+    void forward_inference_batched(const gpu::GpuTensor& X_RD,
+                                    gpu::GpuTensor& Y_RD);
 #endif
 
     Device device() const { return device_; }

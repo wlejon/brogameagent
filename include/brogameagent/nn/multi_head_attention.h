@@ -74,6 +74,16 @@ public:
     void forward(const gpu::GpuTensor& X, const float* mask_dev,
                  gpu::GpuTensor& O);
     void backward(const gpu::GpuTensor& dO, gpu::GpuTensor& dX);
+
+    // Inference-only batched forward. Input is (B*K, D); per-batch
+    // attention is independent (softmax over K tokens within each batch).
+    // Loops B times calling the existing single-sample GPU forward against
+    // GpuTensor row-views — internal caches get clobbered each iteration
+    // (acceptable; no backward is run). mask_R_dev is (B*K,) or null.
+    void forward_inference_batched(const gpu::GpuTensor& X_RD,
+                                    const float* mask_R_dev,
+                                    gpu::GpuTensor& Y_RD,
+                                    int B, int K);
 #endif
 
     Device device() const { return device_; }

@@ -67,6 +67,15 @@ public:
     void forward(const gpu::GpuTensor& X, const float* mask_dev,
                  gpu::GpuTensor& Y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+
+    // Inference-only batched forward. Input/output is (B*K, D) flat (each
+    // contiguous K-row chunk is one batch element's tokens). mask_R_dev
+    // is (B*K,) or null. Composes the inference-batched RowLN, MHA, and
+    // FF forwards with full elementwise residual adds — no host syncs.
+    void forward_inference_batched(const gpu::GpuTensor& X_RD,
+                                    const float* mask_R_dev,
+                                    gpu::GpuTensor& Y_RD,
+                                    int B, int K);
 #endif
 
     Device device() const { return device_; }
@@ -129,6 +138,12 @@ public:
 #ifdef BGA_HAS_CUDA
         void forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y);
         void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+
+        // Inference-only batched forward over R independent rows of length D
+        // (R = X_RD.rows). Uses layernorm_forward_inference_batched_gpu —
+        // no host syncs, no caches.
+        void forward_inference_batched(const gpu::GpuTensor& X_RD,
+                                        gpu::GpuTensor& Y_RD);
 #endif
         void save_to(std::vector<uint8_t>& out) const;
         void load_from(const uint8_t* data, size_t& offset, size_t size);

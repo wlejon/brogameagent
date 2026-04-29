@@ -279,6 +279,35 @@ void MultiHeadAttention::backward(const gpu::GpuTensor& dO, gpu::GpuTensor& dX) 
                           last_mask_dev_, h_,
                           dX, dWq_g_, dWk_g_, dWv_g_, dWo_g_);
 }
+
+// Inference-only batched forward. Skips X_cache_g_ clone (no backward) and
+// reuses internal Qh/Kh/Vh/Attnh/Yconcat scratch across the B iterations
+// — they are clobbered each call, fine since no backward will run.
+void MultiHeadAttention::forward_inference_batched(
+        const gpu::GpuTensor& X_RD, const float* mask_R_dev,
+        gpu::GpuTensor& Y_RD, int B, int K) {
+    assert(device_ == Device::GPU);
+    if (Y_RD.rows != B * K || Y_RD.cols != d_) Y_RD.resize(B * K, d_);
+    if (B == 0 || K == 0) return;
+
+    if (Qh_g_.rows    != h_ * K || Qh_g_.cols    != dh_) Qh_g_.resize(h_ * K, dh_);
+    if (Kh_g_.rows    != h_ * K || Kh_g_.cols    != dh_) Kh_g_.resize(h_ * K, dh_);
+    if (Vh_g_.rows    != h_ * K || Vh_g_.cols    != dh_) Vh_g_.resize(h_ * K, dh_);
+    if (Attnh_g_.rows != h_ * K || Attnh_g_.cols != K)   Attnh_g_.resize(h_ * K, K);
+    if (Yconcat_g_.rows != K || Yconcat_g_.cols != d_)   Yconcat_g_.resize(K, d_);
+    n_ = K;
+
+    for (int b = 0; b < B; ++b) {
+        gpu::GpuTensor X_view = gpu::GpuTensor::view(
+            X_RD.data + static_cast<size_t>(b) * K * d_, K, d_);
+        gpu::GpuTensor Y_view = gpu::GpuTensor::view(
+            Y_RD.data + static_cast<size_t>(b) * K * d_, K, d_);
+        const float* mask_b = mask_R_dev ? mask_R_dev + b * K : nullptr;
+        gpu::mha_forward_gpu(X_view, Wq_g_, Wk_g_, Wv_g_, Wo_g_,
+                             mask_b, h_,
+                             Qh_g_, Kh_g_, Vh_g_, Attnh_g_, Yconcat_g_, Y_view);
+    }
+}
 #endif
 
 void MultiHeadAttention::to(Device d) {

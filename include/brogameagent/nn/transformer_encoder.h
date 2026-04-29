@@ -57,6 +57,15 @@ public:
     void forward(const gpu::GpuTensor& X, const float* mask_dev,
                  gpu::GpuTensor& Y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+
+    // Inference-only batched forward. (B*K, D) input → (B*K, D) output.
+    // Mask is (B*K,) or null. Stacks forward_inference_batched on each
+    // block, ping-ponging two scratch buffers, then applies the optional
+    // final LayerNorm (pre-norm only). No host syncs anywhere.
+    void forward_inference_batched(const gpu::GpuTensor& X_RD,
+                                    const float* mask_R_dev,
+                                    gpu::GpuTensor& Y_RD,
+                                    int B, int K);
 #endif
 
     Device device() const { return device_; }

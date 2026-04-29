@@ -4,8 +4,11 @@
 #include "parity_helpers.h"
 
 #include <brogameagent/nn/net_tx.h>
+#include <brogameagent/nn/gpu/runtime.h>
 #include <brogameagent/observation.h>
 
+#include <chrono>
+#include <cstdio>
 #include <vector>
 
 using namespace bga_parity;
@@ -102,5 +105,67 @@ void run_tx_batched(int B, uint64_t seed) {
 BGA_PARITY_TEST(tx_batched_B1)  { run_tx_batched(1,  0x20001ull); }
 BGA_PARITY_TEST(tx_batched_B4)  { run_tx_batched(4,  0x20002ull); }
 BGA_PARITY_TEST(tx_batched_B16) { run_tx_batched(16, 0x20003ull); }
+
+// Smoke bench: forward_batched(B) vs B sequential single-sample forwards.
+// Prints both wall-times. Doesn't assert a specific ratio — environments
+// vary — but it should be measurably faster.
+BGA_PARITY_TEST(tx_batched_speedup_smoke) {
+    const int B = 64;
+    const int N_iters = 32;
+
+    SingleHeroNetTX::Config cfg;
+    cfg.d_model = 32; cfg.d_ff = 64; cfg.num_heads = 4; cfg.num_blocks = 2;
+    cfg.self_hidden = 32; cfg.trunk_hidden = 64; cfg.value_hidden = 32;
+    cfg.seed = 0xBE7C7Bull;
+
+    SingleHeroNetTX net;
+    net.init(cfg);
+    net.to(Device::GPU);
+
+    SplitMix64 rng(0xBE7C7Bull ^ 0xFEEDull);
+    Tensor X_BD = make_batch_inputs(B, rng);
+    GpuTensor gX_BD;
+    upload(X_BD, gX_BD);
+
+    // Warmup.
+    {
+        GpuTensor lg, vg;
+        for (int i = 0; i < 4; ++i) net.forward_batched(gX_BD, lg, vg);
+        brogameagent::nn::gpu::cuda_sync();
+    }
+
+    // Time batched.
+    auto t0 = std::chrono::steady_clock::now();
+    {
+        GpuTensor lg, vg;
+        for (int i = 0; i < N_iters; ++i) net.forward_batched(gX_BD, lg, vg);
+        brogameagent::nn::gpu::cuda_sync();
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    const double batched_ms =
+        std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    // Time B sequential single-sample forwards.
+    auto t2 = std::chrono::steady_clock::now();
+    for (int i = 0; i < N_iters; ++i) {
+        for (int b = 0; b < B; ++b) {
+            Tensor xb(obs::TOTAL, 1);
+            for (int j = 0; j < obs::TOTAL; ++j)
+                xb.data[j] = X_BD.data[static_cast<size_t>(b) * obs::TOTAL + j];
+            GpuTensor gxb;
+            upload(xb, gxb);
+            GpuTensor glogits;
+            net.forward(gxb, glogits);
+        }
+    }
+    brogameagent::nn::gpu::cuda_sync();
+    auto t3 = std::chrono::steady_clock::now();
+    const double serial_ms =
+        std::chrono::duration<double, std::milli>(t3 - t2).count();
+
+    const double speedup = serial_ms / std::max(batched_ms, 1e-9);
+    std::printf("\n[bench] B=%d iters=%d  serial=%.2f ms  batched=%.2f ms  "
+                "speedup=%.2fx\n", B, N_iters, serial_ms, batched_ms, speedup);
+}
 
 int main() { return run_all("SingleHeroNetTX forward_batched parity"); }

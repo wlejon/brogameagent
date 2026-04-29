@@ -1,6 +1,7 @@
 #include "brogameagent/nn/transformer_encoder.h"
 
 #ifdef BGA_HAS_CUDA
+#include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
 
@@ -140,6 +141,37 @@ void TransformerEncoder::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) 
         d_cur = std::move(d_in);
     }
     dX = std::move(d_cur);
+}
+
+void TransformerEncoder::forward_inference_batched(
+        const gpu::GpuTensor& X_RD, const float* mask_R_dev,
+        gpu::GpuTensor& Y_RD, int B, int K) {
+    assert(device_ == Device::GPU);
+    const int D = cfg_.dim;
+    const int R = B * K;
+    if (Y_RD.rows != R || Y_RD.cols != D) Y_RD.resize(R, D);
+    if (R == 0) return;
+    if (cfg_.n_layers == 0) {
+        if (has_final_ln_) {
+            final_ln_.forward_inference_batched(X_RD, Y_RD);
+        } else {
+            gpu::copy_d2d_gpu(X_RD, 0, Y_RD, 0, R * D);
+        }
+        return;
+    }
+    gpu::GpuTensor a(R, D), b(R, D);
+    const gpu::GpuTensor* cur = &X_RD;
+    gpu::GpuTensor* dst = &a;
+    for (int i = 0; i < cfg_.n_layers; ++i) {
+        blocks_[i]->forward_inference_batched(*cur, mask_R_dev, *dst, B, K);
+        cur = dst;
+        dst = (dst == &a) ? &b : &a;
+    }
+    if (has_final_ln_) {
+        final_ln_.forward_inference_batched(*cur, Y_RD);
+    } else {
+        gpu::copy_d2d_gpu(*cur, 0, Y_RD, 0, R * D);
+    }
 }
 #endif
 

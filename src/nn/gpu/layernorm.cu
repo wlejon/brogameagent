@@ -156,6 +156,75 @@ void layernorm_forward_gpu(const GpuTensor& x,
     rstd_out = h[1];
 }
 
+// Inference-only batched forward. Processes R independent rows of length D
+// (R = rows, D = cols). One block per row; threads cooperate on mean/var
+// reductions in shared memory. Does NOT cache xhat or write mean/rstd —
+// no host syncs. Use when caches/backward aren't needed (e.g., inference
+// pipeline through a TransformerEncoder).
+namespace {
+__global__ void layernorm_forward_inference_batched_kernel(
+        const float* __restrict__ x,
+        const float* __restrict__ gamma,
+        const float* __restrict__ beta,
+        float* __restrict__ y,
+        int R, int D, float eps) {
+    extern __shared__ float sdata[];
+    const int row = blockIdx.x;
+    const int tid = threadIdx.x;
+    if (row >= R) return;
+
+    const float* xrow = x + static_cast<size_t>(row) * D;
+    float*       yrow = y + static_cast<size_t>(row) * D;
+
+    // Mean.
+    float local = 0.0f;
+    for (int i = tid; i < D; i += blockDim.x) local += xrow[i];
+    sdata[tid] = local;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+    const float mean = sdata[0] / static_cast<float>(D);
+
+    // Variance.
+    float local_v = 0.0f;
+    for (int i = tid; i < D; i += blockDim.x) {
+        const float d = xrow[i] - mean;
+        local_v += d * d;
+    }
+    sdata[tid] = local_v;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+    const float var  = sdata[0] / static_cast<float>(D);
+    const float rstd = rsqrtf(var + eps);
+
+    for (int i = tid; i < D; i += blockDim.x) {
+        const float xh = (xrow[i] - mean) * rstd;
+        yrow[i] = xh * gamma[i] + beta[i];
+    }
+}
+} // namespace
+
+void layernorm_forward_inference_batched_gpu(const GpuTensor& X_RD,
+                                              const GpuTensor& gamma,
+                                              const GpuTensor& beta,
+                                              GpuTensor& Y_RD,
+                                              float eps) {
+    const int R = X_RD.rows;
+    const int D = X_RD.cols;
+    if (Y_RD.rows != R || Y_RD.cols != D) Y_RD.resize(R, D);
+    if (R == 0 || D == 0) return;
+    const int block = LN_BLOCK;
+    const size_t shmem = static_cast<size_t>(block) * sizeof(float);
+    layernorm_forward_inference_batched_kernel<<<R, block, shmem>>>(
+        X_RD.data, gamma.data, beta.data, Y_RD.data, R, D, eps);
+    BGA_CUDA_CHECK(cudaGetLastError());
+}
+
 void layernorm_backward_gpu(const GpuTensor& dY, const GpuTensor& xhat,
                             const GpuTensor& gamma, float rstd,
                             GpuTensor& dX,

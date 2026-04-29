@@ -184,6 +184,19 @@ void FeedForward::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
                                  dX_row, dW1_g_, dB1_g_);
     }
 }
+
+void FeedForward::forward_inference_batched(const gpu::GpuTensor& X_RD,
+                                            gpu::GpuTensor& Y_RD) {
+    assert(device_ == Device::GPU);
+    const int R = X_RD.rows;
+    if (Y_RD.rows != R || Y_RD.cols != d_) Y_RD.resize(R, d_);
+    if (R == 0) return;
+    gpu::GpuTensor H_pre (R, df_);
+    gpu::GpuTensor H_post(R, df_);
+    gpu::linear_forward_batched_gpu(W1_g_, b1_g_, X_RD, H_pre);
+    gpu::relu_forward_batched_gpu(H_pre, H_post);
+    gpu::linear_forward_batched_gpu(W2_g_, b2_g_, H_post, Y_RD);
+}
 #endif
 
 void FeedForward::to(Device d) {
