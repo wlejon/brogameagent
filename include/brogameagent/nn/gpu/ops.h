@@ -325,4 +325,30 @@ void adam_step_gpu(GpuTensor& param, const GpuTensor& grad,
                    GpuTensor& m, GpuTensor& v,
                    float lr, float beta1, float beta2, float eps, int step);
 
+// ─── Batched (inference-only) variants ─────────────────────────────────────
+//
+// These run B independent forward passes in a single kernel launch. They are
+// forward-only; backward is not provided. Used by the BatchedInferenceServer
+// to amortise per-kernel-launch latency across many concurrent requests.
+//
+// Layout convention: tensors carrying B rows are shaped (B, D) row-major, so
+// row b at columns 0..D-1 holds the b'th sample. This is the natural shape
+// for staging samples end-to-end into a flat host buffer and uploading once.
+
+// Y[b, :] = W * X[b, :] + b   for b in [0, B).
+//   W:    (out_dim, in_dim)
+//   bias: (out_dim, 1)
+//   X_BD: (B, in_dim)
+//   Y_BD: (B, out_dim) — resized if mis-shaped.
+void linear_forward_batched_gpu(const GpuTensor& W, const GpuTensor& bias,
+                                const GpuTensor& X_BD, GpuTensor& Y_BD);
+
+// Elementwise ReLU/Tanh over (B, D). Y resized to match X if mis-shaped.
+// X and Y may alias.
+void relu_forward_batched_gpu(const GpuTensor& X_BD, GpuTensor& Y_BD);
+void tanh_forward_batched_gpu(const GpuTensor& X_BD, GpuTensor& Y_BD);
+
+// Y[i] += X[i] over (B, D). Identical shape required.
+void add_inplace_batched_gpu(GpuTensor& Y_BD, const GpuTensor& X_BD);
+
 } // namespace brogameagent::nn::gpu

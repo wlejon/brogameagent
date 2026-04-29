@@ -129,6 +129,8 @@ if(BROGAMEAGENT_WITH_CUDA)
         src/nn/gpu/embedding.cu
         src/nn/gpu/concat.cu
         src/nn/gpu/mha.cu
+        src/nn/gpu/batched_ops.cu
+        src/learn/inference_server.cpp
     )
     target_link_libraries(brogameagent PUBLIC CUDA::cudart)
     target_compile_definitions(brogameagent PUBLIC BGA_HAS_CUDA=1)

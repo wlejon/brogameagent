@@ -89,6 +89,19 @@ public:
     //   dValue_gpu() — (1,1) gradient slot the caller writes BEFORE backward.
     const gpu::GpuTensor& value_gpu()  const { return v_post_tanh_g_; }
     gpu::GpuTensor&       dValue_gpu()       { return dPostTanh_g_; }
+
+    // Inference-only batched GPU forward.
+    //   X_BD:      (B, in_dim)        observations stacked row-wise
+    //   logits_BL: (B, num_actions)   resized if mis-shaped
+    //   values_B1: (B, 1)             resized if mis-shaped
+    //
+    // Composes the new batched kernels (linear/relu/tanh) so the entire
+    // forward is K kernel launches regardless of B. Does NOT touch the
+    // single-sample backward caches; safe to call concurrently with no
+    // pending backward. Parameters must already be on Device::GPU.
+    void forward_batched(const gpu::GpuTensor& X_BD,
+                         gpu::GpuTensor& logits_BL,
+                         gpu::GpuTensor& values_B1);
 #endif
 
     Device device() const { return device_; }
@@ -157,6 +170,12 @@ private:
     gpu::GpuTensor dTrunkFromV_g_, dTrunkFromP_g_;
     gpu::GpuTensor dHAct_g_, dHRaw_g_, dPrev_g_;
     gpu::GpuTensor dXdiscard_g_;  // discarded gradient at trunk input
+
+    // Batched-inference scratch (grown lazily in forward_batched).
+    std::vector<gpu::GpuTensor> trunk_raw_bg_;
+    std::vector<gpu::GpuTensor> trunk_act_bg_;
+    gpu::GpuTensor v_h_raw_bg_, v_h_act_bg_;
+    gpu::GpuTensor v_pre_tanh_bg_;
 #endif
 };
 

@@ -76,6 +76,7 @@ if(BROGAMEAGENT_WITH_CUDA)
         embedding
         concat
         mha
+        batched
     )
     foreach(_name IN LISTS _bga_gpu_parity_tests)
         set(_target brogameagent_gpu_${_name}_parity_test)
@@ -129,4 +130,34 @@ if(BROGAMEAGENT_WITH_CUDA)
     endif()
     add_test(NAME brogameagent_gpu_exit_trainer_test
              COMMAND brogameagent_gpu_exit_trainer_test)
+
+    # PolicyValueNet::forward_batched parity test.
+    add_executable(brogameagent_gpu_pvn_batched_test
+        gpu/test_policy_value_net_batched.cpp
+    )
+    target_link_libraries(brogameagent_gpu_pvn_batched_test PRIVATE brogameagent)
+    target_include_directories(brogameagent_gpu_pvn_batched_test PRIVATE
+        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    if(MSVC)
+        target_compile_options(brogameagent_gpu_pvn_batched_test PRIVATE /W4)
+    else()
+        target_compile_options(brogameagent_gpu_pvn_batched_test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME brogameagent_gpu_pvn_batched_test
+             COMMAND brogameagent_gpu_pvn_batched_test)
+
+    # BatchedInferenceServer functional + stress + bench.
+    add_executable(brogameagent_gpu_inference_server_test
+        gpu/test_inference_server.cpp
+    )
+    target_link_libraries(brogameagent_gpu_inference_server_test PRIVATE brogameagent)
+    target_include_directories(brogameagent_gpu_inference_server_test PRIVATE
+        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    if(MSVC)
+        target_compile_options(brogameagent_gpu_inference_server_test PRIVATE /W4)
+    else()
+        target_compile_options(brogameagent_gpu_inference_server_test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME brogameagent_gpu_inference_server_test
+             COMMAND brogameagent_gpu_inference_server_test)
 endif()

@@ -165,6 +165,42 @@ void PolicyValueNet::forward(const gpu::GpuTensor& x, gpu::GpuTensor& logits) {
     p_fc_.forward(*h, logits);
 }
 
+void PolicyValueNet::forward_batched(const gpu::GpuTensor& X_BD,
+                                     gpu::GpuTensor& logits_BL,
+                                     gpu::GpuTensor& values_B1) {
+    assert(device_ == Device::GPU);
+    const int B = X_BD.rows;
+
+    // Lazily size the batched scratch vector to match trunk depth.
+    if (trunk_raw_bg_.size() != trunk_.size()) {
+        trunk_raw_bg_.clear();
+        trunk_act_bg_.clear();
+        trunk_raw_bg_.resize(trunk_.size());
+        trunk_act_bg_.resize(trunk_.size());
+    }
+
+    // Trunk: Linear(W, b) → ReLU per layer. Each call resizes its output to
+    // (B, hidden[i]) automatically.
+    const gpu::GpuTensor* h = &X_BD;
+    for (size_t i = 0; i < trunk_.size(); ++i) {
+        gpu::linear_forward_batched_gpu(trunk_[i].W_g(), trunk_[i].b_g(),
+                                        *h, trunk_raw_bg_[i]);
+        gpu::relu_forward_batched_gpu(trunk_raw_bg_[i], trunk_act_bg_[i]);
+        h = &trunk_act_bg_[i];
+    }
+
+    // Value head: Linear → ReLU → Linear → Tanh, all batched.
+    gpu::linear_forward_batched_gpu(v_fc1_.W_g(), v_fc1_.b_g(), *h, v_h_raw_bg_);
+    gpu::relu_forward_batched_gpu(v_h_raw_bg_, v_h_act_bg_);
+    gpu::linear_forward_batched_gpu(v_fc2_.W_g(), v_fc2_.b_g(),
+                                    v_h_act_bg_, v_pre_tanh_bg_);
+    if (values_B1.rows != B || values_B1.cols != 1) values_B1.resize(B, 1);
+    gpu::tanh_forward_batched_gpu(v_pre_tanh_bg_, values_B1);
+
+    // Policy head.
+    gpu::linear_forward_batched_gpu(p_fc_.W_g(), p_fc_.b_g(), *h, logits_BL);
+}
+
 void PolicyValueNet::backward(const gpu::GpuTensor& dLogits) {
     assert(device_ == Device::GPU);
 
