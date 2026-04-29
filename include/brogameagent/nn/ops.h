@@ -55,6 +55,15 @@ float softmax_xent(const Tensor& logits, const Tensor& target,
                    Tensor& probs, Tensor& dLogits,
                    const float* mask = nullptr);
 
+// Pointer/length form of softmax_xent. Operates on n contiguous floats
+// starting at the supplied pointers. Used by callers that want to apply
+// xent to a segment of a larger logit/target buffer (e.g. the per-head
+// policy loss in GenericExItTrainer) without copying through temporary
+// Tensors. Same return value semantics as softmax_xent.
+float softmax_xent_segment(const float* logits, const float* target,
+                           float* probs, float* dLogits,
+                           int n, const float* mask = nullptr);
+
 // Mean-squared error for scalar value head. pred and target are both size 1.
 // Returns 0.5 * (pred - target)^2; dPred = (pred - target).
 float mse_scalar(float pred, float target, float& dPred);

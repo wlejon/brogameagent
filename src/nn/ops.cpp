@@ -137,14 +137,25 @@ void softmax_backward(const Tensor& probs, const Tensor& dProbs, Tensor& dLogits
     for (int i = 0; i < n; ++i) dz[i] = pp[i] * (dp[i] - dot);
 }
 
-float softmax_xent(const Tensor& logits, const Tensor& target,
-                   Tensor& probs, Tensor& dLogits,
-                   const float* mask) {
-    softmax_forward(logits, probs, mask);
-    const int n = logits.size();
-    const float* tp = target.ptr();
-    const float* pp = probs.ptr();
-    float* dz = dLogits.ptr();
+float softmax_xent_segment(const float* lp, const float* tp,
+                           float* pp, float* dz,
+                           int n, const float* mask) {
+    // Stable softmax over the segment.
+    float m = -1e30f;
+    for (int i = 0; i < n; ++i) {
+        if (mask && mask[i] == 0.0f) continue;
+        if (lp[i] > m) m = lp[i];
+    }
+    float s = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        if (mask && mask[i] == 0.0f) { pp[i] = 0.0f; continue; }
+        pp[i] = std::exp(lp[i] - m);
+        s += pp[i];
+    }
+    const float inv = s > 0.0f ? 1.0f / s : 0.0f;
+    for (int i = 0; i < n; ++i) pp[i] *= inv;
+
+    // xent + dLogits = (p - t).
     float loss = 0.0f;
     for (int i = 0; i < n; ++i) {
         if (mask && mask[i] == 0.0f) { dz[i] = 0.0f; continue; }
@@ -155,6 +166,14 @@ float softmax_xent(const Tensor& logits, const Tensor& target,
         dz[i] = pp[i] - tp[i];
     }
     return loss;
+}
+
+float softmax_xent(const Tensor& logits, const Tensor& target,
+                   Tensor& probs, Tensor& dLogits,
+                   const float* mask) {
+    return softmax_xent_segment(logits.ptr(), target.ptr(),
+                                probs.ptr(), dLogits.ptr(),
+                                logits.size(), mask);
 }
 
 float mse_scalar(float pred, float target, float& dPred) {

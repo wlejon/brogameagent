@@ -42,14 +42,34 @@ GenericTrainStep GenericExItTrainer::step() {
         const float lv = nn::mse_scalar(v_pred, sit.value_target, dv);
         tot_lv += lv;
 
-        // Policy loss with optional mask. softmax_xent collapses the
-        // gradient to (probs - target) over legal entries.
+        // Policy loss with optional mask. For multi-head nets, run an
+        // independent softmax-xent per head segment and mean-reduce across
+        // heads so loss magnitude is invariant to head count. For single-
+        // head nets the loop runs once and is equivalent to the old call.
         const float* mask_ptr = nullptr;
         if (!sit.action_mask.empty() &&
             static_cast<int>(sit.action_mask.size()) == n_act) {
             mask_ptr = sit.action_mask.data();
         }
-        const float lp = nn::softmax_xent(logits, target, probs, dLog, mask_ptr);
+        const auto& offsets = net_->head_offsets();
+        const int n_heads = net_->num_heads();
+        float lp = 0.0f;
+        for (int h = 0; h < n_heads; ++h) {
+            const int off = offsets[h];
+            const int len = offsets[h + 1] - off;
+            const float* head_mask = mask_ptr ? mask_ptr + off : nullptr;
+            const float lh = nn::softmax_xent_segment(
+                logits.ptr() + off, target.ptr() + off,
+                probs.ptr()  + off, dLog.ptr()   + off,
+                len, head_mask);
+            lp += lh;
+        }
+        lp /= static_cast<float>(n_heads);
+        // Mean-reduce gradient too so per-head and overall scaling line up.
+        if (n_heads > 1) {
+            const float inv = 1.0f / static_cast<float>(n_heads);
+            for (int i = 0; i < dLog.size(); ++i) dLog[i] *= inv;
+        }
         tot_lp += lp;
 
         // Scale by 1/batch and the configured loss weights, then accumulate

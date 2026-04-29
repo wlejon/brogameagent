@@ -4936,6 +4936,49 @@ TEST(policy_value_net_v1_blob_loads_into_single_head_net) {
     for (int i = 0; i < 5; ++i) CHECK_NEAR(la[i], lb[i], 1e-6f);
 }
 
+TEST(generic_trainer_factored_heads_drives_loss_down) {
+    // Two-head net: heads {3, 4}. Train on a fixed (obs → per-head one-hot)
+    // mapping and verify the policy loss decreases with SGD steps. This
+    // exercises the per-head softmax-xent loop and the mean reduction.
+    nn::PolicyValueNet net;
+    nn::PolicyValueNet::Config cfg;
+    cfg.in_dim = 4; cfg.hidden = {16, 16}; cfg.value_hidden = 8;
+    cfg.head_sizes = {3, 4}; cfg.seed = 42;
+    net.init(cfg);
+
+    learn::GenericReplayBuffer buf(256);
+    // 4 distinct (obs, target) pairs. Targets are concatenated per-head
+    // one-hots, each summing to 1.0 within its segment.
+    auto push = [&](std::vector<float> obs, int a0, int a1) {
+        learn::GenericSituation s;
+        s.obs = std::move(obs);
+        s.policy_target.assign(7, 0.0f);
+        s.policy_target[a0] = 1.0f;
+        s.policy_target[3 + a1] = 1.0f;
+        s.value_target = 0.0f;
+        buf.push(std::move(s));
+    };
+    push({1, 0, 0, 0}, 0, 0);
+    push({0, 1, 0, 0}, 1, 1);
+    push({0, 0, 1, 0}, 2, 2);
+    push({0, 0, 0, 1}, 0, 3);
+
+    learn::GenericExItTrainer tr;
+    learn::GenericTrainerConfig tcfg;
+    tcfg.batch = 4; tcfg.lr = 0.05f; tcfg.momentum = 0.9f;
+    tcfg.publish_every = 0;     // no handle, no publish
+    tr.set_net(&net);
+    tr.set_buffer(&buf);
+    tr.set_config(tcfg);
+
+    auto first = tr.step();
+    for (int i = 0; i < 200; ++i) tr.step();
+    auto last = tr.step();
+
+    CHECK(first.samples == 4);
+    CHECK(last.loss_policy < first.loss_policy * 0.5f);
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
