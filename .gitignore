@@ -20,3 +20,4 @@ replays_checkpoint/
 # Training checkpoints
 checkpoints/
 *.pt
+build*/
