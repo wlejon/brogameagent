@@ -160,4 +160,19 @@ if(BROGAMEAGENT_WITH_CUDA)
     endif()
     add_test(NAME brogameagent_gpu_inference_server_test
              COMMAND brogameagent_gpu_inference_server_test)
+
+    # MCTS + BatchedInferenceServer integration (equivalence + bench).
+    add_executable(brogameagent_gpu_mcts_server_test
+        gpu/test_mcts_server.cpp
+    )
+    target_link_libraries(brogameagent_gpu_mcts_server_test PRIVATE brogameagent)
+    target_include_directories(brogameagent_gpu_mcts_server_test PRIVATE
+        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    if(MSVC)
+        target_compile_options(brogameagent_gpu_mcts_server_test PRIVATE /W4)
+    else()
+        target_compile_options(brogameagent_gpu_mcts_server_test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME brogameagent_gpu_mcts_server_test
+             COMMAND brogameagent_gpu_mcts_server_test)
 endif()

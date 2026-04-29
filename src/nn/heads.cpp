@@ -1,5 +1,10 @@
 #include "brogameagent/nn/heads.h"
 
+#ifdef BGA_HAS_CUDA
+#include "brogameagent/nn/gpu/ops.h"
+#include "brogameagent/nn/gpu/runtime.h"
+#endif
+
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -25,6 +30,44 @@ void ValueHead::forward(const Tensor& embed, float& value) {
     value = y;
 }
 
+void ValueHead::to(Device d) {
+    if (d == device_) return;
+    device_require_cuda("ValueHead");
+#ifdef BGA_HAS_CUDA
+    fc1_.to(d);
+    fc2_.to(d);
+    if (d == Device::GPU) {
+        h_raw_g_.resize(h_raw_.rows, 1);
+        h_act_g_.resize(h_act_.rows, 1);
+        pre_tanh_g_.resize(1, 1);
+        post_tanh_g_.resize(1, 1);
+        dValue_g_.resize(1, 1);
+        dPre_g_.resize(1, 1);
+        dHact_g_.resize(h_act_.rows, 1);
+        dHraw_g_.resize(h_raw_.rows, 1);
+    }
+#endif
+    device_ = d;
+}
+
+#ifdef BGA_HAS_CUDA
+void ValueHead::forward(const gpu::GpuTensor& embed) {
+    assert(device_ == Device::GPU);
+    fc1_.forward(embed, h_raw_g_);
+    gpu::relu_forward_gpu(h_raw_g_, h_act_g_);
+    fc2_.forward(h_act_g_, pre_tanh_g_);
+    gpu::tanh_forward_gpu(pre_tanh_g_, post_tanh_g_);
+}
+
+void ValueHead::backward(gpu::GpuTensor& dEmbed) {
+    assert(device_ == Device::GPU);
+    gpu::tanh_backward_gpu(post_tanh_g_, dValue_g_, dPre_g_);
+    fc2_.backward(dPre_g_, dHact_g_);
+    gpu::relu_backward_gpu(h_raw_g_, dHact_g_, dHraw_g_);
+    fc1_.backward(dHraw_g_, dEmbed);
+}
+#endif
+
 void ValueHead::backward(float dValue, Tensor& dEmbed) {
     // d/dx tanh(x) = 1 - tanh(x)^2
     const float d_out_raw = dValue * (1.0f - y_cache_ * y_cache_);
@@ -44,6 +87,48 @@ void FactoredPolicyHead::init(int embed_dim, uint64_t& rng_state) {
     atk_.init(embed_dim,  N_ATTACK,  rng_state);
     abil_.init(embed_dim, N_ABILITY, rng_state);
 }
+
+void FactoredPolicyHead::to(Device d) {
+    if (d == device_) return;
+    device_require_cuda("FactoredPolicyHead");
+#ifdef BGA_HAS_CUDA
+    move_.to(d); atk_.to(d); abil_.to(d);
+    if (d == Device::GPU) {
+        lm_g_.resize(N_MOVE,    1);
+        la_g_.resize(N_ATTACK,  1);
+        lb_g_.resize(N_ABILITY, 1);
+        dLm_g_.resize(N_MOVE,    1);
+        dLa_g_.resize(N_ATTACK,  1);
+        dLb_g_.resize(N_ABILITY, 1);
+        dEmbedTmp_g_.resize(move_.in_dim(), 1);
+    }
+#endif
+    device_ = d;
+}
+
+#ifdef BGA_HAS_CUDA
+void FactoredPolicyHead::forward(const gpu::GpuTensor& embed, gpu::GpuTensor& logits) {
+    assert(device_ == Device::GPU);
+    move_.forward(embed, lm_g_);
+    atk_.forward(embed,  la_g_);
+    abil_.forward(embed, lb_g_);
+    std::vector<const gpu::GpuTensor*> parts{&lm_g_, &la_g_, &lb_g_};
+    gpu::concat_rows_gpu(parts, logits);
+}
+
+void FactoredPolicyHead::backward(const gpu::GpuTensor& dLogits, gpu::GpuTensor& dEmbed) {
+    assert(device_ == Device::GPU);
+    std::vector<gpu::GpuTensor*> parts{&dLm_g_, &dLa_g_, &dLb_g_};
+    gpu::split_rows_gpu(dLogits, parts);
+
+    // dEmbed = move.backward + atk.backward + abil.backward
+    move_.backward(dLm_g_, dEmbed);
+    atk_.backward(dLa_g_, dEmbedTmp_g_);
+    gpu::add_inplace_gpu(dEmbed, dEmbedTmp_g_);
+    abil_.backward(dLb_g_, dEmbedTmp_g_);
+    gpu::add_inplace_gpu(dEmbed, dEmbedTmp_g_);
+}
+#endif
 
 void FactoredPolicyHead::forward(const Tensor& embed, Tensor& logits) {
     assert(logits.size() == total_logits());

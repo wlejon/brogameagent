@@ -1,9 +1,14 @@
 #pragma once
 
 #include "circuits.h"
+#include "device.h"
 #include "tensor.h"
 #include "brogameagent/action_mask.h"
 #include "brogameagent/observation.h"
+
+#ifdef BGA_HAS_CUDA
+#include "gpu/tensor.h"
+#endif
 
 #include <cstdint>
 
@@ -23,6 +28,21 @@ public:
     void forward(const Tensor& embed, float& value);
     void backward(float dValue, Tensor& dEmbed);
 
+#ifdef BGA_HAS_CUDA
+    // GPU code path. Internal Linears must be on GPU (call to(GPU)).
+    //   embed: (embed_dim, 1). Post-tanh value is cached in value_gpu().
+    void forward(const gpu::GpuTensor& embed);
+    // dValue must point to a (1,1) device tensor with d(loss)/d(value).
+    // Caller writes via dValue_gpu().
+    void backward(gpu::GpuTensor& dEmbed);
+
+    const gpu::GpuTensor& value_gpu() const { return post_tanh_g_; }
+    gpu::GpuTensor&       dValue_gpu()      { return dValue_g_; }
+#endif
+
+    Device device() const { return device_; }
+    void to(Device d);
+
     const char* name() const override { return "ValueHead"; }
     int  num_params() const override { return fc1_.num_params() + fc2_.num_params(); }
     void zero_grad() override { fc1_.zero_grad(); fc2_.zero_grad(); }
@@ -40,6 +60,17 @@ private:
     Tensor h_raw_, h_act_;       // hidden before/after ReLU
     Tensor out_raw_;              // pre-tanh scalar (1-vec)
     float  y_cache_ = 0.0f;       // post-tanh scalar
+
+    Device device_ = Device::CPU;
+#ifdef BGA_HAS_CUDA
+    // GPU forward caches (sized at to(GPU)).
+    gpu::GpuTensor h_raw_g_, h_act_g_;
+    gpu::GpuTensor pre_tanh_g_;        // (1,1) pre-tanh scalar
+    gpu::GpuTensor post_tanh_g_;       // (1,1) cached post-tanh, used in backward
+    gpu::GpuTensor dValue_g_;          // (1,1) caller-written grad slot
+    gpu::GpuTensor dPre_g_;            // (1,1) backward scratch
+    gpu::GpuTensor dHact_g_, dHraw_g_; // (hidden,1) backward scratch
+#endif
 };
 
 // ─── FactoredPolicyHead ────────────────────────────────────────────────────
@@ -75,6 +106,17 @@ public:
     // Backward: dLogits is size total_logits(), dEmbed is size embed_dim.
     void backward(const Tensor& dLogits, Tensor& dEmbed);
 
+#ifdef BGA_HAS_CUDA
+    // GPU code path. Internal Linears must be on GPU.
+    //   embed:  (embed_dim, 1)
+    //   logits: (total_logits, 1) — concatenated [move | atk | abil].
+    void forward(const gpu::GpuTensor& embed, gpu::GpuTensor& logits);
+    void backward(const gpu::GpuTensor& dLogits, gpu::GpuTensor& dEmbed);
+#endif
+
+    Device device() const { return device_; }
+    void to(Device d);
+
     const char* name() const override { return "FactoredPolicyHead"; }
     int  num_params() const override { return move_.num_params() + atk_.num_params() + abil_.num_params(); }
     void zero_grad() override { move_.zero_grad(); atk_.zero_grad(); abil_.zero_grad(); }
@@ -95,6 +137,13 @@ public:
 
 private:
     Linear move_, atk_, abil_;
+    Device device_ = Device::CPU;
+#ifdef BGA_HAS_CUDA
+    // GPU per-segment buffers (allocated at to(GPU); reused).
+    gpu::GpuTensor lm_g_, la_g_, lb_g_;     // forward outputs per segment
+    gpu::GpuTensor dLm_g_, dLa_g_, dLb_g_;  // sliced gradients per segment
+    gpu::GpuTensor dEmbedTmp_g_;            // (embed_dim,1) scratch
+#endif
 };
 
 // ─── OpponentPolicyHead ───────────────────────────────────────────────────

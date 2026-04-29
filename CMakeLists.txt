@@ -92,6 +92,7 @@ add_library(brogameagent STATIC
     src/learn/neural_adapters.cpp
     src/learn/gumbel.cpp
     src/learn/contrastive.cpp
+    src/learn/inference_backend.cpp
     # --- Grid-world / platformer training kit ---
     src/grid/obs_window.cpp
     src/grid/generic_recorder.cpp

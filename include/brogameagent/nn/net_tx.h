@@ -39,13 +39,12 @@ namespace brogameagent::nn {
 //        ── Linear(3D → trunk_hidden) ── ReLU                              │
 //        ── { ValueHead, FactoredPolicyHead }
 //
-// Implementation note: per-slot projections, self MLP, trunk Linear, and the
-// policy/value heads run on CPU (the Linear circuit class is CPU-only). The
-// two TransformerEncoder stacks dispatch to GPU when `to(GPU)` is called —
-// they are the dominant compute. Inputs to the GPU encoders are uploaded per
-// forward call and outputs are downloaded for the masked mean-pool / concat
-// path. This is the simplest design that exercises real multi-block GPU
-// transformer compute without retrofitting the Linear circuit.
+// GPU dispatch: when to(Device::GPU) is called every Linear, the two
+// TransformerEncoder stacks, and the heads migrate to device. The pipeline is
+// fully GPU-resident — no host↔device shuttling per forward/backward beyond
+// the unavoidable upload of `x` (CPU API entrypoint) and download of value /
+// logits at the boundary. The native GPU overloads (taking GpuTensor) avoid
+// even those.
 
 class SingleHeroNetTX : public ICircuit {
 public:
@@ -69,6 +68,19 @@ public:
 
     void forward(const Tensor& x, float& value, Tensor& logits);
     void backward(float dValue, const Tensor& dLogits);
+
+#ifdef BGA_HAS_CUDA
+    // GPU-native forward/backward. Net must be on Device::GPU.
+    //   x:      (TOTAL, 1) device tensor — caller keeps alive until backward.
+    //   logits: (policy_logits, 1) — overwritten.
+    // Value is cached in value_gpu(). For backward, the caller writes
+    // d(loss)/d(value) into dValue_gpu() and supplies dLogits.
+    void forward(const gpu::GpuTensor& x, gpu::GpuTensor& logits);
+    void backward(const gpu::GpuTensor& dLogits);
+
+    const gpu::GpuTensor& value_gpu() const { return value_head_.value_gpu(); }
+    gpu::GpuTensor&       dValue_gpu()      { return value_head_.dValue_gpu(); }
+#endif
 
     int embed_dim()      const { return 3 * cfg_.d_model; }
     int trunk_dim()      const { return cfg_.trunk_hidden; }
@@ -108,6 +120,7 @@ private:
 
     // Self stream.
     Linear self_fc1_, self_fc2_;
+    Relu   self_act_;
     Tensor self_h_raw_, self_h_act_, self_z_;
 
     // Enemy stream.
@@ -142,6 +155,41 @@ private:
     Tensor x_cache_;
 
     Device device_ = Device::CPU;
+#ifdef BGA_HAS_CUDA
+    // GPU staging / activation buffers, allocated at to(GPU).
+    // These are sized to fixed observation constants and reused.
+    gpu::GpuTensor x_g_;                 // (TOTAL, 1) input copy (forward owns it for CPU-API path)
+    gpu::GpuTensor self_in_g_;           // (SELF_FEATURES, 1)
+    gpu::GpuTensor self_h_raw_g_, self_h_act_g_, self_z_g_;
+    gpu::GpuTensor enemy_in_g_, enemy_out_g_;
+    gpu::GpuTensor ally_in_g_,  ally_out_g_;
+    gpu::GpuTensor e_mask_g_, a_mask_g_;     // (K_ENEMIES,1) / (K_ALLIES,1) device masks
+    gpu::GpuTensor enemy_pooled_g_;          // (D, 1)
+    gpu::GpuTensor ally_pooled_g_;           // (D, 1)
+    gpu::GpuTensor concat_g_;                // (3D, 1)
+    gpu::GpuTensor trunk_raw_g_, trunk_act_g_;
+    // Per-slot projection scratch (one slot at a time).
+    gpu::GpuTensor slot_in_e_g_;             // (ENEMY_FEATURES, 1)
+    gpu::GpuTensor slot_in_a_g_;             // (ALLY_FEATURES, 1)
+    gpu::GpuTensor slot_proj_g_;             // (D, 1)
+    // Backward scratch.
+    gpu::GpuTensor dTrunkAct_g_;
+    gpu::GpuTensor dTrunkRaw_g_;
+    gpu::GpuTensor dTrunkFromV_g_;
+    gpu::GpuTensor dTrunkFromP_g_;
+    gpu::GpuTensor dConcat_g_;
+    gpu::GpuTensor dSelfZ_g_;
+    gpu::GpuTensor dSelfHact_g_, dSelfHraw_g_, dSelfIn_g_;
+    gpu::GpuTensor dEnemyOut_g_, dEnemyIn_g_;
+    gpu::GpuTensor dAllyOut_g_,  dAllyIn_g_;
+    gpu::GpuTensor dSlotProj_g_;
+    gpu::GpuTensor dSlotInE_g_;
+    gpu::GpuTensor dSlotInA_g_;
+
+    // External input view used by the GPU-native forward path. Non-owning;
+    // the caller's lifetime guarantees apply to it.
+    const gpu::GpuTensor* x_external_ = nullptr;
+#endif
 };
 
 } // namespace brogameagent::nn

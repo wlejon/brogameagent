@@ -1,6 +1,7 @@
 #include "brogameagent/nn/net_tx.h"
 
 #ifdef BGA_HAS_CUDA
+#include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
 
@@ -13,11 +14,6 @@ namespace {
 
 inline void copy_slice(const Tensor& src, int off, int n, Tensor& dst) {
     std::memcpy(dst.ptr(), src.ptr() + off, n * sizeof(float));
-}
-inline void accum_slice(Tensor& dst_full, int off, const Tensor& slot_grad, int n) {
-    float* d = dst_full.ptr() + off;
-    const float* s = slot_grad.ptr();
-    for (int i = 0; i < n; ++i) d[i] += s[i];
 }
 
 } // namespace
@@ -122,8 +118,56 @@ void SingleHeroNetTX::adam_step(float lr, float b1, float b2, float eps, int ste
 void SingleHeroNetTX::to(Device d) {
     if (d == device_) return;
     device_require_cuda("SingleHeroNetTX");
+#ifdef BGA_HAS_CUDA
+    self_fc1_.to(d);
+    self_fc2_.to(d);
+    enemy_proj_.to(d);
     enemy_enc_.to(d);
+    ally_proj_.to(d);
     ally_enc_.to(d);
+    trunk_.to(d);
+    value_head_.to(d);
+    head_.to(d);
+    if (d == Device::GPU) {
+        const int D  = cfg_.d_model;
+        const int TH = cfg_.trunk_hidden;
+        x_g_.resize(observation::TOTAL, 1);
+        self_in_g_.resize(observation::SELF_FEATURES, 1);
+        self_h_raw_g_.resize(cfg_.self_hidden, 1);
+        self_h_act_g_.resize(cfg_.self_hidden, 1);
+        self_z_g_.resize(D, 1);
+        enemy_in_g_.resize(observation::K_ENEMIES, D);
+        enemy_out_g_.resize(observation::K_ENEMIES, D);
+        ally_in_g_.resize(observation::K_ALLIES, D);
+        ally_out_g_.resize(observation::K_ALLIES, D);
+        e_mask_g_.resize(observation::K_ENEMIES, 1);
+        a_mask_g_.resize(observation::K_ALLIES, 1);
+        enemy_pooled_g_.resize(D, 1);
+        ally_pooled_g_.resize(D, 1);
+        concat_g_.resize(3 * D, 1);
+        trunk_raw_g_.resize(TH, 1);
+        trunk_act_g_.resize(TH, 1);
+        slot_in_e_g_.resize(observation::ENEMY_FEATURES, 1);
+        slot_in_a_g_.resize(observation::ALLY_FEATURES, 1);
+        slot_proj_g_.resize(D, 1);
+        dTrunkAct_g_.resize(TH, 1);
+        dTrunkRaw_g_.resize(TH, 1);
+        dTrunkFromV_g_.resize(TH, 1);
+        dTrunkFromP_g_.resize(TH, 1);
+        dConcat_g_.resize(3 * D, 1);
+        dSelfZ_g_.resize(D, 1);
+        dSelfHact_g_.resize(cfg_.self_hidden, 1);
+        dSelfHraw_g_.resize(cfg_.self_hidden, 1);
+        dSelfIn_g_.resize(observation::SELF_FEATURES, 1);
+        dEnemyOut_g_.resize(observation::K_ENEMIES, D);
+        dEnemyIn_g_.resize(observation::K_ENEMIES, D);
+        dAllyOut_g_.resize(observation::K_ALLIES, D);
+        dAllyIn_g_.resize(observation::K_ALLIES, D);
+        dSlotProj_g_.resize(D, 1);
+        dSlotInE_g_.resize(observation::ENEMY_FEATURES, 1);
+        dSlotInA_g_.resize(observation::ALLY_FEATURES, 1);
+    }
+#endif
     device_ = d;
 }
 
@@ -168,12 +212,31 @@ void SingleHeroNetTX::load(const std::vector<uint8_t>& blob) {
     load_from(blob.data(), off, blob.size());
 }
 
+// ─── CPU forward / backward ───────────────────────────────────────────────
+
 void SingleHeroNetTX::forward(const Tensor& x, float& value, Tensor& logits) {
     assert(x.size() == observation::TOTAL);
     x_cache_ = x;
     const int D = cfg_.d_model;
 
-    // ── Self stream ──
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        // Upload x once, route through GPU-native forward, download value+logits.
+        gpu::upload(x_cache_, x_g_);
+        gpu::GpuTensor logits_g;
+        logits_g.resize(logits.size(), 1);
+        forward(x_g_, logits_g);
+        // Download logits + scalar value.
+        gpu::download(logits_g, logits);
+        Tensor v_h(1, 1);
+        gpu::download(value_head_.value_gpu(), v_h);
+        gpu::cuda_sync();
+        value = v_h[0];
+        return;
+    }
+#endif
+
+    // ── Self stream (CPU) ──
     Tensor self_in = Tensor::vec(observation::SELF_FEATURES);
     copy_slice(x, 0, observation::SELF_FEATURES, self_in);
     self_fc1_.forward(self_in, self_h_raw_);
@@ -197,25 +260,7 @@ void SingleHeroNetTX::forward(const Tensor& x, float& value, Tensor& logits) {
         for (int j = 0; j < D; ++j) enemy_in_(k, j) = proj_out[j];
         ++e_n_valid_;
     }
-    // Run encoder (CPU or GPU).
-#ifdef BGA_HAS_CUDA
-    if (device_ == Device::GPU) {
-        gpu::GpuTensor gIn, gOut, gMask;
-        gpu::upload(enemy_in_, gIn);
-        gOut.resize(observation::K_ENEMIES, D);
-        // Upload mask via a Tensor wrapper (GpuTensor needs a Tensor source).
-        Tensor mask_h = Tensor::vec(observation::K_ENEMIES);
-        for (int k = 0; k < observation::K_ENEMIES; ++k) mask_h[k] = e_mask_[k];
-        gpu::upload(mask_h, gMask);
-        enemy_enc_.forward(gIn, gMask.data, gOut);
-        gpu::download(gOut, enemy_out_);
-        gpu::cuda_sync();
-    } else
-#endif
-    {
-        enemy_enc_.forward(enemy_in_, e_mask_.data(), enemy_out_);
-    }
-    // Masked mean-pool.
+    enemy_enc_.forward(enemy_in_, e_mask_.data(), enemy_out_);
     enemy_pooled_.zero();
     if (e_n_valid_ > 0) {
         const float inv = 1.0f / static_cast<float>(e_n_valid_);
@@ -242,22 +287,7 @@ void SingleHeroNetTX::forward(const Tensor& x, float& value, Tensor& logits) {
         for (int j = 0; j < D; ++j) ally_in_(k, j) = proj_out[j];
         ++a_n_valid_;
     }
-#ifdef BGA_HAS_CUDA
-    if (device_ == Device::GPU) {
-        gpu::GpuTensor gIn, gOut, gMask;
-        gpu::upload(ally_in_, gIn);
-        gOut.resize(observation::K_ALLIES, D);
-        Tensor mask_h = Tensor::vec(observation::K_ALLIES);
-        for (int k = 0; k < observation::K_ALLIES; ++k) mask_h[k] = a_mask_[k];
-        gpu::upload(mask_h, gMask);
-        ally_enc_.forward(gIn, gMask.data, gOut);
-        gpu::download(gOut, ally_out_);
-        gpu::cuda_sync();
-    } else
-#endif
-    {
-        ally_enc_.forward(ally_in_, a_mask_.data(), ally_out_);
-    }
+    ally_enc_.forward(ally_in_, a_mask_.data(), ally_out_);
     ally_pooled_.zero();
     if (a_n_valid_ > 0) {
         const float inv = 1.0f / static_cast<float>(a_n_valid_);
@@ -282,6 +312,19 @@ void SingleHeroNetTX::forward(const Tensor& x, float& value, Tensor& logits) {
 void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
     const int D = cfg_.d_model;
     const int TH = cfg_.trunk_hidden;
+
+#ifdef BGA_HAS_CUDA
+    if (device_ == Device::GPU) {
+        // Upload dLogits, write dValue scalar, run GPU backward.
+        gpu::GpuTensor dLogits_g;
+        gpu::upload(dLogits, dLogits_g);
+        Tensor dv_h(1, 1); dv_h[0] = dValue;
+        gpu::upload(dv_h, value_head_.dValue_gpu());
+        backward(dLogits_g);
+        gpu::cuda_sync();
+        return;
+    }
+#endif
 
     // Heads → trunk_act_out_.
     Tensor dTrunkV = Tensor::vec(TH);
@@ -308,11 +351,9 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
     relu_backward(self_h_raw_, dSelfHact, dSelfHraw);
     Tensor dSelfIn = Tensor::vec(observation::SELF_FEATURES);
     self_fc1_.backward(dSelfHraw, dSelfIn);
-    // (We don't propagate to dX — net is the input boundary.)
     (void)dSelfIn;
 
     // ── Enemy backward ──
-    // d(pooled_e) → d(enemy_out) per valid row.
     Tensor dEnemyOut = Tensor::mat(observation::K_ENEMIES, D);
     dEnemyOut.zero();
     if (e_n_valid_ > 0) {
@@ -322,22 +363,8 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
             for (int j = 0; j < D; ++j) dEnemyOut(k, j) = dConcat[1*D + j] * inv;
         }
     }
-    // Through encoder.
     Tensor dEnemyIn(observation::K_ENEMIES, D);
-#ifdef BGA_HAS_CUDA
-    if (device_ == Device::GPU) {
-        gpu::GpuTensor gdY, gdX;
-        gpu::upload(dEnemyOut, gdY);
-        gdX.resize(observation::K_ENEMIES, D);
-        enemy_enc_.backward(gdY, gdX);
-        gpu::download(gdX, dEnemyIn);
-        gpu::cuda_sync();
-    } else
-#endif
-    {
-        enemy_enc_.backward(dEnemyOut, dEnemyIn);
-    }
-    // Per-slot Linear backward (re-prime x_cache_ via fresh forward of slot_in).
+    enemy_enc_.backward(dEnemyOut, dEnemyIn);
     {
         Tensor slot_in = Tensor::vec(observation::ENEMY_FEATURES);
         Tensor dRow = Tensor::vec(D);
@@ -349,7 +376,7 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
             for (int j = 0; j < D; ++j) dRow[j] = dEnemyIn(k, j);
             copy_slice(x_cache_, off_e + k * observation::ENEMY_FEATURES,
                        observation::ENEMY_FEATURES, slot_in);
-            enemy_proj_.forward(slot_in, dummy);   // refresh x_cache_
+            enemy_proj_.forward(slot_in, dummy);
             enemy_proj_.backward(dRow, dSlot);
             (void)dSlot;
         }
@@ -366,19 +393,7 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
         }
     }
     Tensor dAllyIn(observation::K_ALLIES, D);
-#ifdef BGA_HAS_CUDA
-    if (device_ == Device::GPU) {
-        gpu::GpuTensor gdY, gdX;
-        gpu::upload(dAllyOut, gdY);
-        gdX.resize(observation::K_ALLIES, D);
-        ally_enc_.backward(gdY, gdX);
-        gpu::download(gdX, dAllyIn);
-        gpu::cuda_sync();
-    } else
-#endif
-    {
-        ally_enc_.backward(dAllyOut, dAllyIn);
-    }
+    ally_enc_.backward(dAllyOut, dAllyIn);
     {
         Tensor slot_in = Tensor::vec(observation::ALLY_FEATURES);
         Tensor dRow = Tensor::vec(D);
@@ -397,5 +412,215 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
         }
     }
 }
+
+#ifdef BGA_HAS_CUDA
+
+// Helper: build per-slot mask and slot validity vectors from host x_cache_.
+// Returns the count of valid slots; writes mask/valid arrays.
+namespace {
+int build_slot_mask(const Tensor& x, int off, int n_slots, int feat_per,
+                    std::vector<float>& mask, std::vector<uint8_t>& valid) {
+    int n_valid = 0;
+    mask.assign(n_slots, 0.0f);
+    valid.assign(n_slots, 0);
+    for (int k = 0; k < n_slots; ++k) {
+        const int base = off + k * feat_per;
+        if (x[base] > 0.5f) { mask[k] = 1.0f; valid[k] = 1; ++n_valid; }
+    }
+    return n_valid;
+}
+
+// Slice a (K, D) device matrix row (of size D) into a flat (D, 1) device
+// tensor. Implemented as a tiny cudaMemcpy. We avoid pulling cuda_runtime.h
+// into this header by doing it via the GpuTensor copy primitive: clone is
+// owning, so we use upload/download is heavy. Use a small helper from
+// gpu/tensor.h indirectly? We don't have device-to-device row copy in the
+// public ops API. Workaround: download the slot row to a host buffer and
+// upload to slot scratch — that adds shuttles. Instead use a small batched
+// approach: run per-slot Linear forward over the *whole* (K, FEAT) input
+// using linear_forward_batched_gpu. That gives us (K, D) in one shot.
+} // namespace
+
+void SingleHeroNetTX::forward(const gpu::GpuTensor& x, gpu::GpuTensor& logits) {
+    assert(device_ == Device::GPU);
+    assert(x.size() == observation::TOTAL);
+    x_external_ = &x;
+
+    // We need x on host briefly to compute slot validity mask (a tiny scalar
+    // check per slot). Download once into x_cache_.
+    Tensor xh(observation::TOTAL, 1);
+    gpu::download(x, xh);
+    gpu::cuda_sync();
+    x_cache_ = xh;
+
+    // ── Self stream ──
+    // Stage self segment into self_in_g_ via a host->device upload of just
+    // SELF_FEATURES (single small upload — not a per-op shuttle).
+    {
+        Tensor sh = Tensor::vec(observation::SELF_FEATURES);
+        copy_slice(x_cache_, 0, observation::SELF_FEATURES, sh);
+        gpu::upload(sh, self_in_g_);
+    }
+    self_fc1_.forward(self_in_g_, self_h_raw_g_);
+    gpu::relu_forward_gpu(self_h_raw_g_, self_h_act_g_);
+    self_fc2_.forward(self_h_act_g_, self_z_g_);
+
+    // ── Enemy stream ──
+    const int off_e = observation::SELF_FEATURES;
+    e_n_valid_ = build_slot_mask(x_cache_, off_e, observation::K_ENEMIES,
+                                 observation::ENEMY_FEATURES, e_mask_, e_valid_);
+    {
+        // Build a (K_ENEMIES, ENEMY_FEATURES) host staging tensor for batched
+        // input projection. Invalid slots are zeroed.
+        Tensor staging(observation::K_ENEMIES, observation::ENEMY_FEATURES);
+        staging.zero();
+        for (int k = 0; k < observation::K_ENEMIES; ++k) {
+            if (!e_valid_[k]) continue;
+            const int base = off_e + k * observation::ENEMY_FEATURES;
+            for (int j = 0; j < observation::ENEMY_FEATURES; ++j)
+                staging(k, j) = x_cache_[base + j];
+        }
+        gpu::GpuTensor staging_g;
+        gpu::upload(staging, staging_g);
+        gpu::linear_forward_batched_gpu(enemy_proj_.W_g(), enemy_proj_.b_g(),
+                                        staging_g, enemy_in_g_);
+        // Cache the staging input on the layer for backward (we need it for
+        // per-slot Linear backward). Stash a copy on host; upload again as a
+        // single-slot input during backward as needed.
+        // Upload mask vector.
+        Tensor mh = Tensor::vec(observation::K_ENEMIES);
+        for (int k = 0; k < observation::K_ENEMIES; ++k) mh[k] = e_mask_[k];
+        gpu::upload(mh, e_mask_g_);
+    }
+    // Encoder forward.
+    enemy_enc_.forward(enemy_in_g_, e_mask_g_.data, enemy_out_g_);
+    // Masked mean pool.
+    gpu::masked_mean_pool_forward_gpu(enemy_out_g_, e_mask_g_.data, enemy_pooled_g_);
+
+    // ── Ally stream ──
+    const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
+    a_n_valid_ = build_slot_mask(x_cache_, off_a, observation::K_ALLIES,
+                                 observation::ALLY_FEATURES, a_mask_, a_valid_);
+    {
+        Tensor staging(observation::K_ALLIES, observation::ALLY_FEATURES);
+        staging.zero();
+        for (int k = 0; k < observation::K_ALLIES; ++k) {
+            if (!a_valid_[k]) continue;
+            const int base = off_a + k * observation::ALLY_FEATURES;
+            for (int j = 0; j < observation::ALLY_FEATURES; ++j)
+                staging(k, j) = x_cache_[base + j];
+        }
+        gpu::GpuTensor staging_g;
+        gpu::upload(staging, staging_g);
+        gpu::linear_forward_batched_gpu(ally_proj_.W_g(), ally_proj_.b_g(),
+                                        staging_g, ally_in_g_);
+        Tensor mh = Tensor::vec(observation::K_ALLIES);
+        for (int k = 0; k < observation::K_ALLIES; ++k) mh[k] = a_mask_[k];
+        gpu::upload(mh, a_mask_g_);
+    }
+    ally_enc_.forward(ally_in_g_, a_mask_g_.data, ally_out_g_);
+    gpu::masked_mean_pool_forward_gpu(ally_out_g_, a_mask_g_.data, ally_pooled_g_);
+
+    // ── Concat → trunk → heads ──
+    {
+        std::vector<const gpu::GpuTensor*> parts{&self_z_g_, &enemy_pooled_g_, &ally_pooled_g_};
+        gpu::concat_rows_gpu(parts, concat_g_);
+    }
+    trunk_.forward(concat_g_, trunk_raw_g_);
+    gpu::relu_forward_gpu(trunk_raw_g_, trunk_act_g_);
+    value_head_.forward(trunk_act_g_);
+    head_.forward(trunk_act_g_, logits);
+}
+
+void SingleHeroNetTX::backward(const gpu::GpuTensor& dLogits) {
+    assert(device_ == Device::GPU);
+    const int D = cfg_.d_model;
+
+    // ── Heads → trunk_act ──
+    value_head_.backward(dTrunkFromV_g_);
+    head_.backward(dLogits, dTrunkFromP_g_);
+
+    // dTrunkAct = dTrunkFromV + dTrunkFromP. Ping the second into the first.
+    // Use an explicit add: dTrunkAct = dTrunkFromV; dTrunkAct += dTrunkFromP.
+    // We'll just write into dTrunkAct_g_ via a copy-then-add via concat trick.
+    // Simpler: compute dTrunkAct = dTrunkFromV first, then add dTrunkFromP.
+    // Use add_inplace: dTrunkFromV += dTrunkFromP; alias as dTrunkAct.
+    gpu::add_inplace_gpu(dTrunkFromV_g_, dTrunkFromP_g_);
+    // ReLU backward through trunk_act_ → trunk_raw_.
+    gpu::relu_backward_gpu(trunk_raw_g_, dTrunkFromV_g_, dTrunkRaw_g_);
+    trunk_.backward(dTrunkRaw_g_, dConcat_g_);
+
+    // ── Split dConcat into [dSelfZ, dEnemyPooled (placeholder), dAllyPooled (placeholder)] ──
+    // We can use split_rows with 3 parts of size D each.
+    gpu::GpuTensor dSelfZ_local, dEnemyPooled_local, dAllyPooled_local;
+    dSelfZ_local.resize(D, 1);
+    dEnemyPooled_local.resize(D, 1);
+    dAllyPooled_local.resize(D, 1);
+    {
+        std::vector<gpu::GpuTensor*> parts{&dSelfZ_local, &dEnemyPooled_local, &dAllyPooled_local};
+        gpu::split_rows_gpu(dConcat_g_, parts);
+    }
+
+    // ── Self backward ──
+    self_fc2_.backward(dSelfZ_local, dSelfHact_g_);
+    gpu::relu_backward_gpu(self_h_raw_g_, dSelfHact_g_, dSelfHraw_g_);
+    self_fc1_.backward(dSelfHraw_g_, dSelfIn_g_);
+
+    // ── Enemy stream backward ──
+    // d(enemy_pooled) → d(enemy_out): mean-pool backward broadcasts.
+    gpu::masked_mean_pool_backward_gpu(dEnemyPooled_local, e_mask_g_.data,
+                                       observation::K_ENEMIES, dEnemyOut_g_);
+    enemy_enc_.backward(dEnemyOut_g_, dEnemyIn_g_);
+    // Per-slot Linear backward. Like the CPU path, we re-prime each slot via
+    // a fresh forward(slot_in) before backward(dRow, dSlot).
+    {
+        Tensor slot_in_h = Tensor::vec(observation::ENEMY_FEATURES);
+        Tensor dRow_h    = Tensor::vec(D);
+        const int off_e = observation::SELF_FEATURES;
+        // Download dEnemyIn once to host so we can iterate per row cheaply.
+        Tensor dEnemyIn_h(observation::K_ENEMIES, D);
+        gpu::download(dEnemyIn_g_, dEnemyIn_h);
+        gpu::cuda_sync();
+        for (int k = 0; k < observation::K_ENEMIES; ++k) {
+            if (!e_valid_[k]) continue;
+            for (int j = 0; j < D; ++j) dRow_h[j] = dEnemyIn_h(k, j);
+            const int base = off_e + k * observation::ENEMY_FEATURES;
+            for (int j = 0; j < observation::ENEMY_FEATURES; ++j)
+                slot_in_h[j] = x_cache_[base + j];
+            gpu::upload(slot_in_h, slot_in_e_g_);
+            gpu::upload(dRow_h, dSlotProj_g_);
+            // Re-prime cache and accumulate grads.
+            enemy_proj_.forward(slot_in_e_g_, slot_proj_g_);
+            enemy_proj_.backward(dSlotProj_g_, dSlotInE_g_);
+        }
+    }
+
+    // ── Ally stream backward ──
+    gpu::masked_mean_pool_backward_gpu(dAllyPooled_local, a_mask_g_.data,
+                                       observation::K_ALLIES, dAllyOut_g_);
+    ally_enc_.backward(dAllyOut_g_, dAllyIn_g_);
+    {
+        Tensor slot_in_h = Tensor::vec(observation::ALLY_FEATURES);
+        Tensor dRow_h    = Tensor::vec(D);
+        const int off_a = observation::SELF_FEATURES
+                        + observation::K_ENEMIES * observation::ENEMY_FEATURES;
+        Tensor dAllyIn_h(observation::K_ALLIES, D);
+        gpu::download(dAllyIn_g_, dAllyIn_h);
+        gpu::cuda_sync();
+        for (int k = 0; k < observation::K_ALLIES; ++k) {
+            if (!a_valid_[k]) continue;
+            for (int j = 0; j < D; ++j) dRow_h[j] = dAllyIn_h(k, j);
+            const int base = off_a + k * observation::ALLY_FEATURES;
+            for (int j = 0; j < observation::ALLY_FEATURES; ++j)
+                slot_in_h[j] = x_cache_[base + j];
+            gpu::upload(slot_in_h, slot_in_a_g_);
+            gpu::upload(dRow_h, dSlotProj_g_);
+            ally_proj_.forward(slot_in_a_g_, slot_proj_g_);
+            ally_proj_.backward(dSlotProj_g_, dSlotInA_g_);
+        }
+    }
+}
+
+#endif // BGA_HAS_CUDA
 
 } // namespace brogameagent::nn

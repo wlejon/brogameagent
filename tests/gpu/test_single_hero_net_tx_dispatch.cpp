@@ -1,8 +1,9 @@
 // End-to-end GPU dispatch parity test for SingleHeroNetTX. Two identical-seed
-// instances; one kept on CPU, one migrated to GPU. The two TransformerEncoder
-// stacks dispatch to GPU; the per-slot projections, self MLP, trunk, and
-// heads stay on CPU in both cases. Outputs and gradients should match within
-// the same tolerances used by other transformer dispatch tests.
+// instances; one kept on CPU, one migrated to GPU. With the full GPU
+// retrofit every Linear, encoder, and head runs on device — outputs and
+// gradients must match the CPU reference within transformer dispatch
+// tolerances. A separate sub-test exercises the GpuTensor-native forward /
+// backward overloads (no host-API entrypoint per call).
 
 #include "parity_helpers.h"
 
@@ -146,7 +147,67 @@ void run_smoke_training_gpu(uint64_t seed) {
 
 } // namespace
 
+// GPU-native (GpuTensor in, GpuTensor out) forward/backward — checks that
+// SingleHeroNetTX exposes a path with no host↔device conversion for the
+// hot tensor I/O. We compare against the CPU reference for the same inputs.
+void run_gpu_native(uint64_t seed) {
+    namespace gpu = brogameagent::nn::gpu;
+    SingleHeroNetTX cpu, gnet;
+    cpu.init(tiny_cfg(seed));
+    gnet.init(tiny_cfg(seed));
+
+    SplitMix64 rng(seed ^ 0xBEEDull);
+    Tensor x; make_obs(x, rng, 3, 2);
+    float dValue = 0.4f;
+    Tensor dLogits = Tensor::vec(cpu.policy_logits());
+    for (int i = 0; i < dLogits.size(); ++i) dLogits[i] = rng.next_unit() * 0.3f;
+
+    float v_cpu; Tensor l_cpu = Tensor::vec(cpu.policy_logits());
+    cpu.zero_grad();
+    cpu.forward(x, v_cpu, l_cpu);
+    cpu.backward(dValue, dLogits);
+
+    gnet.to(Device::GPU);
+    BGA_CHECK(gnet.device() == Device::GPU);
+
+    // Native GPU forward/backward: input is GpuTensor, output is GpuTensor.
+    gpu::GpuTensor x_g, logits_g;
+    gpu::upload(x, x_g);
+    logits_g.resize(gnet.policy_logits(), 1);
+    gnet.zero_grad();
+    gnet.forward(x_g, logits_g);
+
+    // Read back results.
+    Tensor l_gpu = Tensor::vec(gnet.policy_logits());
+    gpu::download(logits_g, l_gpu);
+    Tensor v_h(1, 1);
+    gpu::download(gnet.value_gpu(), v_h);
+    gpu::cuda_sync();
+    BGA_CHECK(std::fabs(v_cpu - v_h[0]) < 5e-3f);
+    compare_tensors(l_cpu, l_gpu, "tx.gpu_native.logits", 1e-4f, 5e-3f);
+
+    // Backward through GpuTensor API.
+    gpu::GpuTensor dLogits_g;
+    gpu::upload(dLogits, dLogits_g);
+    Tensor dv_h(1, 1); dv_h[0] = dValue;
+    gpu::upload(dv_h, gnet.dValue_gpu());
+    gnet.backward(dLogits_g);
+    gpu::cuda_sync();
+
+    // Single SGD step then compare a representative weight against the CPU
+    // reference — confirms gradients propagated correctly through the native
+    // GPU backward.
+    cpu.sgd_step(0.01f, 0.9f);
+    gnet.sgd_step(0.01f, 0.9f);
+    gnet.to(Device::CPU);
+    compare_tensors(cpu.trunk().W(), gnet.trunk().W(),
+                    "tx.gpu_native.trunk_W_after_sgd", 1e-5f, 1e-4f);
+    compare_tensors(cpu.enemy_proj().W(), gnet.enemy_proj().W(),
+                    "tx.gpu_native.enemy_proj_W_after_sgd", 1e-5f, 1e-4f);
+}
+
 BGA_PARITY_TEST(tx_dispatch_basic) { run_dispatch(0xA001ull); }
 BGA_PARITY_TEST(tx_dispatch_smoke_training_gpu) { run_smoke_training_gpu(0xA002ull); }
+BGA_PARITY_TEST(tx_dispatch_gpu_native) { run_gpu_native(0xA003ull); }
 
 int main() { return run_all("gpu SingleHeroNetTX dispatch parity"); }
