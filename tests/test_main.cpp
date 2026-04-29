@@ -13,6 +13,7 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -4843,6 +4844,96 @@ TEST(harness_async_thread_runs_and_stops_clean) {
     CHECK(h.stats().total_steps > 0);
     h.stop();
     CHECK(!h.running());
+}
+
+// ─── PolicyValueNet head_sizes / checkpoint v2 ──────────────────────────────
+
+TEST(policy_value_net_single_head_default_matches_num_actions) {
+    nn::PolicyValueNet net;
+    nn::PolicyValueNet::Config cfg;
+    cfg.in_dim = 3; cfg.hidden = {4}; cfg.value_hidden = 4;
+    cfg.num_actions = 5;
+    net.init(cfg);
+    CHECK(net.num_heads() == 1);
+    CHECK(net.head_sizes()[0] == 5);
+    CHECK(net.head_offsets().size() == 2);
+    CHECK(net.head_offsets()[0] == 0);
+    CHECK(net.head_offsets()[1] == 5);
+}
+
+TEST(policy_value_net_factored_heads_resolve_offsets) {
+    nn::PolicyValueNet net;
+    nn::PolicyValueNet::Config cfg;
+    cfg.in_dim = 3; cfg.hidden = {4}; cfg.value_hidden = 4;
+    cfg.head_sizes = {6, 2, 13, 9};      // num_actions auto-derives to 30
+    net.init(cfg);
+    CHECK(net.num_actions() == 30);
+    CHECK(net.num_heads() == 4);
+    CHECK(net.head_sizes()[0] == 6 && net.head_sizes()[3] == 9);
+    CHECK(net.head_offsets()[0] == 0);
+    CHECK(net.head_offsets()[1] == 6);
+    CHECK(net.head_offsets()[2] == 8);
+    CHECK(net.head_offsets()[3] == 21);
+    CHECK(net.head_offsets()[4] == 30);
+}
+
+TEST(policy_value_net_save_load_v2_roundtrip_factored) {
+    nn::PolicyValueNet a, b;
+    nn::PolicyValueNet::Config cfg;
+    cfg.in_dim = 4; cfg.hidden = {6}; cfg.value_hidden = 4;
+    cfg.head_sizes = {3, 5}; cfg.seed = 7;
+    a.init(cfg);
+    b.init(cfg);
+
+    auto blob = a.save();
+    b.load(blob);
+
+    // After loading, b's forward must match a's forward exactly.
+    nn::Tensor x = nn::Tensor::vec(4);
+    for (int i = 0; i < 4; ++i) x[i] = 0.1f * (i + 1);
+    nn::Tensor la = nn::Tensor::vec(8), lb = nn::Tensor::vec(8);
+    float va = 0.0f, vb = 0.0f;
+    a.forward(x, va, la);
+    b.forward(x, vb, lb);
+    CHECK_NEAR(va, vb, 1e-6f);
+    for (int i = 0; i < 8; ++i) CHECK_NEAR(la[i], lb[i], 1e-6f);
+}
+
+TEST(policy_value_net_v1_blob_loads_into_single_head_net) {
+    // Build a v1-style blob by hand: magic + version=1 + weights. Today we
+    // can't write v1 directly (save() always emits v2), so we synthesize one
+    // by stripping the v2 head-sizes header from a single-head save.
+    nn::PolicyValueNet a;
+    nn::PolicyValueNet::Config cfg;
+    cfg.in_dim = 3; cfg.hidden = {4}; cfg.value_hidden = 4;
+    cfg.num_actions = 5; cfg.seed = 11;
+    a.init(cfg);
+    auto v2 = a.save();
+
+    // v2 layout: [magic][version=2][n_heads=1][head=5][weights...]
+    // v1 layout: [magic][version=1][weights...]
+    // Strip the (n_heads, head) pair (8 bytes) and rewrite version.
+    std::vector<uint8_t> v1;
+    v1.resize(v2.size() - 8);
+    std::memcpy(v1.data(), v2.data(), 8);
+    const uint32_t v1_ver = 1;
+    std::memcpy(v1.data() + 4, &v1_ver, 4);
+    std::memcpy(v1.data() + 8, v2.data() + 16, v2.size() - 16);
+
+    nn::PolicyValueNet b;
+    b.init(cfg);
+    b.load(v1);
+
+    // Forward must match — load only restored weights, head shape was set
+    // by init().
+    nn::Tensor x = nn::Tensor::vec(3);
+    x[0] = 0.5f; x[1] = -0.25f; x[2] = 1.0f;
+    nn::Tensor la = nn::Tensor::vec(5), lb = nn::Tensor::vec(5);
+    float va = 0.0f, vb = 0.0f;
+    a.forward(x, va, la);
+    b.forward(x, vb, lb);
+    CHECK_NEAR(va, vb, 1e-6f);
+    for (int i = 0; i < 5; ++i) CHECK_NEAR(la[i], lb[i], 1e-6f);
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
