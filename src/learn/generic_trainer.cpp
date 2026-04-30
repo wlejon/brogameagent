@@ -12,6 +12,78 @@
 
 namespace brogameagent::learn {
 
+// ─── INetForExIt adapters ──────────────────────────────────────────────────
+//
+// Thin per-net wrappers so step_cpu_/step_gpu_ can call into either net via
+// a single virtual interface without templating the trainer.
+namespace {
+
+class PolicyValueNetAdapter final : public INetForExIt {
+public:
+    explicit PolicyValueNetAdapter(nn::PolicyValueNet* n) : n_(n) {}
+    int in_dim()      const override { return n_->in_dim(); }
+    int num_actions() const override { return n_->num_actions(); }
+    int num_heads()   const override { return n_->num_heads(); }
+    const std::vector<int>& head_offsets() const override { return n_->head_offsets(); }
+    void zero_grad() override { n_->zero_grad(); }
+    void sgd_step(float lr, float m) override { n_->sgd_step(lr, m); }
+    std::vector<uint8_t> save() const override { return n_->save(); }
+    void forward(const nn::Tensor& x, float& v, nn::Tensor& l) override { n_->forward(x, v, l); }
+    void backward(float dV, const nn::Tensor& dL) override { n_->backward(dV, dL); }
+#ifdef BGA_HAS_CUDA
+    void forward_batched_train(const nn::gpu::GpuTensor& X, nn::gpu::GpuTensor& L,
+                               nn::gpu::GpuTensor& V) override {
+        n_->forward_batched_train(X, L, V);
+    }
+    void backward_batched(const nn::gpu::GpuTensor& dL,
+                          const nn::gpu::GpuTensor& dV) override {
+        n_->backward_batched(dL, dV);
+    }
+#endif
+private:
+    nn::PolicyValueNet* n_;
+};
+
+class SingleHeroNetTXAdapter final : public INetForExIt {
+public:
+    explicit SingleHeroNetTXAdapter(nn::SingleHeroNetTX* n) : n_(n) {}
+    int in_dim()      const override { return n_->in_dim(); }
+    int num_actions() const override { return n_->num_actions(); }
+    int num_heads()   const override { return n_->num_heads(); }
+    const std::vector<int>& head_offsets() const override { return n_->head_offsets(); }
+    void zero_grad() override { n_->zero_grad(); }
+    void sgd_step(float lr, float m) override { n_->sgd_step(lr, m); }
+    std::vector<uint8_t> save() const override { return n_->save(); }
+    void forward(const nn::Tensor& x, float& v, nn::Tensor& l) override { n_->forward(x, v, l); }
+    void backward(float dV, const nn::Tensor& dL) override { n_->backward(dV, dL); }
+#ifdef BGA_HAS_CUDA
+    void forward_batched_train(const nn::gpu::GpuTensor& X, nn::gpu::GpuTensor& L,
+                               nn::gpu::GpuTensor& V) override {
+        n_->forward_batched_train(X, L, V);
+    }
+    void backward_batched(const nn::gpu::GpuTensor& dL,
+                          const nn::gpu::GpuTensor& dV) override {
+        n_->backward_batched(dL, dV);
+    }
+#endif
+private:
+    nn::SingleHeroNetTX* n_;
+};
+
+} // namespace
+
+void GenericExItTrainer::set_net(nn::PolicyValueNet* net) {
+    if (!net) { net_ = nullptr; net_owned_.reset(); return; }
+    net_owned_ = std::make_unique<PolicyValueNetAdapter>(net);
+    net_ = net_owned_.get();
+}
+
+void GenericExItTrainer::set_net(nn::SingleHeroNetTX* net) {
+    if (!net) { net_ = nullptr; net_owned_.reset(); return; }
+    net_owned_ = std::make_unique<SingleHeroNetTXAdapter>(net);
+    net_ = net_owned_.get();
+}
+
 #ifdef BGA_HAS_CUDA
 GenericExItTrainer::~GenericExItTrainer() {
     if (head_offsets_dev_) {

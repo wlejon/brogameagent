@@ -4,13 +4,16 @@
 #include "brogameagent/nn/device.h"
 #include "brogameagent/nn/net.h"             // WeightsHandle
 #include "brogameagent/nn/policy_value_net.h"
+#include "brogameagent/nn/net_tx.h"
 
 #ifdef BGA_HAS_CUDA
 #include "brogameagent/nn/gpu/tensor.h"
 #endif
 
 #include <cstdint>
+#include <memory>
 #include <random>
+#include <vector>
 
 namespace brogameagent::learn {
 
@@ -44,6 +47,47 @@ struct GenericTrainStep {
     int   samples     = 0;
 };
 
+// ─── INetForExIt ──────────────────────────────────────────────────────────
+//
+// Minimal interface GenericExItTrainer relies on. Both PolicyValueNet (the
+// MLP) and SingleHeroNetTX (the transformer) implement this surface; the
+// trainer holds an INetForExIt* and the public set_net(...) overloads adapt
+// each concrete net to it.
+//
+// Lives in this header (rather than its own file) because it's purely a
+// trainer-private abstraction — callers shouldn't depend on it.
+
+class INetForExIt {
+public:
+    virtual ~INetForExIt() = default;
+
+    // Static shape.
+    virtual int in_dim() const = 0;
+    virtual int num_actions() const = 0;
+    virtual int num_heads() const = 0;
+    virtual const std::vector<int>& head_offsets() const = 0;
+
+    // Param-tensor lifecycle.
+    virtual void zero_grad() = 0;
+    virtual void sgd_step(float lr, float momentum) = 0;
+    virtual std::vector<uint8_t> save() const = 0;
+
+    // CPU forward/backward. Mirrors the single-sample API both nets share.
+    virtual void forward(const nn::Tensor& x, float& value, nn::Tensor& logits) = 0;
+    virtual void backward(float dValue, const nn::Tensor& dLogits) = 0;
+
+#ifdef BGA_HAS_CUDA
+    // GPU batched-train forward/backward. PolicyValueNet implements these
+    // with true batched kernels; SingleHeroNetTX implements them via
+    // per-element loops over the single-sample GPU forward/backward.
+    virtual void forward_batched_train(const nn::gpu::GpuTensor& X_BD,
+                                       nn::gpu::GpuTensor& logits_BL,
+                                       nn::gpu::GpuTensor& values_B1) = 0;
+    virtual void backward_batched(const nn::gpu::GpuTensor& dLogits_BL,
+                                  const nn::gpu::GpuTensor& dValues_B1) = 0;
+#endif
+};
+
 // ─── GenericExItTrainer ───────────────────────────────────────────────────
 //
 // SGD+momentum mini-batch trainer for PolicyValueNet. Per step():
@@ -65,7 +109,10 @@ public:
     GenericExItTrainer& operator=(const GenericExItTrainer&) = delete;
 #endif
 
-    void set_net(nn::PolicyValueNet* net) { net_ = net; }
+    // Set the net under training. Two overloads — one per concrete net — each
+    // installs an INetForExIt adapter so step_cpu_/step_gpu_ stay net-agnostic.
+    void set_net(nn::PolicyValueNet* net);
+    void set_net(nn::SingleHeroNetTX* net);
     void set_buffer(const GenericReplayBuffer* buf) { buf_ = buf; }
     void set_config(const GenericTrainerConfig& cfg) { cfg_ = cfg; rng_.seed(cfg.rng_seed); }
     void set_weights_handle(nn::WeightsHandle* h) { handle_ = h; }
@@ -87,7 +134,8 @@ private:
     void ensure_gpu_staging_();
 #endif
 
-    nn::PolicyValueNet*         net_    = nullptr;
+    INetForExIt*                net_    = nullptr;
+    std::unique_ptr<INetForExIt> net_owned_;          // adapter owns nothing externally
     const GenericReplayBuffer*  buf_    = nullptr;
     nn::WeightsHandle*          handle_ = nullptr;
     GenericTrainerConfig        cfg_{};
