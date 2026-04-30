@@ -71,6 +71,16 @@ public:
     void init(const Config& cfg);
     const Config& config() const { return cfg_; }
 
+    // ─── ExIt-trainer compatibility surface ────────────────────────────────
+    // Mirror of PolicyValueNet's accessors so GenericExItTrainer can drive
+    // either net through the same code path. head_offsets() is in the same
+    // "exclusive prefix sums + trailing total" format PolicyValueNet exposes.
+    int in_dim()      const { return observation::TOTAL; }
+    int num_actions() const { return head_.total_logits(); }
+    int num_heads()   const { return static_cast<int>(head_sizes_.size()); }
+    const std::vector<int>& head_sizes()   const { return head_sizes_; }
+    const std::vector<int>& head_offsets() const { return head_offsets_; }
+
     void forward(const Tensor& x, float& value, Tensor& logits);
     void backward(float dValue, const Tensor& dLogits);
 
@@ -98,6 +108,26 @@ public:
     void forward_batched(const gpu::GpuTensor& X_BD,
                          gpu::GpuTensor& logits_BL,
                          gpu::GpuTensor& values_B1) override;
+
+    // ─── Training-time batched API ────────────────────────────────────────
+    //
+    // Training-time variants for GenericExItTrainer. These are correctness-
+    // first per-batch-element loops over the existing single-sample GPU
+    // forward/backward — NOT yet a true (B, K, D) batched dispatch. Each
+    // backward re-runs forward(x_b) before backward(dLogits_b) to rebuild
+    // the per-element layer caches the single-sample backward depends on.
+    // That doubles forward FLOPs per training step; accepting the cost in
+    // v2 because every layer cache (slot validity masks, encoder activations,
+    // per-slot Linear inputs) is sized for one sample.
+    //
+    // A future optimization adds per-sample state arrays so forward and
+    // backward run once each, or — better — true (B, K, D) attention/FF
+    // kernels.
+    void forward_batched_train(const gpu::GpuTensor& X_BD,
+                               gpu::GpuTensor& logits_BL,
+                               gpu::GpuTensor& values_B1);
+    void backward_batched(const gpu::GpuTensor& dLogits_BL,
+                          const gpu::GpuTensor& dValues_B1);
 
     // BatchedNet interface accessors.
     int input_dim()  const override { return observation::TOTAL; }
@@ -176,6 +206,13 @@ private:
     // Caches.
     Tensor x_cache_;
 
+    // Resolved head shape (matches PolicyValueNet's contract):
+    //   head_sizes_   = {N_MOVE, N_ATTACK, N_ABILITY} from FactoredPolicyHead.
+    //   head_offsets_ = exclusive prefix sums of head_sizes_, with a trailing
+    //                   entry equal to total_logits().
+    std::vector<int> head_sizes_;
+    std::vector<int> head_offsets_;
+
     Device device_ = Device::CPU;
 #ifdef BGA_HAS_CUDA
     // GPU staging / activation buffers, allocated at to(GPU).
@@ -211,6 +248,14 @@ private:
     // External input view used by the GPU-native forward path. Non-owning;
     // the caller's lifetime guarantees apply to it.
     const gpu::GpuTensor* x_external_ = nullptr;
+
+    // Training-time batched scratch. Holds the last X_BD pointer that
+    // forward_batched_train was called with so backward_batched can re-run
+    // forward(x_b) per element.
+    const gpu::GpuTensor* last_train_X_BD_ = nullptr;
+    gpu::GpuTensor x_row_g_;          // (TOTAL, 1) per-element view buffer
+    gpu::GpuTensor logits_row_g_;     // (L, 1)     per-element logits scratch
+    gpu::GpuTensor dLogits_row_g_;    // (L, 1)     per-element dLogits scratch
 #endif
 };
 

@@ -76,6 +76,17 @@ void SingleHeroNetTX::init(const Config& cfg) {
     head_.init(cfg.trunk_hidden, rng);
 
     x_cache_.resize(observation::TOTAL, 1);
+
+    // Resolve head_sizes_ / head_offsets_ to mirror PolicyValueNet's contract.
+    // FactoredPolicyHead is fixed at three segments: [N_MOVE, N_ATTACK, N_ABILITY].
+    head_sizes_  = { FactoredPolicyHead::N_MOVE,
+                     FactoredPolicyHead::N_ATTACK,
+                     FactoredPolicyHead::N_ABILITY };
+    head_offsets_.clear();
+    head_offsets_.reserve(head_sizes_.size() + 1);
+    int off = 0;
+    for (int h : head_sizes_) { head_offsets_.push_back(off); off += h; }
+    head_offsets_.push_back(off);     // trailing total == total_logits()
 }
 
 int SingleHeroNetTX::num_params() const {
@@ -794,6 +805,76 @@ void SingleHeroNetTX::forward_batched(const gpu::GpuTensor& X_BD,
     }
 
     gpu::cuda_sync();
+}
+
+// ─── Training-time batched API (per-element loop) ─────────────────────────
+//
+// Both calls walk B and reuse the existing single-sample forward/backward
+// against per-row views of X_BD, logits_BL, dLogits_BL. forward_batched_train
+// just stages outputs (no caches preserved across the B iterations);
+// backward_batched re-runs forward(x_b) to rebuild caches before calling
+// backward(dLogits_b). Doubles forward FLOPs per train step — acceptable in
+// v2; the proper fix is per-sample state arrays or true (B, K, D) kernels.
+void SingleHeroNetTX::forward_batched_train(const gpu::GpuTensor& X_BD,
+                                            gpu::GpuTensor& logits_BL,
+                                            gpu::GpuTensor& values_B1) {
+    assert(device_ == Device::GPU);
+    const int B = X_BD.rows;
+    const int D_in = X_BD.cols;
+    assert(D_in == observation::TOTAL);
+    const int L = head_.total_logits();
+
+    if (logits_BL.rows != B || logits_BL.cols != L) logits_BL.resize(B, L);
+    if (values_B1.rows != B || values_B1.cols != 1) values_B1.resize(B, 1);
+
+    last_train_X_BD_ = &X_BD;
+
+    for (int b = 0; b < B; ++b) {
+        gpu::GpuTensor x_view = gpu::GpuTensor::view(
+            X_BD.data + static_cast<size_t>(b) * D_in,
+            observation::TOTAL, 1);
+        gpu::GpuTensor logits_view = gpu::GpuTensor::view(
+            logits_BL.data + static_cast<size_t>(b) * L, L, 1);
+        // Single-sample GPU forward — fills layer caches for this b only.
+        forward(x_view, logits_view);
+        // Gather scalar value into values_B1[b].
+        gpu::copy_d2d_gpu(value_head_.value_gpu(), 0, values_B1, b, 1);
+    }
+}
+
+void SingleHeroNetTX::backward_batched(const gpu::GpuTensor& dLogits_BL,
+                                       const gpu::GpuTensor& dValues_B1) {
+    assert(device_ == Device::GPU);
+    assert(last_train_X_BD_ != nullptr &&
+           "forward_batched_train must be called before backward_batched");
+    const gpu::GpuTensor& X_BD = *last_train_X_BD_;
+    const int B = X_BD.rows;
+    const int D_in = X_BD.cols;
+    const int L = head_.total_logits();
+    assert(dLogits_BL.rows == B && dLogits_BL.cols == L);
+    assert(dValues_B1.rows == B && dValues_B1.cols == 1);
+
+    // Scratch for per-element logits output of the re-forward (we don't read
+    // the values, but forward() expects an output tensor).
+    if (logits_row_g_.rows != L || logits_row_g_.cols != 1)
+        logits_row_g_.resize(L, 1);
+
+    for (int b = 0; b < B; ++b) {
+        gpu::GpuTensor x_view = gpu::GpuTensor::view(
+            X_BD.data + static_cast<size_t>(b) * D_in,
+            observation::TOTAL, 1);
+        // Re-prime per-element caches (slot masks, encoder activations, etc.)
+        // by running forward again. Single-sample backward depends on these.
+        forward(x_view, logits_row_g_);
+
+        // Write dValue scalar into the value head's gradient slot.
+        gpu::copy_d2d_gpu(dValues_B1, b, value_head_.dValue_gpu(), 0, 1);
+
+        // dLogits view for this row.
+        gpu::GpuTensor dLogits_view = gpu::GpuTensor::view(
+            dLogits_BL.data + static_cast<size_t>(b) * L, L, 1);
+        backward(dLogits_view);
+    }
 }
 
 #endif // BGA_HAS_CUDA
