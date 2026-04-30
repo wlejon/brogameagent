@@ -78,6 +78,13 @@ __global__ void add_scalar_inplace_kernel(float* __restrict__ y, float s, int n)
     }
 }
 
+__global__ void scale_inplace_kernel(float* __restrict__ y, float s, int n) {
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
+         i += blockDim.x * gridDim.x) {
+        y[i] *= s;
+    }
+}
+
 inline int grid_for(int n) {
     int blocks = (n + EW_BLOCK - 1) / EW_BLOCK;
     if (blocks < 1) blocks = 1;
@@ -146,6 +153,13 @@ void add_scalar_inplace_gpu(GpuTensor& y, float s) {
     const int n = y.size();
     if (n == 0) return;
     add_scalar_inplace_kernel<<<grid_for(n), EW_BLOCK>>>(y.data, s, n);
+    BGA_CUDA_CHECK(cudaGetLastError());
+}
+
+void scale_inplace_gpu(GpuTensor& y, float s) {
+    const int n = y.size();
+    if (n == 0) return;
+    scale_inplace_kernel<<<grid_for(n), EW_BLOCK>>>(y.data, s, n);
     BGA_CUDA_CHECK(cudaGetLastError());
 }
 

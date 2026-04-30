@@ -4,12 +4,22 @@
 #ifdef BGA_HAS_CUDA
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
+#include <cuda_runtime.h>
 #endif
 
 #include <cassert>
 #include <cstring>
 
 namespace brogameagent::learn {
+
+#ifdef BGA_HAS_CUDA
+GenericExItTrainer::~GenericExItTrainer() {
+    if (head_offsets_dev_) {
+        cudaFree(head_offsets_dev_);
+        head_offsets_dev_ = nullptr;
+    }
+}
+#endif
 
 GenericTrainStep GenericExItTrainer::step() {
     if (!net_ || !buf_ || buf_->size() == 0) return {};
@@ -124,17 +134,37 @@ void GenericExItTrainer::maybe_publish() {
 #ifdef BGA_HAS_CUDA
 void GenericExItTrainer::ensure_gpu_staging_() {
     if (gpu_ready_) return;
+    const int B      = cfg_.batch;
     const int in_dim = net_->in_dim();
     const int n_act  = net_->num_actions();
-    obs_g_.resize(in_dim, 1);
-    logits_g_.resize(n_act, 1);
-    probs_g_.resize(n_act, 1);
-    dLog_g_.resize(n_act, 1);
-    dLog_acc_g_.resize(n_act, 1);
-    target_g_.resize(n_act, 1);
-    mask_g_.resize(n_act, 1);
-    v_tgt_g_.resize(1, 1);
-    dV_acc_g_.resize(1, 1);
+    X_BD_g_.resize(B, in_dim);
+    T_BL_g_.resize(B, n_act);
+    M_BL_g_.resize(B, n_act);
+    V_B1_g_.resize(B, 1);
+    logits_BL_g_.resize(B, n_act);
+    values_B1_g_.resize(B, 1);
+    probs_BL_g_.resize(B, n_act);
+    dLog_BL_g_.resize(B, n_act);
+    dV_B1_g_.resize(B, 1);
+    lp_per_sample_g_.resize(B, 1);
+    lv_per_sample_g_.resize(B, 1);
+
+    // Upload head_offsets into a small device int buffer (owned by the
+    // trainer; freed in the destructor).
+    const auto& offsets = net_->head_offsets();
+    const int n = static_cast<int>(offsets.size());
+    if (head_offsets_dev_ && head_offsets_dev_n_ != n) {
+        cudaFree(head_offsets_dev_);
+        head_offsets_dev_   = nullptr;
+        head_offsets_dev_n_ = 0;
+    }
+    if (!head_offsets_dev_) {
+        BGA_CUDA_CHECK(cudaMalloc(&head_offsets_dev_, sizeof(int) * n));
+        head_offsets_dev_n_ = n;
+    }
+    BGA_CUDA_CHECK(cudaMemcpy(head_offsets_dev_, offsets.data(),
+                              sizeof(int) * n, cudaMemcpyHostToDevice));
+
     gpu_ready_ = true;
 }
 
@@ -143,128 +173,100 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
     auto batch = buf_->sample(cfg_.batch, rng_);
     if (batch.empty()) return s;
 
-    const int in_dim   = net_->in_dim();
-    const int n_act    = net_->num_actions();
+    const int B      = cfg_.batch;
+    const int in_dim = net_->in_dim();
+    const int n_act  = net_->num_actions();
+    const int n_heads = net_->num_heads();
     ensure_gpu_staging_();
+
+    // Stage minibatch on host into contiguous (B, *) buffers. Defensive: any
+    // shape-mismatched situation contributes zeros (target = uniform, mask
+    // = 1s, value = 0) so we always have exactly B rows. CPU path skips
+    // such samples; we accept a small parity deviation in that edge case.
+    nn::Tensor X_h = nn::Tensor::mat(B, in_dim);
+    nn::Tensor T_h = nn::Tensor::mat(B, n_act);
+    nn::Tensor M_h = nn::Tensor::mat(B, n_act);
+    nn::Tensor V_h = nn::Tensor::mat(B, 1);
+
+    bool any_mask = false;
+    int valid = 0;
+    for (int b = 0; b < B; ++b) {
+        const auto& sit = batch[b];
+        if (static_cast<int>(sit.obs.size()) != in_dim) continue;
+        if (static_cast<int>(sit.policy_target.size()) != n_act) continue;
+        std::memcpy(X_h.ptr() + static_cast<size_t>(b) * in_dim,
+                    sit.obs.data(), in_dim * sizeof(float));
+        std::memcpy(T_h.ptr() + static_cast<size_t>(b) * n_act,
+                    sit.policy_target.data(), n_act * sizeof(float));
+        V_h.ptr()[b] = sit.value_target;
+        if (!sit.action_mask.empty() &&
+            static_cast<int>(sit.action_mask.size()) == n_act) {
+            std::memcpy(M_h.ptr() + static_cast<size_t>(b) * n_act,
+                        sit.action_mask.data(), n_act * sizeof(float));
+            any_mask = true;
+        } else {
+            // No-mask sentinel: 1s so the kernel treats every entry as valid.
+            float* row = M_h.ptr() + static_cast<size_t>(b) * n_act;
+            for (int i = 0; i < n_act; ++i) row[i] = 1.0f;
+        }
+        ++valid;
+    }
+    if (valid == 0) return s;
+
+    nn::gpu::upload(X_h, X_BD_g_);
+    nn::gpu::upload(T_h, T_BL_g_);
+    nn::gpu::upload(V_h, V_B1_g_);
+    const float* mask_dev = nullptr;
+    if (any_mask) {
+        nn::gpu::upload(M_h, M_BL_g_);
+        mask_dev = M_BL_g_.data;
+    }
 
     net_->zero_grad();
 
-    // Per-sample staging on host so we can upload contiguous floats. We
-    // re-use the host vectors across samples to avoid alloc churn.
-    nn::Tensor obs_h    = nn::Tensor::vec(in_dim);
-    nn::Tensor target_h = nn::Tensor::vec(n_act);
-    nn::Tensor mask_h   = nn::Tensor::vec(n_act);
-    nn::Tensor v_tgt_h  = nn::Tensor::vec(1);
-    nn::Tensor v_pred_h = nn::Tensor::vec(1);
+    // Forward (training) — caches every layer's batched activation.
+    net_->forward_batched_train(X_BD_g_, logits_BL_g_, values_B1_g_);
 
-    float tot_lv = 0.0f, tot_lp = 0.0f;
-    int samples = 0;
+    // Per-sample value MSE: writes dV_B1_g_ = (pred - target),
+    // lv_per_sample_g_ = 0.5 * d^2.
+    nn::gpu::mse_vec_per_sample_gpu(values_B1_g_, V_B1_g_,
+                                    dV_B1_g_, lv_per_sample_g_);
 
-    const auto& offsets = net_->head_offsets();
-    const int n_heads = net_->num_heads();
+    // Per-(sample, head) softmax-xent: writes probs, dLog = (p - t) on valid,
+    // lp_per_sample = sum-over-heads of head xent.
+    nn::gpu::softmax_xent_fused_batched_gpu(
+        logits_BL_g_, T_BL_g_, mask_dev,
+        head_offsets_dev_, n_heads,
+        probs_BL_g_, dLog_BL_g_, lp_per_sample_g_);
 
-    for (const auto& sit : batch) {
-        if (static_cast<int>(sit.obs.size()) != in_dim) continue;
-        if (static_cast<int>(sit.policy_target.size()) != n_act) continue;
+    // Scale gradients on device. Match CPU exactly:
+    //   dV  *= value_weight / B
+    //   dLog *= policy_weight / B / n_heads
+    const float B_f = static_cast<float>(B);
+    nn::gpu::scale_inplace_gpu(dV_B1_g_, cfg_.value_weight / B_f);
+    nn::gpu::scale_inplace_gpu(dLog_BL_g_,
+                               cfg_.policy_weight / B_f / static_cast<float>(n_heads));
 
-        std::memcpy(obs_h.ptr(),    sit.obs.data(),           in_dim * sizeof(float));
-        std::memcpy(target_h.ptr(), sit.policy_target.data(), n_act  * sizeof(float));
-        nn::gpu::upload(obs_h,    obs_g_);
-        nn::gpu::upload(target_h, target_g_);
-
-        const bool has_mask = !sit.action_mask.empty() &&
-                              static_cast<int>(sit.action_mask.size()) == n_act;
-        const float* mask_dev = nullptr;
-        if (has_mask) {
-            std::memcpy(mask_h.ptr(), sit.action_mask.data(), n_act * sizeof(float));
-            nn::gpu::upload(mask_h, mask_g_);
-            mask_dev = mask_g_.data;
-        }
-
-        // Forward.
-        net_->forward(obs_g_, logits_g_);
-
-        // Value loss / grad — host roundtrip to keep CPU-identical 0.5*d^2
-        // semantics. Sync once to read v_pred.
-        nn::gpu::download(net_->value_gpu(), v_pred_h);
-        nn::gpu::cuda_sync();
-        const float v_pred = v_pred_h[0];
-        float dv = 0.0f;
-        const float lv = nn::mse_scalar(v_pred, sit.value_target, dv);
-        tot_lv += lv;
-        const float scale_v = cfg_.value_weight  / static_cast<float>(batch.size());
-        v_pred_h[0] = dv * scale_v;
-        nn::gpu::upload(v_pred_h, net_->dValue_gpu());
-
-        // Policy loss / grad — per-head softmax-xent, mean-reduced over heads.
-        // softmax_xent_fused_gpu writes (probs - target) into dLog at the
-        // segment slice; we accumulate into dLog_g_ across heads via a
-        // segment-wise call. Since each head writes to its own non-overlapping
-        // segment, we can write directly to dLog_g_ by copying logit/target
-        // segments out into temporary slices — but that requires extra ops.
-        // Simpler and within spec: call the fused kernel per head against
-        // FULL-WIDTH logits / target / probs / dLog tensors, but with each
-        // head's slice masked in. We achieve that by constructing a per-head
-        // mask: zero-everywhere except the [off, off+len) range, optionally
-        // AND-ed with the user mask.
-        //
-        // To avoid that complexity (and an extra mask upload per head), use
-        // a single non-segmented call when n_heads == 1, and a segment-wise
-        // call walking GpuTensor::view() for each slice.
-        float lp = 0.0f;
-        // dLog_g_ is the full-width gradient; per-head writes cover the
-        // entire [0, n_act) range since head segments are contiguous, so
-        // no pre-zeroing is required.
-        for (int h = 0; h < n_heads; ++h) {
-            const int off = offsets[h];
-            const int len = offsets[h + 1] - off;
-            // Slice device pointers into per-head views.
-            nn::gpu::GpuTensor logits_slice =
-                nn::gpu::GpuTensor::view(logits_g_.data + off, len, 1);
-            nn::gpu::GpuTensor target_slice =
-                nn::gpu::GpuTensor::view(target_g_.data + off, len, 1);
-            nn::gpu::GpuTensor probs_slice =
-                nn::gpu::GpuTensor::view(probs_g_.data + off, len, 1);
-            nn::gpu::GpuTensor dLog_slice =
-                nn::gpu::GpuTensor::view(dLog_g_.data + off, len, 1);
-            const float* head_mask = mask_dev ? (mask_dev + off) : nullptr;
-            const float lh = nn::gpu::softmax_xent_fused_gpu(
-                logits_slice, target_slice, head_mask,
-                probs_slice, dLog_slice);
-            lp += lh;
-        }
-        lp /= static_cast<float>(n_heads);
-        tot_lp += lp;
-
-        // Scale dLog by (1/B) * policy_weight and the per-head mean factor.
-        const float inv_n_heads = (n_heads > 1)
-            ? (1.0f / static_cast<float>(n_heads)) : 1.0f;
-        const float scale_p = cfg_.policy_weight / static_cast<float>(batch.size())
-                              * inv_n_heads;
-        // Multiply dLog_g_ in-place by scale_p. We reuse sgd_step_gpu? No —
-        // need a generic scale. Use a tiny add_scalar trick? No, that adds.
-        // Simpler: do the scaling on host: download, scale, upload. Cheap
-        // for n_act-sized vectors; matches the value-loss host-roundtrip
-        // pattern.
-        nn::Tensor dLog_h = nn::Tensor::vec(n_act);
-        nn::gpu::download(dLog_g_, dLog_h);
-        nn::gpu::cuda_sync();
-        for (int i = 0; i < n_act; ++i) dLog_h[i] *= scale_p;
-        nn::gpu::upload(dLog_h, dLog_g_);
-
-        // Backward: PolicyValueNet reads dValue from net->dValue_gpu() (we
-        // already wrote to it above) and dLogits from dLog_g_.
-        net_->backward(dLog_g_);
-
-        ++samples;
-    }
-
+    // Backward + optimizer (all on device).
+    net_->backward_batched(dLog_BL_g_, dV_B1_g_);
     net_->sgd_step(cfg_.lr, cfg_.momentum);
 
-    s.loss_value  = tot_lv / static_cast<float>(batch.size());
-    s.loss_policy = tot_lp / static_cast<float>(batch.size());
+    // Single sync + downloads of the two per-sample loss vectors.
+    nn::Tensor lv_h, lp_h;
+    nn::gpu::download(lv_per_sample_g_, lv_h);
+    nn::gpu::download(lp_per_sample_g_, lp_h);
+    nn::gpu::cuda_sync();
+
+    float tot_lv = 0.0f, tot_lp = 0.0f;
+    for (int b = 0; b < B; ++b) tot_lv += lv_h[b];
+    for (int b = 0; b < B; ++b) tot_lp += lp_h[b];
+    // CPU mean-reduces per-sample policy loss across heads.
+    tot_lp /= static_cast<float>(n_heads);
+
+    s.loss_value  = tot_lv / B_f;
+    s.loss_policy = tot_lp / B_f;
     s.loss_total  = s.loss_value * cfg_.value_weight + s.loss_policy * cfg_.policy_weight;
-    s.samples     = samples;
+    s.samples     = valid;
 
     ++steps_;
     if (cfg_.publish_every > 0 && (steps_ % cfg_.publish_every) == 0) maybe_publish();

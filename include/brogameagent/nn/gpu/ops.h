@@ -70,6 +70,9 @@ void add_inplace_gpu(GpuTensor& y, const GpuTensor& x);
 // y[i] += s for all i.
 void add_scalar_inplace_gpu(GpuTensor& y, float s);
 
+// y[i] *= s for all i.
+void scale_inplace_gpu(GpuTensor& y, float s);
+
 // ─── Subagent 3: reductions, norm, attention, optimiser ────────────────────
 
 // Numerically stable softmax over a flat vector of length N = logits.size().
@@ -379,5 +382,72 @@ void tanh_forward_batched_gpu(const GpuTensor& X_BD, GpuTensor& Y_BD);
 
 // Y[i] += X[i] over (B, D). Identical shape required.
 void add_inplace_batched_gpu(GpuTensor& Y_BD, const GpuTensor& X_BD);
+
+// ─── Batched (training) backward variants ──────────────────────────────────
+//
+// Backward partners for the batched-train path used by GenericExItTrainer.
+// Match the math of the single-sample versions summed across B.
+
+// Linear backward over a B-row minibatch.
+//   W:    (out_dim, in_dim) — read-only forward weights
+//   X_BD: (B, in_dim)       — forward input (cached by caller)
+//   dY_BD:(B, out_dim)      — upstream gradient
+//   dX_BD:(B, in_dim)       — output, *overwritten* (resized if mis-shaped)
+//   dW:   (out_dim, in_dim) — *accumulated*; caller zeros before the step
+//   dB:   (out_dim, 1)      — *accumulated*; caller zeros before the step
+// Math: dX[b] = W^T * dY[b], dW += sum_b dY[b] * X[b]^T, dB += sum_b dY[b].
+void linear_backward_batched_gpu(const GpuTensor& W, const GpuTensor& X_BD,
+                                 const GpuTensor& dY_BD,
+                                 GpuTensor& dX_BD,
+                                 GpuTensor& dW, GpuTensor& dB);
+
+// Elementwise ReLU/Tanh backward over (B, D). Same shapes throughout.
+//   relu:  dX = dY * (X > 0); reads X_BD (the forward input).
+//   tanh:  dX = dY * (1 - Y*Y); reads Y_BD (the forward output).
+void relu_backward_batched_gpu(const GpuTensor& X_BD, const GpuTensor& dY_BD,
+                               GpuTensor& dX_BD);
+void tanh_backward_batched_gpu(const GpuTensor& Y_BD, const GpuTensor& dY_BD,
+                               GpuTensor& dX_BD);
+
+// ─── Batched per-sample loss kernels (training) ────────────────────────────
+//
+// Used by GenericExItTrainer to fuse loss + grad across the whole minibatch
+// in a single launch, with no per-sample host roundtrips.
+
+// Per-sample MSE matching CPU `mse_scalar` (loss = 0.5 * d², dPred = d).
+//   pred:   (B, 1)
+//   target: (B, 1)
+//   dPred:  (B, 1) — overwritten with (pred - target)
+//   loss_per_sample: (B, 1) — overwritten with 0.5 * (pred - target)^2
+void mse_vec_per_sample_gpu(const GpuTensor& pred, const GpuTensor& target,
+                            GpuTensor& dPred, GpuTensor& loss_per_sample);
+
+// Batched fused softmax + cross-entropy across (sample, head) tiles.
+//
+// For each row b in [0, B) and head h in [0, n_heads), runs a numerically
+// stable softmax-xent over the slice
+//     [d_head_offsets[h], d_head_offsets[h+1])
+// of the b'th row of `logits_BL`. Writes:
+//     probs_BL[b, slice]   = softmax(logits_BL[b, slice]) (0 on masked)
+//     dLogits_BL[b, slice] = probs - target on valid; 0 on masked
+//     loss_per_sample[b]  += sum_h (-sum_{i in slice, valid} target * log p)
+// loss_per_sample is *overwritten* before the per-head accumulation begins.
+//
+//   logits_BL, target_BL, probs_BL, dLogits_BL: (B, n_act_total)
+//   d_mask_BL: optional (B, n_act_total) device pointer (1 valid / 0 invalid)
+//   d_head_offsets: device int* of length n_heads + 1 (cumulative per spec).
+//   loss_per_sample: (B, 1) — overwritten with the sum-over-heads loss.
+//
+// The caller is responsible for any mean-over-heads reduction on the loss
+// (CPU formulation divides by n_heads). The kernel does not scale dLogits
+// by 1/n_heads either — the caller applies that with scale_inplace_gpu.
+void softmax_xent_fused_batched_gpu(const GpuTensor& logits_BL,
+                                    const GpuTensor& target_BL,
+                                    const float* d_mask_BL,
+                                    const int* d_head_offsets,
+                                    int n_heads,
+                                    GpuTensor& probs_BL,
+                                    GpuTensor& dLogits_BL,
+                                    GpuTensor& loss_per_sample);
 
 } // namespace brogameagent::nn::gpu

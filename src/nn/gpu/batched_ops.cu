@@ -99,6 +99,74 @@ __global__ void add_inplace_batched_kernel(float* __restrict__ y,
     }
 }
 
+__global__ void relu_backward_batched_kernel(const float* __restrict__ x,
+                                             const float* __restrict__ dY,
+                                             float* __restrict__ dX, int n) {
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
+         i += blockDim.x * gridDim.x) {
+        dX[i] = x[i] > 0.0f ? dY[i] : 0.0f;
+    }
+}
+
+__global__ void tanh_backward_batched_kernel(const float* __restrict__ y,
+                                             const float* __restrict__ dY,
+                                             float* __restrict__ dX, int n) {
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
+         i += blockDim.x * gridDim.x) {
+        const float yv = y[i];
+        dX[i] = dY[i] * (1.0f - yv * yv);
+    }
+}
+
+// Linear backward over a B-row minibatch. Kept in the batched_ops TU so the
+// matched forward and backward live together.
+
+constexpr int LBB_DX_BLOCK = 64;     // threads per block (in_dim axis)
+
+__global__ void linear_backward_batched_dx_kernel(const float* __restrict__ W,
+                                                  const float* __restrict__ dY,
+                                                  float* __restrict__ dX,
+                                                  int B, int out_dim, int in_dim) {
+    const int b = blockIdx.y;
+    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (b >= B || j >= in_dim) return;
+    const float* dY_row = dY + static_cast<size_t>(b) * out_dim;
+    float acc = 0.0f;
+    for (int i = 0; i < out_dim; ++i) {
+        acc += W[static_cast<size_t>(i) * in_dim + j] * dY_row[i];
+    }
+    dX[static_cast<size_t>(b) * in_dim + j] = acc;
+}
+
+// dW[i, j] += sum_b dY[b, i] * X[b, j]. 2D grid over (i, j); inner loop sums B.
+__global__ void linear_backward_batched_dw_kernel(const float* __restrict__ dY,
+                                                  const float* __restrict__ X,
+                                                  float* __restrict__ dW,
+                                                  int B, int out_dim, int in_dim) {
+    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    const int i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i >= out_dim || j >= in_dim) return;
+    float acc = 0.0f;
+    for (int b = 0; b < B; ++b) {
+        acc += dY[static_cast<size_t>(b) * out_dim + i] *
+               X [static_cast<size_t>(b) * in_dim  + j];
+    }
+    dW[static_cast<size_t>(i) * in_dim + j] += acc;
+}
+
+// dB[i] += sum_b dY[b, i].
+__global__ void linear_backward_batched_db_kernel(const float* __restrict__ dY,
+                                                  float* __restrict__ dB,
+                                                  int B, int out_dim) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= out_dim) return;
+    float acc = 0.0f;
+    for (int b = 0; b < B; ++b) {
+        acc += dY[static_cast<size_t>(b) * out_dim + i];
+    }
+    dB[i] += acc;
+}
+
 inline int grid_for(int n) {
     int blocks = (n + EW_BLOCK - 1) / EW_BLOCK;
     if (blocks < 1) blocks = 1;
@@ -146,6 +214,66 @@ void add_inplace_batched_gpu(GpuTensor& Y_BD, const GpuTensor& X_BD) {
     if (n == 0) return;
     add_inplace_batched_kernel<<<grid_for(n), EW_BLOCK>>>(Y_BD.data, X_BD.data, n);
     BGA_CUDA_CHECK(cudaGetLastError());
+}
+
+void relu_backward_batched_gpu(const GpuTensor& X_BD, const GpuTensor& dY_BD,
+                               GpuTensor& dX_BD) {
+    if (dX_BD.rows != X_BD.rows || dX_BD.cols != X_BD.cols)
+        dX_BD.resize(X_BD.rows, X_BD.cols);
+    const int n = X_BD.size();
+    if (n == 0) return;
+    relu_backward_batched_kernel<<<grid_for(n), EW_BLOCK>>>(
+        X_BD.data, dY_BD.data, dX_BD.data, n);
+    BGA_CUDA_CHECK(cudaGetLastError());
+}
+
+void tanh_backward_batched_gpu(const GpuTensor& Y_BD, const GpuTensor& dY_BD,
+                               GpuTensor& dX_BD) {
+    if (dX_BD.rows != Y_BD.rows || dX_BD.cols != Y_BD.cols)
+        dX_BD.resize(Y_BD.rows, Y_BD.cols);
+    const int n = Y_BD.size();
+    if (n == 0) return;
+    tanh_backward_batched_kernel<<<grid_for(n), EW_BLOCK>>>(
+        Y_BD.data, dY_BD.data, dX_BD.data, n);
+    BGA_CUDA_CHECK(cudaGetLastError());
+}
+
+void linear_backward_batched_gpu(const GpuTensor& W, const GpuTensor& X_BD,
+                                 const GpuTensor& dY_BD,
+                                 GpuTensor& dX_BD,
+                                 GpuTensor& dW, GpuTensor& dB) {
+    const int out_dim = W.rows;
+    const int in_dim  = W.cols;
+    const int B       = X_BD.rows;
+
+    if (dX_BD.rows != B || dX_BD.cols != in_dim) dX_BD.resize(B, in_dim);
+    if (B == 0) return;
+
+    // dX = dY @ W (per row).
+    if (in_dim > 0 && out_dim > 0) {
+        dim3 block(LBB_DX_BLOCK, 1);
+        dim3 grid((in_dim + LBB_DX_BLOCK - 1) / LBB_DX_BLOCK, B);
+        linear_backward_batched_dx_kernel<<<grid, block>>>(
+            W.data, dY_BD.data, dX_BD.data, B, out_dim, in_dim);
+        BGA_CUDA_CHECK(cudaGetLastError());
+    }
+
+    // dW += dY^T @ X (sum over B).
+    if (out_dim > 0 && in_dim > 0) {
+        dim3 block(16, 16);
+        dim3 grid((in_dim + 15) / 16, (out_dim + 15) / 16);
+        linear_backward_batched_dw_kernel<<<grid, block>>>(
+            dY_BD.data, X_BD.data, dW.data, B, out_dim, in_dim);
+        BGA_CUDA_CHECK(cudaGetLastError());
+    }
+
+    // dB += sum_b dY[b].
+    if (out_dim > 0) {
+        const int blocks = (out_dim + 255) / 256;
+        linear_backward_batched_db_kernel<<<blocks, 256>>>(
+            dY_BD.data, dB.data, B, out_dim);
+        BGA_CUDA_CHECK(cudaGetLastError());
+    }
 }
 
 } // namespace brogameagent::nn::gpu

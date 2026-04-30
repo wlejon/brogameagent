@@ -111,6 +111,22 @@ public:
     // BatchedNet interface accessors.
     int input_dim()  const override { return cfg_.in_dim; }
     int logits_dim() const override { return cfg_.num_actions; }
+
+    // Training-time batched forward. Caches every layer's batched activation
+    // into layer-private (B, *) tensors that backward_batched consumes.
+    //   X_BD:      (B, in_dim)
+    //   logits_BL: (B, num_actions) — resized if mis-shaped
+    //   values_B1: (B, 1)            — resized if mis-shaped
+    void forward_batched_train(const gpu::GpuTensor& X_BD,
+                               gpu::GpuTensor& logits_BL,
+                               gpu::GpuTensor& values_B1);
+
+    // Training-time batched backward.
+    //   dLogits_BL: (B, num_actions)
+    //   dValues_B1: (B, 1)
+    // Accumulates dW/dB across the whole minibatch into each layer.
+    void backward_batched(const gpu::GpuTensor& dLogits_BL,
+                          const gpu::GpuTensor& dValues_B1);
 #endif
 
     Device device() const { return device_; }
@@ -185,6 +201,20 @@ private:
     std::vector<gpu::GpuTensor> trunk_act_bg_;
     gpu::GpuTensor v_h_raw_bg_, v_h_act_bg_;
     gpu::GpuTensor v_pre_tanh_bg_;
+
+    // Batched-training caches (grown lazily in forward_batched_train,
+    // independent from the inference-only ..._bg_ caches above so the two
+    // call paths can coexist without clobbering each other).
+    std::vector<gpu::GpuTensor> trunk_raw_btr_g_;
+    std::vector<gpu::GpuTensor> trunk_act_btr_g_;
+    gpu::GpuTensor v_h_raw_btr_g_, v_h_act_btr_g_;
+    gpu::GpuTensor v_pre_tanh_btr_g_, v_post_tanh_btr_g_;
+    // Batched-training backward scratch.
+    gpu::GpuTensor dPreTanh_btr_g_;
+    gpu::GpuTensor dVAct_btr_g_, dVRaw_btr_g_;
+    gpu::GpuTensor dHAct_btr_g_, dHRaw_btr_g_, dPrev_btr_g_;
+    gpu::GpuTensor dXdiscard_btr_g_;
+    gpu::GpuTensor dTrunkFromP_btr_g_;
 #endif
 };
 

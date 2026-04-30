@@ -57,6 +57,13 @@ public:
     // Caller must keep `x` alive until backward() (the layer caches a view).
     void forward(const gpu::GpuTensor& x, gpu::GpuTensor& y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+
+    // Batched-training forward/backward. The caller must keep `X_BD` alive
+    // until backward_batched (the layer caches a view). Cache slot is
+    // independent from the single-sample `forward(GpuTensor)` cache so the
+    // two paths can coexist without interfering.
+    void forward_batched_train(const gpu::GpuTensor& X_BD, gpu::GpuTensor& Y_BD);
+    void backward_batched(const gpu::GpuTensor& dY_BD, gpu::GpuTensor& dX_BD);
 #endif
 
     int in_dim() const  { return W_.cols; }
@@ -111,7 +118,8 @@ private:
     gpu::GpuTensor vW_g_, vB_g_;
     gpu::GpuTensor mW_g_, mB_g_;
     gpu::GpuTensor vAW_g_, vAB_g_;
-    gpu::GpuTensor x_cache_g_;  // non-owning view; lifetime = caller's x
+    gpu::GpuTensor x_cache_g_;     // non-owning view; lifetime = caller's x
+    gpu::GpuTensor x_cache_btr_g_; // batched-train view; independent from above
 #endif
 };
 

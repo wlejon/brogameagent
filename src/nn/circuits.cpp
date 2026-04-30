@@ -115,6 +115,20 @@ void Linear::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
     assert(device_ == Device::GPU);
     gpu::linear_backward_gpu(W_g_, x_cache_g_, dY, dX, dW_g_, dB_g_);
 }
+
+void Linear::forward_batched_train(const gpu::GpuTensor& X_BD,
+                                   gpu::GpuTensor& Y_BD) {
+    assert(device_ == Device::GPU);
+    x_cache_btr_g_ = gpu::GpuTensor::view(X_BD.data, X_BD.rows, X_BD.cols);
+    gpu::linear_forward_batched_gpu(W_g_, b_g_, X_BD, Y_BD);
+}
+
+void Linear::backward_batched(const gpu::GpuTensor& dY_BD,
+                              gpu::GpuTensor& dX_BD) {
+    assert(device_ == Device::GPU);
+    gpu::linear_backward_batched_gpu(W_g_, x_cache_btr_g_, dY_BD,
+                                     dX_BD, dW_g_, dB_g_);
+}
 #endif
 
 void Linear::to(Device d) {
