@@ -15,6 +15,7 @@
 // a runtime error: see device_require_cuda() below.
 
 #include <stdexcept>
+#include <string>
 
 namespace brogameagent::nn {
 

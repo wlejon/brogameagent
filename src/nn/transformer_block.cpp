@@ -285,7 +285,7 @@ void TransformerBlock::backward(const Tensor& dY, Tensor& dX) {
     const int K = X_cache_.rows;
     const int D = X_cache_.cols;
     if (dX.rows != K || dX.cols != D) dX.resize(K, D);
-    const float* m = has_mask_ ? reinterpret_cast<const float*>(nullptr) : nullptr;
+    const float* m = has_mask_ ? static_cast<const float*>(nullptr) : nullptr;
     // We cached mask_cache_ as bytes; rebuild a float* if needed.
     std::vector<float> mvec;
     const float* mask_ptr = nullptr;
