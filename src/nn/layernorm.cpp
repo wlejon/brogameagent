@@ -1,6 +1,6 @@
 #include "brogameagent/nn/layernorm.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -70,7 +70,7 @@ void LayerNorm::backward(const Tensor& dY, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void LayerNorm::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
     assert(device_ == Device::GPU);
     const int n = gamma_.size();
@@ -89,7 +89,7 @@ void LayerNorm::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
 void LayerNorm::to(Device d) {
     if (d == device_) return;
     device_require_cuda("LayerNorm");
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (d == Device::GPU) {
         // Upload params/grads/velocities; allocate xhat mirror.
         gpu::upload(gamma_, gamma_g_);
@@ -124,7 +124,7 @@ void LayerNorm::to(Device d) {
 }
 
 void LayerNorm::zero_grad() {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         dGamma_g_.zero();
         dBeta_g_.zero();
@@ -136,7 +136,7 @@ void LayerNorm::zero_grad() {
 }
 
 void LayerNorm::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::sgd_step_gpu(gamma_g_, dGamma_g_, vGamma_g_, lr, momentum);
         gpu::sgd_step_gpu(beta_g_,  dBeta_g_,  vBeta_g_,  lr, momentum);
@@ -153,7 +153,7 @@ void LayerNorm::sgd_step(float lr, float momentum) {
 }
 
 void LayerNorm::adam_step(float lr, float beta1, float beta2, float eps, int step) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::adam_step_gpu(gamma_g_, dGamma_g_, mGamma_g_, vAGamma_g_,
                            lr, beta1, beta2, eps, step);
@@ -167,7 +167,7 @@ void LayerNorm::adam_step(float lr, float beta1, float beta2, float eps, int ste
 }
 
 void LayerNorm::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         // Sync host shadow before serializing. const_cast is local to here:
         // download writes into the (logically cached) host Tensor.
@@ -192,7 +192,7 @@ void LayerNorm::load_from(const uint8_t* data, size_t& offset, size_t size) {
     mGamma_.zero(); mBeta_.zero();
     vAGamma_.zero(); vABeta_.zero();
     xhat_.resize(n, 1);
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         // Re-upload after deserialization.
         gpu::upload(gamma_, gamma_g_);

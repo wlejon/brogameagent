@@ -20,8 +20,20 @@ if(MSVC)
     endif()
 endif()
 
-# --- Optional CUDA backend ---
-option(BROGAMEAGENT_WITH_CUDA "Build GPU backend (CUDA)" OFF)
+# --- Optional GPU backends (mutually exclusive) ---
+#
+# Two backends share the same nn::gpu:: namespace and op signatures. Pick one:
+#   BROGAMEAGENT_WITH_CUDA  — NVIDIA, any OS (existing).
+#   BROGAMEAGENT_WITH_METAL — Apple Silicon / Intel Mac via Metal + MPSGraph.
+#
+# Consumer code keys off the umbrella BGA_HAS_GPU define; backend-specific
+# code keys off BGA_HAS_CUDA / BGA_HAS_METAL.
+option(BROGAMEAGENT_WITH_CUDA  "Build GPU backend (CUDA)"  OFF)
+option(BROGAMEAGENT_WITH_METAL "Build GPU backend (Metal)" OFF)
+if(BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL)
+    message(FATAL_ERROR
+        "BROGAMEAGENT_WITH_CUDA and BROGAMEAGENT_WITH_METAL are mutually exclusive.")
+endif()
 if(BROGAMEAGENT_WITH_CUDA)
     # RTX 4090 = sm_89. Set BEFORE enable_language(CUDA) so the language
     # detection probes use the right arch and don't backfill sm_52.
@@ -36,6 +48,12 @@ if(BROGAMEAGENT_WITH_CUDA)
     if(MSVC AND DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
         set(CMAKE_CUDA_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
     endif()
+endif()
+if(BROGAMEAGENT_WITH_METAL)
+    if(NOT APPLE)
+        message(FATAL_ERROR "BROGAMEAGENT_WITH_METAL requires Apple platform.")
+    endif()
+    enable_language(OBJCXX)
 endif()
 
 # --- brogameagent library ---
@@ -134,12 +152,64 @@ if(BROGAMEAGENT_WITH_CUDA)
         src/learn/inference_server.cpp
     )
     target_link_libraries(brogameagent PUBLIC CUDA::cudart)
-    target_compile_definitions(brogameagent PUBLIC BGA_HAS_CUDA=1)
+    target_compile_definitions(brogameagent PUBLIC BGA_HAS_CUDA=1 BGA_HAS_GPU=1)
     set_target_properties(brogameagent PROPERTIES
         CUDA_STANDARD 17
         CUDA_STANDARD_REQUIRED ON
         CUDA_SEPARABLE_COMPILATION OFF
     )
+endif()
+
+if(BROGAMEAGENT_WITH_METAL)
+    target_sources(brogameagent PRIVATE
+        src/nn/metal/runtime.mm
+        src/nn/metal/tensor.mm
+        src/nn/metal/device_buffer.mm
+        src/nn/metal/kernels.mm
+        src/nn/metal/gemm.mm
+        src/nn/metal/elementwise.mm
+        src/nn/metal/softmax.mm
+        src/nn/metal/layernorm.mm
+        src/nn/metal/attention.mm
+        src/nn/metal/mha.mm
+        src/nn/metal/optim.mm
+        src/nn/metal/adam.mm
+        src/nn/metal/reduce.mm
+        src/nn/metal/loss.mm
+        src/nn/metal/embedding.mm
+        src/nn/metal/concat.mm
+        src/nn/metal/batched_ops.mm
+        src/learn/inference_server.cpp
+    )
+    set_source_files_properties(
+        src/nn/metal/runtime.mm
+        src/nn/metal/tensor.mm
+        src/nn/metal/device_buffer.mm
+        src/nn/metal/kernels.mm
+        src/nn/metal/gemm.mm
+        src/nn/metal/elementwise.mm
+        src/nn/metal/softmax.mm
+        src/nn/metal/layernorm.mm
+        src/nn/metal/attention.mm
+        src/nn/metal/mha.mm
+        src/nn/metal/optim.mm
+        src/nn/metal/adam.mm
+        src/nn/metal/reduce.mm
+        src/nn/metal/loss.mm
+        src/nn/metal/embedding.mm
+        src/nn/metal/concat.mm
+        src/nn/metal/batched_ops.mm
+        PROPERTIES
+            COMPILE_FLAGS "-fobjc-arc"
+            LANGUAGE OBJCXX
+    )
+    target_link_libraries(brogameagent PUBLIC
+        "-framework Foundation"
+        "-framework Metal"
+        "-framework MetalPerformanceShaders"
+        "-framework MetalPerformanceShadersGraph"
+    )
+    target_compile_definitions(brogameagent PUBLIC BGA_HAS_METAL=1 BGA_HAS_GPU=1)
 endif()
 
 # --- Install / export ---
@@ -197,7 +267,7 @@ if(BROGAMEAGENT_TOOLS)
     add_executable(nn_pretrain_ae tools/nn_pretrain_ae.cpp)
     target_link_libraries(nn_pretrain_ae PRIVATE brogameagent)
 
-    if(BROGAMEAGENT_WITH_CUDA)
+    if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
         add_executable(nn_pretrain_ae_gpu tools/nn_pretrain_ae_gpu.cpp)
         target_link_libraries(nn_pretrain_ae_gpu PRIVATE brogameagent)
 

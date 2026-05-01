@@ -4,7 +4,6 @@
 
 #include <brogameagent/nn/transformer_block.h>
 
-#include <cuda_runtime.h>
 
 using namespace bga_parity;
 using brogameagent::nn::Device;

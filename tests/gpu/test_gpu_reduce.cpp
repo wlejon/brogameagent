@@ -5,8 +5,6 @@
 #include <brogameagent/nn/gpu/ops.h>
 #include <brogameagent/nn/tensor.h>
 
-#include <cuda_runtime.h>
-
 #include <vector>
 
 using namespace bga_parity;
@@ -14,14 +12,6 @@ using brogameagent::nn::Tensor;
 using brogameagent::nn::gpu::GpuTensor;
 
 namespace {
-
-#define LOCAL_CUDA_OK(expr) do {                                              \
-    cudaError_t _e = (expr);                                                  \
-    if (_e != cudaSuccess) {                                                  \
-        std::printf("cuda err: %s\n", cudaGetErrorString(_e));                \
-        throw 0;                                                              \
-    }                                                                         \
-} while (0)
 
 // CPU reference: matches DeepSetsEncoder/SetTransformerEncoder masked mean
 // pool behaviour.
@@ -72,10 +62,8 @@ void run_pool(int K, int D, uint64_t seed, const std::vector<float>& mask) {
     upload(X, gX);
     upload(dY, gdY);
 
-    float* d_mask = nullptr;
-    LOCAL_CUDA_OK(cudaMalloc(&d_mask, sizeof(float) * K));
-    LOCAL_CUDA_OK(cudaMemcpy(d_mask, mask.data(), sizeof(float) * K,
-                             cudaMemcpyHostToDevice));
+    auto d_mask_buf = upload_mask(&mask);
+    float* d_mask = d_mask_buf.device_ptr();
 
     // Pre-fill dX with garbage to confirm overwrite semantics.
     Tensor dX_garbage(K, D);
@@ -87,7 +75,6 @@ void run_pool(int K, int D, uint64_t seed, const std::vector<float>& mask) {
 
     Tensor y_gpu = download_to_host(gy);
     Tensor dX_gpu = download_to_host(gdX);
-    cudaFree(d_mask);
 
     compare_tensors(y_cpu, y_gpu, "masked_mean_pool.y");
     compare_tensors(dX_cpu, dX_gpu, "masked_mean_pool.dX");

@@ -6,7 +6,7 @@
 #include "brogameagent/action_mask.h"
 #include "brogameagent/observation.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #endif
 
@@ -28,7 +28,7 @@ public:
     void forward(const Tensor& embed, float& value);
     void backward(float dValue, Tensor& dEmbed);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU code path. Internal Linears must be on GPU (call to(GPU)).
     //   embed: (embed_dim, 1). Post-tanh value is cached in value_gpu().
     void forward(const gpu::GpuTensor& embed);
@@ -62,7 +62,7 @@ private:
     float  y_cache_ = 0.0f;       // post-tanh scalar
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU forward caches (sized at to(GPU)).
     gpu::GpuTensor h_raw_g_, h_act_g_;
     gpu::GpuTensor pre_tanh_g_;        // (1,1) pre-tanh scalar
@@ -106,7 +106,7 @@ public:
     // Backward: dLogits is size total_logits(), dEmbed is size embed_dim.
     void backward(const Tensor& dLogits, Tensor& dEmbed);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU code path. Internal Linears must be on GPU.
     //   embed:  (embed_dim, 1)
     //   logits: (total_logits, 1) — concatenated [move | atk | abil].
@@ -138,7 +138,7 @@ public:
 private:
     Linear move_, atk_, abil_;
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU per-segment buffers (allocated at to(GPU); reused).
     gpu::GpuTensor lm_g_, la_g_, lb_g_;     // forward outputs per segment
     gpu::GpuTensor dLm_g_, dLa_g_, dLb_g_;  // sliced gradients per segment

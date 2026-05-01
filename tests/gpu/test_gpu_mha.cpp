@@ -5,8 +5,6 @@
 #include <brogameagent/nn/gpu/ops.h>
 #include <brogameagent/nn/multi_head_attention.h>
 
-#include <cuda_runtime.h>
-
 using namespace bga_parity;
 using brogameagent::nn::MultiHeadAttention;
 using brogameagent::nn::Tensor;
@@ -57,11 +55,8 @@ void run_mha(int K, int D, int H, uint64_t seed, const std::vector<float>* mask)
     gQh.resize(H * K, dh); gKh.resize(H * K, dh); gVh.resize(H * K, dh);
     gAttnh.resize(H * K, K); gYconcat.resize(K, D); gO.resize(K, D);
 
-    float* d_mask = nullptr;
-    if (mask) {
-        cudaMalloc(&d_mask, sizeof(float) * K);
-        cudaMemcpy(d_mask, mask->data(), sizeof(float) * K, cudaMemcpyHostToDevice);
-    }
+    auto d_mask_buf = upload_mask(mask);
+    float* d_mask = d_mask_buf.device_ptr();
     brogameagent::nn::gpu::mha_forward_gpu(
         gX, gWq, gWk, gWv, gWo, d_mask, H,
         gQh, gKh, gVh, gAttnh, gYconcat, gO);
@@ -84,8 +79,6 @@ void run_mha(int K, int D, int H, uint64_t seed, const std::vector<float>* mask)
     Tensor dWk_gpu = download_to_host(gdWk);
     Tensor dWv_gpu = download_to_host(gdWv);
     Tensor dWo_gpu = download_to_host(gdWo);
-
-    if (d_mask) cudaFree(d_mask);
 
     // Slightly looser tolerance — multi-head attention chains many GEMMs and
     // softmaxes; FMA reordering between CPU and GPU pushes tighter tolerances

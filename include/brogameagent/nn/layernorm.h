@@ -4,7 +4,7 @@
 #include "device.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #endif
 
@@ -42,7 +42,7 @@ public:
     void forward(const Tensor& x, Tensor& y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU code path. Parameters must already be on Device::GPU (call to()).
     void forward(const gpu::GpuTensor& x, gpu::GpuTensor& y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
@@ -96,7 +96,7 @@ private:
     float rstd_ = 0.0f;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU mirrors. Allocated lazily on first to(GPU); updated by to() in
     // either direction. Forward/backward also create xhat_g_ as needed.
     gpu::GpuTensor gamma_g_, beta_g_;

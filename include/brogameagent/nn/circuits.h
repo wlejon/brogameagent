@@ -4,7 +4,7 @@
 #include "ops.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #endif
 
@@ -52,7 +52,7 @@ public:
     void forward(const Tensor& x, Tensor& y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU code path. Parameters must already be on Device::GPU (call to()).
     // Caller must keep `x` alive until backward() (the layer caches a view).
     void forward(const gpu::GpuTensor& x, gpu::GpuTensor& y);
@@ -92,7 +92,7 @@ public:
     Tensor&       dB()       { return dB_; }
     const Tensor& dB() const { return dB_; }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     gpu::GpuTensor&       W_g()       { return W_g_; }
     gpu::GpuTensor&       b_g()       { return b_g_; }
     gpu::GpuTensor&       dW_g()      { return dW_g_; }
@@ -109,7 +109,7 @@ private:
     Tensor x_cache_;   // input stashed at forward, used by backward
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU mirrors. Allocated lazily on to(GPU). x_cache_g_ is a non-owning
     // view of the caller-provided x in forward(GpuTensor); backward consumes
     // it. The caller must keep x alive between forward and backward.

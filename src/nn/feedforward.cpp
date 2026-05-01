@@ -1,7 +1,7 @@
 #include "brogameagent/nn/feedforward.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -113,7 +113,7 @@ void FeedForward::backward(const Tensor& dY, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void FeedForward::forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y) {
     assert(device_ == Device::GPU);
     const int K = X.rows;
@@ -202,7 +202,7 @@ void FeedForward::forward_inference_batched(const gpu::GpuTensor& X_RD,
 void FeedForward::to(Device d) {
     if (d == device_) return;
     device_require_cuda("FeedForward");
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (d == Device::GPU) {
         gpu::upload(W1_, W1_g_); gpu::upload(b1_, b1_g_);
         gpu::upload(W2_, W2_g_); gpu::upload(b2_, b2_g_);
@@ -233,7 +233,7 @@ void FeedForward::to(Device d) {
 }
 
 void FeedForward::zero_grad() {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         dW1_g_.zero(); dB1_g_.zero(); dW2_g_.zero(); dB2_g_.zero();
         return;
@@ -253,7 +253,7 @@ static void sgd_buf_(Tensor& W, Tensor& vW, const Tensor& dW,
 }
 
 void FeedForward::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::sgd_step_gpu(W1_g_, dW1_g_, vW1_g_, lr, momentum);
         gpu::sgd_step_gpu(b1_g_, dB1_g_, vB1_g_, lr, momentum);
@@ -269,7 +269,7 @@ void FeedForward::sgd_step(float lr, float momentum) {
 }
 
 void FeedForward::adam_step(float lr, float beta1, float beta2, float eps, int step) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::adam_step_gpu(W1_g_, dW1_g_, mW1_g_, vAW1_g_, lr, beta1, beta2, eps, step);
         gpu::adam_step_gpu(b1_g_, dB1_g_, mB1_g_, vAB1_g_, lr, beta1, beta2, eps, step);
@@ -285,7 +285,7 @@ void FeedForward::adam_step(float lr, float beta1, float beta2, float eps, int s
 }
 
 void FeedForward::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         auto* self = const_cast<FeedForward*>(this);
         gpu::download(W1_g_, self->W1_); gpu::download(b1_g_, self->b1_);
@@ -314,7 +314,7 @@ void FeedForward::load_from(const uint8_t* data, size_t& offset, size_t size) {
     vAW2_.resize(d_, df_); vAB2_.resize(d_, 1);
     mW1_.zero(); mB1_.zero(); mW2_.zero(); mB2_.zero();
     vAW1_.zero(); vAB1_.zero(); vAW2_.zero(); vAB2_.zero();
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::upload(W1_, W1_g_); gpu::upload(b1_, b1_g_);
         gpu::upload(W2_, W2_g_); gpu::upload(b2_, b2_g_);

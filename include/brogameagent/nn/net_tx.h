@@ -9,7 +9,7 @@
 #include "transformer_encoder.h"
 #include "brogameagent/observation.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #include "brogameagent/learn/batched_net.h"
 #endif
@@ -48,7 +48,7 @@ namespace brogameagent::nn {
 // even those.
 
 class SingleHeroNetTX : public ICircuit
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     , public brogameagent::learn::BatchedNet
 #endif
 {
@@ -84,7 +84,7 @@ public:
     void forward(const Tensor& x, float& value, Tensor& logits);
     void backward(float dValue, const Tensor& dLogits);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU-native forward/backward. Net must be on Device::GPU.
     //   x:      (TOTAL, 1) device tensor — caller keeps alive until backward.
     //   logits: (policy_logits, 1) — overwritten.
@@ -214,7 +214,7 @@ private:
     std::vector<int> head_offsets_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU staging / activation buffers, allocated at to(GPU).
     // These are sized to fixed observation constants and reused.
     gpu::GpuTensor x_g_;                 // (TOTAL, 1) input copy (forward owns it for CPU-API path)

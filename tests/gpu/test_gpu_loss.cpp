@@ -5,8 +5,6 @@
 #include <brogameagent/nn/gpu/ops.h>
 #include <brogameagent/nn/ops.h>
 
-#include <cuda_runtime.h>
-
 #include <cmath>
 #include <vector>
 
@@ -15,14 +13,6 @@ using brogameagent::nn::Tensor;
 using brogameagent::nn::gpu::GpuTensor;
 
 namespace {
-
-#define LOCAL_CUDA_OK(expr) do {                                              \
-    cudaError_t _e = (expr);                                                  \
-    if (_e != cudaSuccess) {                                                  \
-        std::printf("cuda err: %s\n", cudaGetErrorString(_e));                \
-        throw 0;                                                              \
-    }                                                                         \
-} while (0)
 
 void run_mse(int n, uint64_t seed) {
     SplitMix64 rng(seed);
@@ -80,18 +70,13 @@ void run_xent(int n, uint64_t seed, const std::vector<float>* mask) {
     upload(logits, glogits);
     upload(target, gtarget);
 
-    float* d_mask = nullptr;
-    if (mask) {
-        LOCAL_CUDA_OK(cudaMalloc(&d_mask, sizeof(float) * n));
-        LOCAL_CUDA_OK(cudaMemcpy(d_mask, mask->data(), sizeof(float) * n,
-                                 cudaMemcpyHostToDevice));
-    }
+    auto d_mask_buf = upload_mask(mask);
+    float* d_mask = d_mask_buf.device_ptr();
 
     const float loss_gpu = brogameagent::nn::gpu::softmax_xent_fused_gpu(
         glogits, gtarget, d_mask, gprobs, gdLogits);
     Tensor probs_gpu = download_to_host(gprobs);
     Tensor dLogits_gpu = download_to_host(gdLogits);
-    if (d_mask) cudaFree(d_mask);
 
     BGA_CHECK(std::fabs(loss_cpu - loss_gpu) < 1e-5f + 1e-4f * std::fabs(loss_cpu));
     compare_tensors(probs_cpu, probs_gpu, "xent.probs");

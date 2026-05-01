@@ -5,9 +5,9 @@
 // Forms a batch from concurrent calls to evaluate(), runs one batched GPU
 // forward of a PolicyValueNet, and returns each caller's per-row result.
 //
-// Compiled only when BGA_HAS_CUDA is defined; the class is GPU-only.
+// Compiled only when BGA_HAS_GPU is defined; the class is GPU-only.
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 
 #include "brogameagent/learn/batched_net.h"
 
@@ -81,4 +81,4 @@ private:
 
 } // namespace brogameagent::learn
 
-#endif // BGA_HAS_CUDA
+#endif // BGA_HAS_GPU

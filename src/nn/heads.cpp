@@ -1,6 +1,6 @@
 #include "brogameagent/nn/heads.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -33,7 +33,7 @@ void ValueHead::forward(const Tensor& embed, float& value) {
 void ValueHead::to(Device d) {
     if (d == device_) return;
     device_require_cuda("ValueHead");
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     fc1_.to(d);
     fc2_.to(d);
     if (d == Device::GPU) {
@@ -50,7 +50,7 @@ void ValueHead::to(Device d) {
     device_ = d;
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void ValueHead::forward(const gpu::GpuTensor& embed) {
     assert(device_ == Device::GPU);
     fc1_.forward(embed, h_raw_g_);
@@ -91,7 +91,7 @@ void FactoredPolicyHead::init(int embed_dim, uint64_t& rng_state) {
 void FactoredPolicyHead::to(Device d) {
     if (d == device_) return;
     device_require_cuda("FactoredPolicyHead");
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     move_.to(d); atk_.to(d); abil_.to(d);
     if (d == Device::GPU) {
         lm_g_.resize(N_MOVE,    1);
@@ -106,7 +106,7 @@ void FactoredPolicyHead::to(Device d) {
     device_ = d;
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void FactoredPolicyHead::forward(const gpu::GpuTensor& embed, gpu::GpuTensor& logits) {
     assert(device_ == Device::GPU);
     move_.forward(embed, lm_g_);

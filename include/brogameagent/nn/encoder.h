@@ -5,7 +5,7 @@
 #include "tensor.h"
 #include "brogameagent/observation.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #endif
 
@@ -56,7 +56,7 @@ public:
     void forward(const Tensor& x, Tensor& y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     void forward(const gpu::GpuTensor& x, gpu::GpuTensor& y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
 #endif
@@ -99,7 +99,7 @@ private:
     Tensor slot_grad_in_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // ── GPU mirrors ────────────────────────────────────────────────────────
     // Per-Linear weights/grads/velocities.
     gpu::GpuTensor self_W1_g_, self_b1_g_, self_W2_g_, self_b2_g_;

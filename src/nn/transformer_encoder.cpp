@@ -1,6 +1,6 @@
 #include "brogameagent/nn/transformer_encoder.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -83,7 +83,7 @@ void TransformerEncoder::backward(const Tensor& dY, Tensor& dX) {
     std::memcpy(dX.ptr(), d_cur.ptr(), sizeof(float) * K * D);
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void TransformerEncoder::forward(const gpu::GpuTensor& X, const float* mask_dev,
                                  gpu::GpuTensor& Y) {
     assert(device_ == Device::GPU);

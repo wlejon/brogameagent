@@ -1,6 +1,6 @@
 #include "brogameagent/nn/encoder.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -43,7 +43,7 @@ int DeepSetsEncoder::num_params() const {
 }
 
 void DeepSetsEncoder::zero_grad() {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         self_dW1_g_.zero(); self_db1_g_.zero();
         self_dW2_g_.zero(); self_db2_g_.zero();
@@ -60,7 +60,7 @@ void DeepSetsEncoder::zero_grad() {
 }
 
 void DeepSetsEncoder::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::sgd_step_gpu(self_W1_g_, self_dW1_g_, self_vW1_g_, lr, momentum);
         gpu::sgd_step_gpu(self_b1_g_, self_db1_g_, self_vb1_g_, lr, momentum);
@@ -92,7 +92,7 @@ void DeepSetsEncoder::adam_step(float lr, float b1, float b2, float eps, int ste
     ally_fc1_.adam_step(lr, b1, b2, eps, step);  ally_fc2_.adam_step(lr, b1, b2, eps, step);
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 // Helper: sync a Linear's W/b from GPU mirror back into the host Linear so
 // save_to / Linear::W() observers see fresh values.
 static void sync_linear_to_host(Linear& L,
@@ -104,7 +104,7 @@ static void sync_linear_to_host(Linear& L,
 #endif
 
 void DeepSetsEncoder::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         auto* self = const_cast<DeepSetsEncoder*>(this);
         sync_linear_to_host(self->self_fc1_, self_W1_g_, self_b1_g_);
@@ -125,7 +125,7 @@ void DeepSetsEncoder::load_from(const uint8_t* data, size_t& offset, size_t size
     self_fc1_.load_from(data, offset, size);  self_fc2_.load_from(data, offset, size);
     enemy_fc1_.load_from(data, offset, size); enemy_fc2_.load_from(data, offset, size);
     ally_fc1_.load_from(data, offset, size);  ally_fc2_.load_from(data, offset, size);
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         // Re-upload weights so GPU mirror matches loaded host values.
         gpu::upload(self_fc1_.W(), self_W1_g_);
@@ -144,7 +144,7 @@ void DeepSetsEncoder::load_from(const uint8_t* data, size_t& offset, size_t size
 #endif
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void DeepSetsEncoder::to(Device d) {
     if (d == device_) return;
     device_require_cuda("DeepSetsEncoder");
@@ -360,7 +360,7 @@ void DeepSetsEncoder::backward(const Tensor& dY, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 
 // GPU forward: per-slot Linear (linear_*_gpu), masked mean-pool over slots,
 // concat[self_z | pooled_e | pooled_a] via concat_rows_gpu.

@@ -10,7 +10,6 @@
 #include <brogameagent/nn/net_tx.h>
 #include <brogameagent/observation.h>
 
-#include <cuda_runtime.h>
 
 using namespace bga_parity;
 using brogameagent::nn::Device;

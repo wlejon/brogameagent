@@ -1,4 +1,4 @@
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 
 #include "brogameagent/learn/inference_server.h"
 
@@ -189,4 +189,4 @@ void BatchedInferenceServer::run_batch_(
 
 } // namespace brogameagent::learn
 
-#endif // BGA_HAS_CUDA
+#endif // BGA_HAS_GPU

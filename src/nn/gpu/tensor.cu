@@ -1,5 +1,6 @@
 #include <brogameagent/nn/gpu/tensor.h>
 #include <brogameagent/nn/gpu/runtime.h>
+#include <brogameagent/nn/gpu/device_buffer.h>
 
 #include <cuda_runtime.h>
 
@@ -116,6 +117,26 @@ void download(const GpuTensor& src, Tensor& dst) {
     BGA_CUDA_CHECK(cudaMemcpy(dst.data.data(), src.data,
                               static_cast<size_t>(src.size()) * sizeof(float),
                               cudaMemcpyDeviceToHost));
+}
+
+// ─── DeviceBuffer<T> backend hooks (CUDA) ──────────────────────────────────
+
+void* device_alloc_bytes(std::size_t bytes, void** native_out) {
+    if (native_out) *native_out = nullptr; // unused on CUDA
+    if (bytes == 0) return nullptr;
+    cuda_init();
+    void* p = nullptr;
+    BGA_CUDA_CHECK(cudaMalloc(&p, bytes));
+    return p;
+}
+
+void device_free_bytes(void* device_ptr, void* /*native*/) {
+    if (device_ptr) cudaFree(device_ptr);
+}
+
+void device_upload_bytes(void* device_ptr, const void* host, std::size_t bytes) {
+    if (bytes == 0) return;
+    BGA_CUDA_CHECK(cudaMemcpy(device_ptr, host, bytes, cudaMemcpyHostToDevice));
 }
 
 } // namespace brogameagent::nn::gpu

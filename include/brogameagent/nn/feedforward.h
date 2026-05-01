@@ -4,7 +4,7 @@
 #include "device.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #endif
 
@@ -50,7 +50,7 @@ public:
     void forward(const Tensor& X, Tensor& Y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     void forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
 
@@ -108,7 +108,7 @@ private:
     Tensor H_post_;    // (K, d_ff) post-ReLU
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     gpu::GpuTensor W1_g_, b1_g_, W2_g_, b2_g_;
     gpu::GpuTensor dW1_g_, dB1_g_, dW2_g_, dB2_g_;
     gpu::GpuTensor vW1_g_, vB1_g_, vW2_g_, vB2_g_;

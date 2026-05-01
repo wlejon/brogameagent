@@ -1,7 +1,7 @@
 #include "brogameagent/nn/attention.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -203,7 +203,7 @@ void ScaledDotProductAttention::backward(const Tensor& dO, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void ScaledDotProductAttention::forward(const gpu::GpuTensor& X,
                                         const float* mask_dev,
                                         gpu::GpuTensor& O) {
@@ -241,7 +241,7 @@ void ScaledDotProductAttention::backward(const gpu::GpuTensor& dO,
 void ScaledDotProductAttention::to(Device d) {
     if (d == device_) return;
     device_require_cuda("ScaledDotProductAttention");
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (d == Device::GPU) {
         gpu::upload(Wq_, Wq_g_); gpu::upload(Wk_, Wk_g_);
         gpu::upload(Wv_, Wv_g_); gpu::upload(Wo_, Wo_g_);
@@ -272,7 +272,7 @@ void ScaledDotProductAttention::to(Device d) {
 }
 
 void ScaledDotProductAttention::zero_grad() {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         dWq_g_.zero(); dWk_g_.zero(); dWv_g_.zero(); dWo_g_.zero();
         return;
@@ -291,7 +291,7 @@ static void sgd_mat(Tensor& W, Tensor& vW, const Tensor& dW, float lr, float mom
 }
 
 void ScaledDotProductAttention::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::sgd_step_gpu(Wq_g_, dWq_g_, vWq_g_, lr, momentum);
         gpu::sgd_step_gpu(Wk_g_, dWk_g_, vWk_g_, lr, momentum);
@@ -308,7 +308,7 @@ void ScaledDotProductAttention::sgd_step(float lr, float momentum) {
 
 void ScaledDotProductAttention::adam_step(float lr, float beta1, float beta2,
                                           float eps, int step) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::adam_step_gpu(Wq_g_, dWq_g_, mWq_g_, vAWq_g_, lr, beta1, beta2, eps, step);
         gpu::adam_step_gpu(Wk_g_, dWk_g_, mWk_g_, vAWk_g_, lr, beta1, beta2, eps, step);
@@ -324,7 +324,7 @@ void ScaledDotProductAttention::adam_step(float lr, float beta1, float beta2,
 }
 
 void ScaledDotProductAttention::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         auto* self = const_cast<ScaledDotProductAttention*>(this);
         gpu::download(Wq_g_, self->Wq_); gpu::download(Wk_g_, self->Wk_);
@@ -350,7 +350,7 @@ void ScaledDotProductAttention::load_from(const uint8_t* data, size_t& offset, s
     vAWq_.resize(d_, d_); vAWk_.resize(d_, d_); vAWv_.resize(d_, d_); vAWo_.resize(d_, d_);
     mWq_.zero(); mWk_.zero(); mWv_.zero(); mWo_.zero();
     vAWq_.zero(); vAWk_.zero(); vAWv_.zero(); vAWo_.zero();
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::upload(Wq_, Wq_g_); gpu::upload(Wk_, Wk_g_);
         gpu::upload(Wv_, Wv_g_); gpu::upload(Wo_, Wo_g_);

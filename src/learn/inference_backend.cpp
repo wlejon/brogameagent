@@ -3,7 +3,7 @@
 #include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/tensor.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/learn/batched_net.h"
 #include "brogameagent/learn/inference_server.h"
 #include "brogameagent/nn/gpu/runtime.h"
@@ -36,7 +36,7 @@ EvalResult DirectBackend::evaluate(const std::vector<float>& obs) {
     nn::Tensor logits = nn::Tensor::vec(net_->num_actions());
     float v = 0.0f;
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (net_->device() == nn::Device::GPU) {
         // Use the batched-1 GPU forward to avoid the single-sample overhead
         // path's caches. Stage as a (1, in_dim) host buffer.
@@ -64,7 +64,7 @@ EvalResult DirectBackend::evaluate(const std::vector<float>& obs) {
     return r;
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 // ─── DirectBatchedNetBackend ──────────────────────────────────────────────
 
 DirectBatchedNetBackend::DirectBatchedNetBackend(BatchedNet* net) : net_(net) {

@@ -1,7 +1,7 @@
 #include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -142,7 +142,7 @@ void PolicyValueNet::backward(float dValue, const Tensor& dLogits) {
     }
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void PolicyValueNet::forward(const gpu::GpuTensor& x, gpu::GpuTensor& logits) {
     assert(device_ == Device::GPU);
 
@@ -302,7 +302,7 @@ void PolicyValueNet::backward(const gpu::GpuTensor& dLogits) {
 void PolicyValueNet::to(Device d) {
     if (d == device_) return;
     device_require_cuda("PolicyValueNet");
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (d == Device::GPU) {
         for (auto& l : trunk_) l.to(Device::GPU);
         v_fc1_.to(Device::GPU);

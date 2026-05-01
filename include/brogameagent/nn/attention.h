@@ -4,7 +4,7 @@
 #include "device.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #endif
 
@@ -49,7 +49,7 @@ public:
     void forward(const Tensor& X, const float* mask, Tensor& O);
     void backward(const Tensor& dO, Tensor& dX);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU code path. mask_dev (length n_) is an optional device pointer.
     void forward(const gpu::GpuTensor& X, const float* mask_dev,
                  gpu::GpuTensor& O);
@@ -109,7 +109,7 @@ private:
     std::vector<uint8_t> mask_cache_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     gpu::GpuTensor Wq_g_, Wk_g_, Wv_g_, Wo_g_;
     gpu::GpuTensor dWq_g_, dWk_g_, dWv_g_, dWo_g_;
     gpu::GpuTensor vWq_g_, vWk_g_, vWv_g_, vWo_g_;

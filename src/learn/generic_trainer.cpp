@@ -1,10 +1,10 @@
 #include "brogameagent/learn/generic_trainer.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
-#include <cuda_runtime.h>
+#include "brogameagent/nn/gpu/device_buffer.h"
 #endif
 
 #include <cassert>
@@ -30,7 +30,7 @@ public:
     std::vector<uint8_t> save() const override { return n_->save(); }
     void forward(const nn::Tensor& x, float& v, nn::Tensor& l) override { n_->forward(x, v, l); }
     void backward(float dV, const nn::Tensor& dL) override { n_->backward(dV, dL); }
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     void forward_batched_train(const nn::gpu::GpuTensor& X, nn::gpu::GpuTensor& L,
                                nn::gpu::GpuTensor& V) override {
         n_->forward_batched_train(X, L, V);
@@ -56,7 +56,7 @@ public:
     std::vector<uint8_t> save() const override { return n_->save(); }
     void forward(const nn::Tensor& x, float& v, nn::Tensor& l) override { n_->forward(x, v, l); }
     void backward(float dV, const nn::Tensor& dL) override { n_->backward(dV, dL); }
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     void forward_batched_train(const nn::gpu::GpuTensor& X, nn::gpu::GpuTensor& L,
                                nn::gpu::GpuTensor& V) override {
         n_->forward_batched_train(X, L, V);
@@ -84,18 +84,10 @@ void GenericExItTrainer::set_net(nn::SingleHeroNetTX* net) {
     net_ = net_owned_.get();
 }
 
-#ifdef BGA_HAS_CUDA
-GenericExItTrainer::~GenericExItTrainer() {
-    if (head_offsets_dev_) {
-        cudaFree(head_offsets_dev_);
-        head_offsets_dev_ = nullptr;
-    }
-}
-#endif
 
 GenericTrainStep GenericExItTrainer::step() {
     if (!net_ || !buf_ || buf_->size() == 0) return {};
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (cfg_.device == nn::Device::GPU) {
         return step_gpu_();
     }
@@ -203,7 +195,7 @@ void GenericExItTrainer::maybe_publish() {
     ++publishes_;
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void GenericExItTrainer::ensure_gpu_staging_() {
     if (gpu_ready_) return;
     const int B      = cfg_.batch;
@@ -222,20 +214,10 @@ void GenericExItTrainer::ensure_gpu_staging_() {
     lv_per_sample_g_.resize(B, 1);
 
     // Upload head_offsets into a small device int buffer (owned by the
-    // trainer; freed in the destructor).
+    // trainer; backend-neutral via DeviceBuffer<int>).
     const auto& offsets = net_->head_offsets();
-    const int n = static_cast<int>(offsets.size());
-    if (head_offsets_dev_ && head_offsets_dev_n_ != n) {
-        cudaFree(head_offsets_dev_);
-        head_offsets_dev_   = nullptr;
-        head_offsets_dev_n_ = 0;
-    }
-    if (!head_offsets_dev_) {
-        BGA_CUDA_CHECK(cudaMalloc(&head_offsets_dev_, sizeof(int) * n));
-        head_offsets_dev_n_ = n;
-    }
-    BGA_CUDA_CHECK(cudaMemcpy(head_offsets_dev_, offsets.data(),
-                              sizeof(int) * n, cudaMemcpyHostToDevice));
+    const std::size_t n = offsets.size();
+    head_offsets_dev_.upload(offsets.data(), n);
 
     gpu_ready_ = true;
 }
@@ -308,7 +290,7 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
     // lp_per_sample = sum-over-heads of head xent.
     nn::gpu::softmax_xent_fused_batched_gpu(
         logits_BL_g_, T_BL_g_, mask_dev,
-        head_offsets_dev_, n_heads,
+        head_offsets_dev_.device_ptr(), n_heads,
         probs_BL_g_, dLog_BL_g_, lp_per_sample_g_);
 
     // Scale gradients on device. Match CPU exactly:

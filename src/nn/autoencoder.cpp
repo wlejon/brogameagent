@@ -1,6 +1,6 @@
 #include "brogameagent/nn/autoencoder.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
 
@@ -37,7 +37,7 @@ void DeepSetsAutoencoder::backward(const Tensor& dX_hat) {
     // dX_obs discarded — no upstream consumer for the raw observation grad.
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void DeepSetsAutoencoder::forward(const gpu::GpuTensor& x, gpu::GpuTensor& x_hat) {
     assert(device_ == Device::GPU);
     if (embed_g_.rows != enc_.out_dim() || embed_g_.cols != 1)
@@ -63,7 +63,7 @@ void DeepSetsAutoencoder::to(Device d) {
     device_require_cuda("DeepSetsAutoencoder");
     enc_.to(d);
     dec_.to(d);
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (d == Device::GPU) {
         embed_g_.resize(enc_.out_dim(), 1);
         dEmbed_g_.resize(enc_.out_dim(), 1);

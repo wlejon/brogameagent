@@ -21,7 +21,7 @@ namespace brogameagent::nn { class PolicyValueNet; }
 
 namespace brogameagent::learn {
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 class BatchedInferenceServer;
 class BatchedNet;
 #endif
@@ -56,7 +56,7 @@ private:
     brogameagent::nn::PolicyValueNet* net_;
 };
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 // Synchronous direct call into any GPU-resident BatchedNet. Uses the
 // forward_batched path with B = 1. Useful when the net implementing
 // BatchedNet isn't a PolicyValueNet (e.g. SingleHeroNetTX).
@@ -72,7 +72,7 @@ private:
 };
 #endif
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 // Submits requests to a BatchedInferenceServer. The caller owns the server.
 //
 // The server is net-agnostic — it talks to any BatchedNet under the hood —

@@ -5,8 +5,6 @@
 #include <brogameagent/nn/gpu/ops.h>
 #include <brogameagent/nn/ops.h>
 
-#include <cuda_runtime.h>
-
 using namespace bga_parity;
 using brogameagent::nn::Tensor;
 using brogameagent::nn::gpu::GpuTensor;
@@ -31,16 +29,12 @@ void run_softmax(int n, uint64_t seed, const std::vector<float>* mask) {
     gprobs.resize(n, 1);
     gdLogits.resize(n, 1);
 
-    float* d_mask = nullptr;
-    if (mask) {
-        cudaMalloc(&d_mask, sizeof(float) * n);
-        cudaMemcpy(d_mask, mask->data(), sizeof(float) * n, cudaMemcpyHostToDevice);
-    }
+    auto d_mask_buf = upload_mask(mask);
+    float* d_mask = d_mask_buf.device_ptr();
     brogameagent::nn::gpu::softmax_forward_gpu(glogits, gprobs, d_mask);
     Tensor probs_gpu = download_to_host(gprobs);
     brogameagent::nn::gpu::softmax_backward_gpu(gprobs, gdProbs, gdLogits);
     Tensor dLogits_gpu = download_to_host(gdLogits);
-    if (d_mask) cudaFree(d_mask);
 
     compare_tensors(probs_cpu, probs_gpu, "softmax_forward");
     compare_tensors(dLogits_cpu, dLogits_gpu, "softmax_backward");

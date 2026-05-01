@@ -6,7 +6,7 @@
 #include "multi_head_attention.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #endif
 
@@ -63,7 +63,7 @@ public:
     void forward(const Tensor& X, const float* mask, Tensor& Y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     void forward(const gpu::GpuTensor& X, const float* mask_dev,
                  gpu::GpuTensor& Y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
@@ -118,7 +118,7 @@ public:
         float eps = 1e-5f;
 
         Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
         gpu::GpuTensor gamma_g, beta_g;
         gpu::GpuTensor dGamma_g, dBeta_g;
         gpu::GpuTensor vGamma_g, vBeta_g;
@@ -135,7 +135,7 @@ public:
         // X, Y both (K, D).
         void forward(const Tensor& X, Tensor& Y);
         void backward(const Tensor& dY, Tensor& dX);
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
         void forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y);
         void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
 
@@ -169,7 +169,7 @@ private:
     bool has_mask_ = false;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU-side scratch tensors mirroring the host caches above. Only the
     // ones actually consulted by backward are kept around.
     gpu::GpuTensor LN1_out_g_, MHA_out_g_, A_cache_g_, LN2_out_g_, FF_out_g_;

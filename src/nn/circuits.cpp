@@ -1,6 +1,6 @@
 #include "brogameagent/nn/circuits.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -101,7 +101,7 @@ void Linear::backward(const Tensor& dY, Tensor& dX) {
     linear_backward(W_, x_cache_, dY, dX, dW_, dB_);
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void Linear::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
     assert(device_ == Device::GPU);
     // Cache a non-owning view of x so backward can read the same input. The
@@ -134,7 +134,7 @@ void Linear::backward_batched(const gpu::GpuTensor& dY_BD,
 void Linear::to(Device d) {
     if (d == device_) return;
     device_require_cuda("Linear");
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (d == Device::GPU) {
         gpu::upload(W_, W_g_);
         gpu::upload(b_, b_g_);
@@ -165,7 +165,7 @@ void Linear::to(Device d) {
 }
 
 void Linear::zero_grad() {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         dW_g_.zero();
         dB_g_.zero();
@@ -177,7 +177,7 @@ void Linear::zero_grad() {
 }
 
 void Linear::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::sgd_step_gpu(W_g_, dW_g_, vW_g_, lr, momentum);
         gpu::sgd_step_gpu(b_g_, dB_g_, vB_g_, lr, momentum);
@@ -199,7 +199,7 @@ void Linear::sgd_step(float lr, float momentum) {
 }
 
 void Linear::adam_step(float lr, float beta1, float beta2, float eps, int step) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::adam_step_gpu(W_g_, dW_g_, mW_g_, vAW_g_, lr, beta1, beta2, eps, step);
         gpu::adam_step_gpu(b_g_, dB_g_, mB_g_, vAB_g_, lr, beta1, beta2, eps, step);
@@ -211,7 +211,7 @@ void Linear::adam_step(float lr, float beta1, float beta2, float eps, int step) 
 }
 
 void Linear::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         // Sync host shadow before serializing.
         auto* self = const_cast<Linear*>(this);
@@ -238,7 +238,7 @@ void Linear::load_from(const uint8_t* data, size_t& offset, size_t size) {
     vAB_.resize(b_.size(), 1);
     mW_.zero(); mB_.zero(); vAW_.zero(); vAB_.zero();
     x_cache_.resize(W_.cols, 1);
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::upload(W_, W_g_);
         gpu::upload(b_, b_g_);

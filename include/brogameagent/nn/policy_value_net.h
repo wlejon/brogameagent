@@ -4,7 +4,7 @@
 #include "device.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #include "brogameagent/learn/batched_net.h"
 #endif
@@ -43,7 +43,7 @@ namespace brogameagent::nn {
 // Wire format: distinct magic from SingleHeroNet so we can't mix them up.
 
 class PolicyValueNet
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     : public brogameagent::learn::BatchedNet
 #endif
 {
@@ -74,7 +74,7 @@ public:
     void forward(const Tensor& x, float& value, Tensor& logits);
     void backward(float dValue, const Tensor& dLogits);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU code path. Parameters must already be on Device::GPU (call to()).
     //   x:      (in_dim, 1)
     //   logits: (num_actions, 1)
@@ -183,7 +183,7 @@ private:
     std::vector<int> head_offsets_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU forward caches (layer-owned; sized at to(GPU) and reused).
     std::vector<gpu::GpuTensor> trunk_raw_g_;
     std::vector<gpu::GpuTensor> trunk_act_g_;

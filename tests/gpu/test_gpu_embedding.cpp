@@ -5,8 +5,6 @@
 #include <brogameagent/nn/gpu/ops.h>
 #include <brogameagent/nn/tensor.h>
 
-#include <cuda_runtime.h>
-
 #include <cstdint>
 #include <vector>
 
@@ -15,14 +13,6 @@ using brogameagent::nn::Tensor;
 using brogameagent::nn::gpu::GpuTensor;
 
 namespace {
-
-#define LOCAL_CUDA_OK(expr) do {                                              \
-    cudaError_t _e = (expr);                                                  \
-    if (_e != cudaSuccess) {                                                  \
-        std::printf("cuda err: %s\n", cudaGetErrorString(_e));                \
-        throw 0;                                                              \
-    }                                                                         \
-} while (0)
 
 void run_embedding(int V, int D, const std::vector<int32_t>& idx,
                    uint64_t seed) {
@@ -54,17 +44,14 @@ void run_embedding(int V, int D, const std::vector<int32_t>& idx,
     upload(dOut, gdOut);
     upload(dTable_init, gdTable);
 
-    int32_t* d_idx = nullptr;
-    LOCAL_CUDA_OK(cudaMalloc(&d_idx, sizeof(int32_t) * B));
-    LOCAL_CUDA_OK(cudaMemcpy(d_idx, idx.data(), sizeof(int32_t) * B,
-                             cudaMemcpyHostToDevice));
+    auto d_idx_buf = upload_indices(idx);
+    int32_t* d_idx = d_idx_buf.device_ptr();
 
     brogameagent::nn::gpu::embedding_lookup_forward_gpu(gtable, d_idx, B, gout);
     brogameagent::nn::gpu::embedding_lookup_backward_gpu(gdOut, d_idx, B, gdTable);
 
     Tensor out_gpu = download_to_host(gout);
     Tensor dTable_gpu = download_to_host(gdTable);
-    cudaFree(d_idx);
 
     compare_tensors(out_cpu, out_gpu, "emb.out");
     compare_tensors(dTable_cpu, dTable_gpu, "emb.dTable");

@@ -5,7 +5,7 @@
 #include "tensor.h"
 #include "transformer_block.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #endif
 
@@ -53,7 +53,7 @@ public:
     void forward(const Tensor& X, const float* mask, Tensor& Y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     void forward(const gpu::GpuTensor& X, const float* mask_dev,
                  gpu::GpuTensor& Y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
@@ -95,7 +95,7 @@ private:
     Tensor pre_final_ln_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // Inter-block activations on device.
     std::vector<gpu::GpuTensor> activations_g_;
     gpu::GpuTensor pre_final_ln_g_;

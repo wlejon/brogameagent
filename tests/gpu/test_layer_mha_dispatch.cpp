@@ -4,7 +4,6 @@
 
 #include <brogameagent/nn/multi_head_attention.h>
 
-#include <cuda_runtime.h>
 
 using namespace bga_parity;
 using brogameagent::nn::Device;

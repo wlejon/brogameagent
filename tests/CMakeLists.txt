@@ -49,7 +49,7 @@ endif()
 add_test(NAME brogameagent_single_hero_net_tx_test
          COMMAND brogameagent_single_hero_net_tx_test)
 
-if(BROGAMEAGENT_WITH_CUDA)
+if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
     add_executable(brogameagent_gpu_tensor_test
         gpu/test_gpu_tensor.cpp
     )
@@ -82,7 +82,9 @@ if(BROGAMEAGENT_WITH_CUDA)
         set(_target brogameagent_gpu_${_name}_parity_test)
         add_executable(${_target} gpu/test_gpu_${_name}.cpp)
         target_link_libraries(${_target} PRIVATE brogameagent)
-        target_include_directories(${_target} PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+        if(BROGAMEAGENT_WITH_CUDA)
+            target_include_directories(${_target} PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+        endif()
         if(MSVC)
             target_compile_options(${_target} PRIVATE /W4)
         else()
@@ -107,7 +109,9 @@ if(BROGAMEAGENT_WITH_CUDA)
         set(_target brogameagent_gpu_${_name}_dispatch_test)
         add_executable(${_target} gpu/test_${_name}_dispatch.cpp)
         target_link_libraries(${_target} PRIVATE brogameagent)
-        target_include_directories(${_target} PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+        if(BROGAMEAGENT_WITH_CUDA)
+            target_include_directories(${_target} PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+        endif()
         if(MSVC)
             target_compile_options(${_target} PRIVATE /W4)
         else()
@@ -122,8 +126,10 @@ if(BROGAMEAGENT_WITH_CUDA)
     )
     target_link_libraries(brogameagent_gpu_generic_trainer_batched_parity_test
         PRIVATE brogameagent)
-    target_include_directories(brogameagent_gpu_generic_trainer_batched_parity_test
-        PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    if(BROGAMEAGENT_WITH_CUDA)
+        target_include_directories(brogameagent_gpu_generic_trainer_batched_parity_test
+            PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_generic_trainer_batched_parity_test
             PRIVATE /W4)
@@ -139,8 +145,10 @@ if(BROGAMEAGENT_WITH_CUDA)
         gpu/test_exit_trainer_gpu.cpp
     )
     target_link_libraries(brogameagent_gpu_exit_trainer_test PRIVATE brogameagent)
-    target_include_directories(brogameagent_gpu_exit_trainer_test PRIVATE
+    if(BROGAMEAGENT_WITH_CUDA)
+        target_include_directories(brogameagent_gpu_exit_trainer_test PRIVATE
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_exit_trainer_test PRIVATE /W4)
     else()
@@ -154,8 +162,10 @@ if(BROGAMEAGENT_WITH_CUDA)
         gpu/test_policy_value_net_batched.cpp
     )
     target_link_libraries(brogameagent_gpu_pvn_batched_test PRIVATE brogameagent)
-    target_include_directories(brogameagent_gpu_pvn_batched_test PRIVATE
+    if(BROGAMEAGENT_WITH_CUDA)
+        target_include_directories(brogameagent_gpu_pvn_batched_test PRIVATE
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_pvn_batched_test PRIVATE /W4)
     else()
@@ -169,8 +179,10 @@ if(BROGAMEAGENT_WITH_CUDA)
         gpu/test_inference_server.cpp
     )
     target_link_libraries(brogameagent_gpu_inference_server_test PRIVATE brogameagent)
-    target_include_directories(brogameagent_gpu_inference_server_test PRIVATE
+    if(BROGAMEAGENT_WITH_CUDA)
+        target_include_directories(brogameagent_gpu_inference_server_test PRIVATE
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_inference_server_test PRIVATE /W4)
     else()
@@ -184,8 +196,10 @@ if(BROGAMEAGENT_WITH_CUDA)
         gpu/test_mcts_server.cpp
     )
     target_link_libraries(brogameagent_gpu_mcts_server_test PRIVATE brogameagent)
-    target_include_directories(brogameagent_gpu_mcts_server_test PRIVATE
+    if(BROGAMEAGENT_WITH_CUDA)
+        target_include_directories(brogameagent_gpu_mcts_server_test PRIVATE
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_mcts_server_test PRIVATE /W4)
     else()
@@ -199,8 +213,10 @@ if(BROGAMEAGENT_WITH_CUDA)
         gpu/test_single_hero_net_tx_batched.cpp
     )
     target_link_libraries(brogameagent_gpu_tx_batched_test PRIVATE brogameagent)
-    target_include_directories(brogameagent_gpu_tx_batched_test PRIVATE
+    if(BROGAMEAGENT_WITH_CUDA)
+        target_include_directories(brogameagent_gpu_tx_batched_test PRIVATE
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_tx_batched_test PRIVATE /W4)
     else()
@@ -214,8 +230,10 @@ if(BROGAMEAGENT_WITH_CUDA)
         gpu/test_mcts_server_tx.cpp
     )
     target_link_libraries(brogameagent_gpu_mcts_server_tx_test PRIVATE brogameagent)
-    target_include_directories(brogameagent_gpu_mcts_server_tx_test PRIVATE
+    if(BROGAMEAGENT_WITH_CUDA)
+        target_include_directories(brogameagent_gpu_mcts_server_tx_test PRIVATE
         ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_mcts_server_tx_test PRIVATE /W4)
     else()

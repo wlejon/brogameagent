@@ -1,7 +1,7 @@
 #include "brogameagent/nn/transformer_block.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -28,7 +28,7 @@ void TransformerBlock::RowLN::init(int D, float e) {
 }
 
 void TransformerBlock::RowLN::zero_grad() {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         dGamma_g.zero(); dBeta_g.zero();
         return;
@@ -38,7 +38,7 @@ void TransformerBlock::RowLN::zero_grad() {
 }
 
 void TransformerBlock::RowLN::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::sgd_step_gpu(gamma_g, dGamma_g, vGamma_g, lr, momentum);
         gpu::sgd_step_gpu(beta_g,  dBeta_g,  vBeta_g,  lr, momentum);
@@ -56,7 +56,7 @@ void TransformerBlock::RowLN::sgd_step(float lr, float momentum) {
 
 void TransformerBlock::RowLN::adam_step(float lr, float beta1, float beta2,
                                         float eps_a, int step) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::adam_step_gpu(gamma_g, dGamma_g, mGamma_g, vAGamma_g,
                            lr, beta1, beta2, eps_a, step);
@@ -120,7 +120,7 @@ void TransformerBlock::RowLN::backward(const Tensor& dY, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void TransformerBlock::RowLN::forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y) {
     assert(device_ == Device::GPU);
     const int K = X.rows;
@@ -172,7 +172,7 @@ void TransformerBlock::RowLN::forward_inference_batched(
 void TransformerBlock::RowLN::to(Device d) {
     if (d == device_) return;
     device_require_cuda("TransformerBlock::RowLN");
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (d == Device::GPU) {
         gpu::upload(gamma, gamma_g); gpu::upload(beta, beta_g);
         gpu::upload(dGamma, dGamma_g); gpu::upload(dBeta, dBeta_g);
@@ -193,7 +193,7 @@ void TransformerBlock::RowLN::to(Device d) {
 }
 
 void TransformerBlock::RowLN::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         auto* self = const_cast<RowLN*>(this);
         gpu::download(gamma_g, self->gamma);
@@ -214,7 +214,7 @@ void TransformerBlock::RowLN::load_from(const uint8_t* data, size_t& offset, siz
     mGamma.resize(D, 1); mBeta.resize(D, 1);
     vAGamma.resize(D, 1); vABeta.resize(D, 1);
     mGamma.zero(); mBeta.zero(); vAGamma.zero(); vABeta.zero();
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::upload(gamma, gamma_g); gpu::upload(beta, beta_g);
         gpu::upload(dGamma, dGamma_g); gpu::upload(dBeta, dBeta_g);
@@ -351,7 +351,7 @@ void TransformerBlock::backward(const Tensor& dY, Tensor& dX) {
     (void)mask_ptr;
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 
 namespace {
 // Tiny add kernel (Y[i] += X[i]). Using add_inplace_gpu from ops.

@@ -5,7 +5,7 @@
 #include "tensor.h"
 #include "brogameagent/observation.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "gpu/tensor.h"
 #endif
 
@@ -59,7 +59,7 @@ public:
     void forward(const Tensor& x, Tensor& y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     void forward(const gpu::GpuTensor& x, gpu::GpuTensor& y);
     void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
 #endif
@@ -96,7 +96,7 @@ private:
     Tensor self_in_, pooled_e_, pooled_a_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     gpu::GpuTensor self_W1_g_, self_b1_g_, self_W2_g_, self_b2_g_;
     gpu::GpuTensor self_dW1_g_, self_db1_g_, self_dW2_g_, self_db2_g_;
     gpu::GpuTensor self_vW1_g_, self_vb1_g_, self_vW2_g_, self_vb2_g_;

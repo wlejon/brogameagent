@@ -1,6 +1,6 @@
 #include "brogameagent/nn/decoder.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -42,7 +42,7 @@ int DeepSetsDecoder::num_params() const {
 }
 
 void DeepSetsDecoder::zero_grad() {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         self_dW1_g_.zero(); self_db1_g_.zero();
         self_dW2_g_.zero(); self_db2_g_.zero();
@@ -59,7 +59,7 @@ void DeepSetsDecoder::zero_grad() {
 }
 
 void DeepSetsDecoder::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::sgd_step_gpu(self_W1_g_, self_dW1_g_, self_vW1_g_, lr, momentum);
         gpu::sgd_step_gpu(self_b1_g_, self_db1_g_, self_vb1_g_, lr, momentum);
@@ -89,7 +89,7 @@ void DeepSetsDecoder::adam_step(float lr, float b1, float b2, float eps, int ste
 }
 
 void DeepSetsDecoder::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         auto* self = const_cast<DeepSetsDecoder*>(this);
         gpu::download(self_W1_g_, self->self_fc1_.W()); gpu::download(self_b1_g_, self->self_fc1_.b());
@@ -110,7 +110,7 @@ void DeepSetsDecoder::load_from(const uint8_t* data, size_t& offset, size_t size
     self_fc1_.load_from(data, offset, size);  self_fc2_.load_from(data, offset, size);
     enemy_fc1_.load_from(data, offset, size); enemy_fc2_.load_from(data, offset, size);
     ally_fc1_.load_from(data, offset, size);  ally_fc2_.load_from(data, offset, size);
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         gpu::upload(self_fc1_.W(), self_W1_g_); gpu::upload(self_fc1_.b(), self_b1_g_);
         gpu::upload(self_fc2_.W(), self_W2_g_); gpu::upload(self_fc2_.b(), self_b2_g_);
@@ -122,7 +122,7 @@ void DeepSetsDecoder::load_from(const uint8_t* data, size_t& offset, size_t size
 #endif
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 void DeepSetsDecoder::to(Device d) {
     if (d == device_) return;
     device_require_cuda("DeepSetsDecoder");
@@ -272,7 +272,7 @@ void DeepSetsDecoder::backward(const Tensor& dY, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 
 // GPU forward: split x → 3 embed views, run self/enemy/ally MLPs, write
 // reconstruction directly into row-views of y.

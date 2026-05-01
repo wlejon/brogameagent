@@ -6,8 +6,9 @@
 #include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/net_tx.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/tensor.h"
+#include "brogameagent/nn/gpu/device_buffer.h"
 #endif
 
 #include <cstdint>
@@ -76,7 +77,7 @@ public:
     virtual void forward(const nn::Tensor& x, float& value, nn::Tensor& logits) = 0;
     virtual void backward(float dValue, const nn::Tensor& dLogits) = 0;
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // GPU batched-train forward/backward. PolicyValueNet implements these
     // with true batched kernels; SingleHeroNetTX implements them via
     // per-element loops over the single-sample GPU forward/backward.
@@ -103,8 +104,9 @@ public:
 class GenericExItTrainer {
 public:
     GenericExItTrainer() = default;
-#ifdef BGA_HAS_CUDA
-    ~GenericExItTrainer();
+#ifdef BGA_HAS_GPU
+    // Non-copyable when GPU is enabled: GpuTensor / DeviceBuffer members are
+    // move-only RAII handles. Default destructor is sufficient.
     GenericExItTrainer(const GenericExItTrainer&) = delete;
     GenericExItTrainer& operator=(const GenericExItTrainer&) = delete;
 #endif
@@ -129,7 +131,7 @@ private:
     void maybe_publish();
 
     GenericTrainStep step_cpu_();
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     GenericTrainStep step_gpu_();
     void ensure_gpu_staging_();
 #endif
@@ -144,7 +146,7 @@ private:
     int                         publishes_ = 0;
     int                         adam_step_ = 0;     // unused (SGD), reserved
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     // Reusable batched-step GPU staging buffers, allocated lazily on first
     // GPU step. All shaped (B, *) where B == cfg_.batch — sized once and
     // never re-resized, regardless of how many valid samples land in the
@@ -163,11 +165,9 @@ private:
     bool  has_mask_for_step_ = false;    // re-evaluated per step
     bool  gpu_ready_         = false;
 
-    // Owned device int* for head_offsets (cumulative). Sized at gpu_ready_
-    // time to net->head_offsets().size(); freed in the destructor. Plain
-    // raw pointer so this header doesn't pull in <cuda_runtime.h>.
-    int*  head_offsets_dev_   = nullptr;
-    int   head_offsets_dev_n_ = 0;
+    // Device int buffer for head_offsets (cumulative). Sized at gpu_ready_
+    // time to net->head_offsets().size(). DeviceBuffer is backend-neutral.
+    nn::gpu::DeviceBuffer<int> head_offsets_dev_;
 #endif
 };
 

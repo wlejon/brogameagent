@@ -7,6 +7,7 @@
 
 #include <brogameagent/nn/gpu/runtime.h>
 #include <brogameagent/nn/gpu/tensor.h>
+#include <brogameagent/nn/gpu/device_buffer.h>
 #include <brogameagent/nn/tensor.h>
 
 #include <cmath>
@@ -112,6 +113,34 @@ inline Tensor download_to_host(const GpuTensor& g) {
     download(g, h);
     cuda_sync();
     return h;
+}
+
+// ─── Backend-neutral mask / index buffer helpers ──────────────────────────
+
+using brogameagent::nn::gpu::DeviceBuffer;
+
+// Upload a host float mask vector to a device buffer. If `mask` is null,
+// returns an empty buffer whose device_ptr() is null — matches the "no mask"
+// sentinel used by the GPU op APIs. Replaces the previous pattern of
+// cudaMalloc + cudaMemcpy + cudaFree inlined into every test.
+inline DeviceBuffer<float> upload_mask(const std::vector<float>* mask) {
+    DeviceBuffer<float> b;
+    if (mask) b.upload(mask->data(), mask->size());
+    return b;
+}
+
+// Same for an int32 index vector (embedding lookup tests).
+inline DeviceBuffer<int32_t> upload_indices(const std::vector<int32_t>& idx) {
+    DeviceBuffer<int32_t> b;
+    b.upload(idx.data(), idx.size());
+    return b;
+}
+
+// Same for an int offsets array (head_offsets in batched softmax-xent).
+inline DeviceBuffer<int> upload_offsets(const std::vector<int>& off) {
+    DeviceBuffer<int> b;
+    b.upload(off.data(), off.size());
+    return b;
 }
 
 // ─── Test runner ──────────────────────────────────────────────────────────

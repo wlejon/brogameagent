@@ -5,8 +5,6 @@
 #include <brogameagent/nn/gpu/ops.h>
 #include <brogameagent/nn/attention.h>
 
-#include <cuda_runtime.h>
-
 using namespace bga_parity;
 using brogameagent::nn::ScaledDotProductAttention;
 using brogameagent::nn::Tensor;
@@ -59,11 +57,8 @@ void run_attention(int N, int D, uint64_t seed, const std::vector<float>* mask) 
     gQ.resize(N, D); gK.resize(N, D); gV.resize(N, D);
     gAttn.resize(N, N); gYpre.resize(N, D); gO.resize(N, D);
 
-    float* d_mask = nullptr;
-    if (mask) {
-        cudaMalloc(&d_mask, sizeof(float) * N);
-        cudaMemcpy(d_mask, mask->data(), sizeof(float) * N, cudaMemcpyHostToDevice);
-    }
+    auto d_mask_buf = upload_mask(mask);
+    float* d_mask = d_mask_buf.device_ptr();
     brogameagent::nn::gpu::attention_forward_gpu(
         gX, gWq, gWk, gWv, gWo, d_mask, gQ, gK, gV, gAttn, gYpre, gO);
 
@@ -85,8 +80,6 @@ void run_attention(int N, int D, uint64_t seed, const std::vector<float>* mask) 
     Tensor dWk_gpu = download_to_host(gdWk);
     Tensor dWv_gpu = download_to_host(gdWv);
     Tensor dWo_gpu = download_to_host(gdWo);
-
-    if (d_mask) cudaFree(d_mask);
 
     // Slightly looser tolerance — attention chains many GEMMs and softmaxes.
     const float atol = 5e-5f, rtol = 5e-4f;

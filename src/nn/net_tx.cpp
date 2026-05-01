@@ -1,6 +1,6 @@
 #include "brogameagent/nn/net_tx.h"
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 #include "brogameagent/nn/gpu/ops.h"
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
@@ -129,7 +129,7 @@ void SingleHeroNetTX::adam_step(float lr, float b1, float b2, float eps, int ste
 void SingleHeroNetTX::to(Device d) {
     if (d == device_) return;
     device_require_cuda("SingleHeroNetTX");
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     self_fc1_.to(d);
     self_fc2_.to(d);
     enemy_proj_.to(d);
@@ -230,7 +230,7 @@ void SingleHeroNetTX::forward(const Tensor& x, float& value, Tensor& logits) {
     x_cache_ = x;
     const int D = cfg_.d_model;
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         // Upload x once, route through GPU-native forward, download value+logits.
         gpu::upload(x_cache_, x_g_);
@@ -324,7 +324,7 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
     const int D = cfg_.d_model;
     const int TH = cfg_.trunk_hidden;
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
     if (device_ == Device::GPU) {
         // Upload dLogits, write dValue scalar, run GPU backward.
         gpu::GpuTensor dLogits_g;
@@ -424,7 +424,7 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
     }
 }
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 
 // Helper: build per-slot mask and slot validity vectors from host x_cache_.
 // Returns the count of valid slots; writes mask/valid arrays.
@@ -877,6 +877,6 @@ void SingleHeroNetTX::backward_batched(const gpu::GpuTensor& dLogits_BL,
     }
 }
 
-#endif // BGA_HAS_CUDA
+#endif // BGA_HAS_GPU
 
 } // namespace brogameagent::nn

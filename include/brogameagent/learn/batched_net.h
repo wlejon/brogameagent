@@ -7,11 +7,11 @@
 // only on this interface, so any net that implements it (PolicyValueNet,
 // SingleHeroNetTX, future variants) can be plugged in.
 //
-// GPU-only: the interface is gated behind BGA_HAS_CUDA because GpuTensor is
+// GPU-only: the interface is gated behind BGA_HAS_GPU because GpuTensor is
 // only defined in CUDA builds. Direct CPU dispatch goes through the
 // per-net forward(...) APIs as before.
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 
 #include "brogameagent/nn/gpu/tensor.h"
 
@@ -42,4 +42,4 @@ public:
 
 } // namespace brogameagent::learn
 
-#endif // BGA_HAS_CUDA
+#endif // BGA_HAS_GPU
