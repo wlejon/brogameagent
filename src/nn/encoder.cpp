@@ -5,6 +5,7 @@
 #include "brogameagent/nn/gpu/runtime.h"
 #endif
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 
