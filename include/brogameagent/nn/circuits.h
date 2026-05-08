@@ -51,6 +51,12 @@ public:
 
     void forward(const Tensor& x, Tensor& y);
     void backward(const Tensor& dY, Tensor& dX);
+    // Explicit-input overload: accumulate dW/db using `x_input` instead of the
+    // internal x_cache_ stashed by forward(). Mirrors the GPU API where the
+    // forward input is passed explicitly to backward. Used by callers that
+    // share a single Linear across multiple forward/backward pairs (e.g. the
+    // per-slot streams in DeepSetsEncoder).
+    void backward(const Tensor& x_input, const Tensor& dY, Tensor& dX);
 
 #ifdef BGA_HAS_GPU
     // GPU code path. Parameters must already be on Device::GPU (call to()).

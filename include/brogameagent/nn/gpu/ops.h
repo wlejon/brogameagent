@@ -73,6 +73,13 @@ void add_scalar_inplace_gpu(GpuTensor& y, float s);
 // y[i] *= s for all i.
 void scale_inplace_gpu(GpuTensor& y, float s);
 
+// Build a slot-validity mask on-device. For k in [0, K):
+//   mask[k] = (x[offset + k*stride] > 0.5f) ? 1.0f : 0.0f
+// `mask` is resized to (K, 1). Used by DeepSetsEncoder to avoid a host sync
+// when constructing per-slot validity masks for masked_mean_pool_*.
+void build_slot_mask_gpu(const GpuTensor& x, int offset, int K, int stride,
+                         GpuTensor& mask);
+
 // ─── Subagent 3: reductions, norm, attention, optimiser ────────────────────
 
 // Numerically stable softmax over a flat vector of length N = logits.size().

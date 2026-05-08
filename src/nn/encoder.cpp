@@ -324,21 +324,26 @@ void DeepSetsEncoder::backward(const Tensor& dY, Tensor& dX) {
     self_fc1_.backward(dSelfH, dSelfIn);
     accum_slice(dX, 0, dSelfIn, observation::SELF_FEATURES);
 
-    // Enemy backward.
+    // Enemy backward. Per-slot weight grads are accumulated using each slot's
+    // own cached input (via Linear's explicit-input backward overload), not
+    // the last-forwarded slot's stomped cache — gradients are correct and
+    // CPU↔GPU parity holds.
     const int off_e = observation::SELF_FEATURES;
     if (e_n_valid_ > 0) {
         const float inv = 1.0f / static_cast<float>(e_n_valid_);
         Tensor dZk = Tensor::vec(E);
         Tensor dHk = Tensor::vec(cfg_.hidden);
         Tensor dSlot = Tensor::vec(observation::ENEMY_FEATURES);
+        Tensor slot_in = Tensor::vec(observation::ENEMY_FEATURES);
         for (int k = 0; k < observation::K_ENEMIES; ++k) {
             if (!e_valid_[k]) continue;
+            const int base = off_e + k * observation::ENEMY_FEATURES;
+            copy_slice(x_cache_, base, observation::ENEMY_FEATURES, slot_in);
             for (int j = 0; j < E; ++j) dZk[j] = dY[1*E + j] * inv;
-            enemy_fc2_.backward(dZk, dHk);
+            enemy_fc2_.backward(e_h_[k], dZk, dHk);
             for (int i = 0; i < cfg_.hidden; ++i) if (e_h_[k][i] <= 0.0f) dHk[i] = 0.0f;
-            enemy_fc1_.backward(dHk, dSlot);
-            accum_slice(dX, off_e + k * observation::ENEMY_FEATURES, dSlot,
-                        observation::ENEMY_FEATURES);
+            enemy_fc1_.backward(slot_in, dHk, dSlot);
+            accum_slice(dX, base, dSlot, observation::ENEMY_FEATURES);
         }
     }
 
@@ -349,14 +354,16 @@ void DeepSetsEncoder::backward(const Tensor& dY, Tensor& dX) {
         Tensor dZk = Tensor::vec(E);
         Tensor dHk = Tensor::vec(cfg_.hidden);
         Tensor dSlot = Tensor::vec(observation::ALLY_FEATURES);
+        Tensor slot_in = Tensor::vec(observation::ALLY_FEATURES);
         for (int k = 0; k < observation::K_ALLIES; ++k) {
             if (!a_valid_[k]) continue;
+            const int base = off_a + k * observation::ALLY_FEATURES;
+            copy_slice(x_cache_, base, observation::ALLY_FEATURES, slot_in);
             for (int j = 0; j < E; ++j) dZk[j] = dY[2*E + j] * inv;
-            ally_fc2_.backward(dZk, dHk);
+            ally_fc2_.backward(a_h_[k], dZk, dHk);
             for (int i = 0; i < cfg_.hidden; ++i) if (a_h_[k][i] <= 0.0f) dHk[i] = 0.0f;
-            ally_fc1_.backward(dHk, dSlot);
-            accum_slice(dX, off_a + k * observation::ALLY_FEATURES, dSlot,
-                        observation::ALLY_FEATURES);
+            ally_fc1_.backward(slot_in, dHk, dSlot);
+            accum_slice(dX, base, dSlot, observation::ALLY_FEATURES);
         }
     }
 }
@@ -375,12 +382,6 @@ void DeepSetsEncoder::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
     // Cache x (clone) for backward — we'll view slot rows out of it.
     x_g_cache_ = x.clone();
 
-    // Mirror the input on host to read slot-validity flags. This is a tiny
-    // copy (~64 floats) and lets us avoid an asynchronous device-side mask
-    // construction kernel.
-    gpu::download(x, x_cache_);
-    gpu::cuda_sync();
-
     // ── Self stream ────────────────────────────────────────────────────────
     // Use a non-owning view over the first SELF_FEATURES of the cached x for
     // both forward and backward (linear_backward needs the same buffer).
@@ -391,17 +392,13 @@ void DeepSetsEncoder::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
     gpu::linear_forward_gpu(self_W2_g_, self_b2_g_, self_h_g_, self_z_g_);
 
     // ── Enemy stream ───────────────────────────────────────────────────────
+    // Build the slot-validity mask entirely on-device (no host sync). The
+    // backward path runs all K slots and relies on masked_mean_pool_backward
+    // to zero invalid-slot rows of dE_z, so no host-side validity array is
+    // needed.
     const int off_e = observation::SELF_FEATURES;
-    e_n_valid_ = 0;
-    Tensor e_mask_h(observation::K_ENEMIES, 1);
-    for (int k = 0; k < observation::K_ENEMIES; ++k) {
-        const int base = off_e + k * observation::ENEMY_FEATURES;
-        const bool valid = x_cache_[base] > 0.5f;
-        e_valid_[k] = valid ? 1 : 0;
-        e_mask_h[k] = valid ? 1.0f : 0.0f;
-        if (valid) ++e_n_valid_;
-    }
-    gpu::upload(e_mask_h, e_mask_g_);
+    gpu::build_slot_mask_gpu(x, off_e, observation::K_ENEMIES,
+                             observation::ENEMY_FEATURES, e_mask_g_);
     // Per-slot Linear forward into rows of e_h_raw_g_ / e_h_g_ / e_z_g_.
     // Slot input view points into x_g_cache_ — backward reuses it.
     for (int k = 0; k < observation::K_ENEMIES; ++k) {
@@ -425,16 +422,8 @@ void DeepSetsEncoder::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
 
     // ── Ally stream ────────────────────────────────────────────────────────
     const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
-    a_n_valid_ = 0;
-    Tensor a_mask_h(observation::K_ALLIES, 1);
-    for (int k = 0; k < observation::K_ALLIES; ++k) {
-        const int base = off_a + k * observation::ALLY_FEATURES;
-        const bool valid = x_cache_[base] > 0.5f;
-        a_valid_[k] = valid ? 1 : 0;
-        a_mask_h[k] = valid ? 1.0f : 0.0f;
-        if (valid) ++a_n_valid_;
-    }
-    gpu::upload(a_mask_h, a_mask_g_);
+    gpu::build_slot_mask_gpu(x, off_a, observation::K_ALLIES,
+                             observation::ALLY_FEATURES, a_mask_g_);
     for (int k = 0; k < observation::K_ALLIES; ++k) {
         const int base = off_a + k * observation::ALLY_FEATURES;
         gpu::GpuTensor x_slot_view = gpu::GpuTensor::view(
@@ -489,43 +478,33 @@ void DeepSetsEncoder::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
                              dX_self_view, self_dW1_g_, self_db1_g_);
 
     // ── Enemy backward ─────────────────────────────────────────────────────
-    // dE_z (K, E) from masked_mean_pool_backward — overwritten output (per spec).
+    // Iterate all K slots: invalid slots get zero rows in dE_z (from
+    // masked_mean_pool_backward via e_mask_g_), so their fc1/fc2 contributions
+    // accumulate to zero — no host-side validity check needed. Each slot uses
+    // its own cached inputs (the CPU "last-valid stomp" hack is gone; CPU now
+    // matches via Linear's explicit-input backward overload).
     gpu::GpuTensor dE_z(observation::K_ENEMIES, E);
     gpu::masked_mean_pool_backward_gpu(dPooledE_view, e_mask_g_.data,
                                        observation::K_ENEMIES, dE_z);
     const int off_e = observation::SELF_FEATURES;
-    // Match CPU semantics: CPU's Linear caches only the LAST forwarded input
-    // (x_cache_ is overwritten each iteration). The per-slot fc1/fc2 weight
-    // gradients on CPU therefore accumulate using the LAST valid slot's
-    // cached input across every backward call. We replicate this exactly so
-    // post-sgd parameters match — see the CPU `Linear::forward(x){ x_cache_=x; }`
-    // + per-slot loop in `DeepSetsEncoder::forward`.
-    int last_e_valid = -1;
-    for (int k = 0; k < observation::K_ENEMIES; ++k) if (e_valid_[k]) last_e_valid = k;
     for (int k = 0; k < observation::K_ENEMIES; ++k) {
-        if (!e_valid_[k]) continue;
         gpu::GpuTensor dZk_view = gpu::GpuTensor::view(
             dE_z.data + static_cast<size_t>(k) * E, E, 1);
-        // Per-slot relu mask (post-relu cache) is correct in CPU; use slot k.
         gpu::GpuTensor h_raw_row = gpu::GpuTensor::view(
             e_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
-        // CPU caches LAST valid slot's e_h_ for fc2 backward — match.
-        gpu::GpuTensor h_row_last = gpu::GpuTensor::view(
-            e_h_g_.data + static_cast<size_t>(last_e_valid) * H, H, 1);
+        gpu::GpuTensor h_row = gpu::GpuTensor::view(
+            e_h_g_.data + static_cast<size_t>(k) * H, H, 1);
         gpu::GpuTensor dHk(H, 1);
-        gpu::linear_backward_gpu(enemy_W2_g_, h_row_last, dZk_view,
+        gpu::linear_backward_gpu(enemy_W2_g_, h_row, dZk_view,
                                  dHk, enemy_dW2_g_, enemy_db2_g_);
         gpu::GpuTensor dHk_raw(H, 1);
         gpu::relu_backward_gpu(h_raw_row, dHk, dHk_raw);
-        // CPU caches LAST valid slot's slot_in for fc1 backward — match.
-        const int base_last = off_e + last_e_valid * observation::ENEMY_FEATURES;
-        gpu::GpuTensor x_slot_last_view = gpu::GpuTensor::view(
-            x_g_cache_.data + base_last, observation::ENEMY_FEATURES, 1);
-        // Per-slot dX is correct (computed via W^T @ dHk, no cache dependence).
         const int base = off_e + k * observation::ENEMY_FEATURES;
+        gpu::GpuTensor x_slot_view = gpu::GpuTensor::view(
+            x_g_cache_.data + base, observation::ENEMY_FEATURES, 1);
         gpu::GpuTensor dX_slot_view = gpu::GpuTensor::view(
             dX.data + base, observation::ENEMY_FEATURES, 1);
-        gpu::linear_backward_gpu(enemy_W1_g_, x_slot_last_view, dHk_raw,
+        gpu::linear_backward_gpu(enemy_W1_g_, x_slot_view, dHk_raw,
                                  dX_slot_view, enemy_dW1_g_, enemy_db1_g_);
     }
 
@@ -534,30 +513,24 @@ void DeepSetsEncoder::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
     gpu::masked_mean_pool_backward_gpu(dPooledA_view, a_mask_g_.data,
                                        observation::K_ALLIES, dA_z);
     const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
-    int last_a_valid = -1;
-    for (int k = 0; k < observation::K_ALLIES; ++k) if (a_valid_[k]) last_a_valid = k;
     for (int k = 0; k < observation::K_ALLIES; ++k) {
-        if (!a_valid_[k]) continue;
         gpu::GpuTensor dZk_view = gpu::GpuTensor::view(
             dA_z.data + static_cast<size_t>(k) * E, E, 1);
         gpu::GpuTensor h_raw_row = gpu::GpuTensor::view(
             a_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
-        // Match CPU's "last x_cache" fc2 input.
-        gpu::GpuTensor h_row_last = gpu::GpuTensor::view(
-            a_h_g_.data + static_cast<size_t>(last_a_valid) * H, H, 1);
+        gpu::GpuTensor h_row = gpu::GpuTensor::view(
+            a_h_g_.data + static_cast<size_t>(k) * H, H, 1);
         gpu::GpuTensor dHk(H, 1);
-        gpu::linear_backward_gpu(ally_W2_g_, h_row_last, dZk_view,
+        gpu::linear_backward_gpu(ally_W2_g_, h_row, dZk_view,
                                  dHk, ally_dW2_g_, ally_db2_g_);
         gpu::GpuTensor dHk_raw(H, 1);
         gpu::relu_backward_gpu(h_raw_row, dHk, dHk_raw);
-        // Match CPU's "last x_cache" fc1 input.
-        const int base_last = off_a + last_a_valid * observation::ALLY_FEATURES;
-        gpu::GpuTensor x_slot_last_view = gpu::GpuTensor::view(
-            x_g_cache_.data + base_last, observation::ALLY_FEATURES, 1);
         const int base = off_a + k * observation::ALLY_FEATURES;
+        gpu::GpuTensor x_slot_view = gpu::GpuTensor::view(
+            x_g_cache_.data + base, observation::ALLY_FEATURES, 1);
         gpu::GpuTensor dX_slot_view = gpu::GpuTensor::view(
             dX.data + base, observation::ALLY_FEATURES, 1);
-        gpu::linear_backward_gpu(ally_W1_g_, x_slot_last_view, dHk_raw,
+        gpu::linear_backward_gpu(ally_W1_g_, x_slot_view, dHk_raw,
                                  dX_slot_view, ally_dW1_g_, ally_db1_g_);
     }
 }

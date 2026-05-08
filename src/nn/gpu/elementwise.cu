@@ -85,6 +85,15 @@ __global__ void scale_inplace_kernel(float* __restrict__ y, float s, int n) {
     }
 }
 
+__global__ void build_slot_mask_kernel(const float* __restrict__ x,
+                                       float* __restrict__ mask,
+                                       int offset, int K, int stride) {
+    const int k = blockIdx.x * blockDim.x + threadIdx.x;
+    if (k >= K) return;
+    const float v = x[offset + k * stride];
+    mask[k] = v > 0.5f ? 1.0f : 0.0f;
+}
+
 inline int grid_for(int n) {
     int blocks = (n + EW_BLOCK - 1) / EW_BLOCK;
     if (blocks < 1) blocks = 1;
@@ -160,6 +169,16 @@ void scale_inplace_gpu(GpuTensor& y, float s) {
     const int n = y.size();
     if (n == 0) return;
     scale_inplace_kernel<<<grid_for(n), EW_BLOCK>>>(y.data, s, n);
+    BGA_CUDA_CHECK(cudaGetLastError());
+}
+
+void build_slot_mask_gpu(const GpuTensor& x, int offset, int K, int stride,
+                         GpuTensor& mask) {
+    if (mask.rows != K || mask.cols != 1) mask.resize(K, 1);
+    if (K <= 0) return;
+    const int blocks = (K + EW_BLOCK - 1) / EW_BLOCK;
+    build_slot_mask_kernel<<<blocks, EW_BLOCK>>>(x.data, mask.data,
+                                                 offset, K, stride);
     BGA_CUDA_CHECK(cudaGetLastError());
 }
 

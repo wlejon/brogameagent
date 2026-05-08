@@ -101,6 +101,10 @@ void Linear::backward(const Tensor& dY, Tensor& dX) {
     linear_backward(W_, x_cache_, dY, dX, dW_, dB_);
 }
 
+void Linear::backward(const Tensor& x_input, const Tensor& dY, Tensor& dX) {
+    linear_backward(W_, x_input, dY, dX, dW_, dB_);
+}
+
 #ifdef BGA_HAS_GPU
 void Linear::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
     assert(device_ == Device::GPU);

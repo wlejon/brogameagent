@@ -106,4 +106,24 @@ void scale_inplace_gpu(GpuTensor& y, float s) {
     });
 }
 
+void build_slot_mask_gpu(const GpuTensor& x, int offset, int K, int stride,
+                         GpuTensor& mask) {
+    if (mask.rows != K || mask.cols != 1) mask.resize(K, 1);
+    if (K <= 0) return;
+    id<MTLBuffer> bx = buffer_for(x);
+    id<MTLBuffer> bm = buffer_for(mask);
+    const NSUInteger off_x = buffer_offset_for(x);
+    const NSUInteger off_m = buffer_offset_for(mask);
+    const uint32_t Ku = static_cast<uint32_t>(K);
+    const uint32_t Ou = static_cast<uint32_t>(offset);
+    const uint32_t Su = static_cast<uint32_t>(stride);
+    dispatch1d_sync(@"k_build_slot_mask", Ku, ^(id<MTLComputeCommandEncoder> enc) {
+        [enc setBuffer:bx offset:off_x atIndex:0];
+        [enc setBuffer:bm offset:off_m atIndex:1];
+        [enc setBytes:&Ou length:sizeof(uint32_t) atIndex:2];
+        [enc setBytes:&Ku length:sizeof(uint32_t) atIndex:3];
+        [enc setBytes:&Su length:sizeof(uint32_t) atIndex:4];
+    });
+}
+
 } // namespace brogameagent::nn::gpu
