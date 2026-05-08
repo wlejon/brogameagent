@@ -67,7 +67,7 @@ kernel void k_softmax_xent_fused(device const float* logits [[buffer(0)]],
 
     float local_max = -1e30f;
     for (uint i = tid; i < n; i += tg_size) {
-        if (has_mask && mask[i] == 0.0f) continue;
+        if (has_mask && mask[i] < 0.5f) continue;
         float v = logits[i];
         if (v > local_max) local_max = v;
     }
@@ -84,7 +84,7 @@ kernel void k_softmax_xent_fused(device const float* logits [[buffer(0)]],
 
     float local_sum = 0.0f;
     for (uint i = tid; i < n; i += tg_size) {
-        if (has_mask && mask[i] == 0.0f) {
+        if (has_mask && mask[i] < 0.5f) {
             probs[i] = 0.0f;
             continue;
         }
@@ -103,7 +103,7 @@ kernel void k_softmax_xent_fused(device const float* logits [[buffer(0)]],
 
     float local_loss = 0.0f;
     for (uint i = tid; i < n; i += tg_size) {
-        if (has_mask && mask[i] == 0.0f) {
+        if (has_mask && mask[i] < 0.5f) {
             dLogits[i] = 0.0f;
             continue;
         }

@@ -8,6 +8,7 @@
 namespace brogameagent {
 
 class NavGrid;
+class World;
 
 /// Continuous-control input for a NN policy (or any decision layer).
 /// moveX/moveZ are in the agent's local frame: +X = right, -Z = forward.
@@ -36,6 +37,20 @@ struct AgentAction {
 class Agent {
 public:
     Agent();
+
+    /// Auto-deregisters from any World it was added to so a stale pointer
+    /// doesn't survive in World::agents_ and crash the next tick().
+    ~Agent();
+
+    // Copy and move are supported but DO NOT propagate the World registration
+    // back-pointer: the produced/assigned-to Agent is not registered with any
+    // World. Re-call World::addAgent on the new instance if you need it.
+    // (Implementations live in agent.cpp so we don't have to inline-include
+    // world.h here.)
+    Agent(const Agent& other);
+    Agent(Agent&& other) noexcept;
+    Agent& operator=(const Agent& other);
+    Agent& operator=(Agent&& other) noexcept;
 
     void setNavGrid(const NavGrid* grid);
     void setPosition(float x, float z);
@@ -113,6 +128,10 @@ private:
     void integrate_(float desiredVx, float desiredVz, float dt);
 
     const NavGrid* navGrid_ = nullptr;
+    // Set by World::addAgent / cleared by World::removeAgent (and by ~World).
+    // Used by ~Agent() to auto-deregister so a stale pointer can't be ticked.
+    World* registeredWorld_ = nullptr;
+    friend class World;
     Unit unit_{};
 
     float x_ = 0, z_ = 0;

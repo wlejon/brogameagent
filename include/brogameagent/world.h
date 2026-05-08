@@ -40,6 +40,7 @@ struct AbilitySpec {
 /// Agents must have distinct Unit::id values for attack-target bookkeeping.
 class World {
 public:
+    ~World();
     void addAgent(Agent* agent);
     void removeAgent(const Agent* agent);
     void addObstacle(const AABB& box);

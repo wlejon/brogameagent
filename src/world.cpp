@@ -8,11 +8,34 @@
 namespace brogameagent {
 
 void World::addAgent(Agent* a) {
+    if (!a) return;
+    // Idempotent: already registered with this World? No-op. Registered with a
+    // different World? Move the registration over so the back-pointer stays
+    // consistent (and ~Agent only deregisters from one place).
+    if (a->registeredWorld_ == this) return;
+    if (a->registeredWorld_) a->registeredWorld_->removeAgent(a);
+    a->registeredWorld_ = this;
     agents_.push_back(a);
 }
 
 void World::removeAgent(const Agent* a) {
-    agents_.erase(std::remove(agents_.begin(), agents_.end(), a), agents_.end());
+    auto it = std::remove(agents_.begin(), agents_.end(), a);
+    if (it != agents_.end()) {
+        // const_cast: the pointed-to Agent is logically non-const here — we
+        // need to clear its back-pointer. The const on the parameter just
+        // documents that World::removeAgent doesn't otherwise mutate it.
+        const_cast<Agent*>(a)->registeredWorld_ = nullptr;
+        agents_.erase(it, agents_.end());
+    }
+}
+
+World::~World() {
+    // Clear registered-back-pointers so ~Agent won't dereference this dead
+    // World. We don't own the agents — the Agents will run their own dtors
+    // separately.
+    for (Agent* a : agents_) {
+        if (a) a->registeredWorld_ = nullptr;
+    }
 }
 
 void World::addObstacle(const AABB& box) {

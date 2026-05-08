@@ -36,11 +36,13 @@ struct AimResult {
 
 /// Wrap an angle (radians) into [-pi, pi].
 inline float wrapAngle(float a) {
-    constexpr float TWO_PI = 6.28318530717958647692f;
-    constexpr float PI     = 3.14159265358979323846f;
-    a = std::fmod(a + PI, TWO_PI);
-    if (a < 0) a += TWO_PI;
-    return a - PI;
+    constexpr float TWO_PI     = 6.28318530717958647692f;
+    constexpr float PI         = 3.14159265358979323846f;
+    constexpr float INV_TWO_PI = 1.0f / TWO_PI;
+    // Equivalent to fmod(a + PI, TWO_PI) - PI but with floor-based reduction
+    // (no fmod libcall). For x = a + PI:  x mod TWO_PI  =  x - TWO_PI*floor(x/TWO_PI).
+    const float x = a + PI;
+    return x - TWO_PI * std::floor(x * INV_TWO_PI) - PI;
 }
 
 /// Shortest signed delta from `from` to `to`, in [-pi, pi].

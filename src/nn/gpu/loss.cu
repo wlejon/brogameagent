@@ -58,7 +58,7 @@ __global__ void softmax_xent_fused_kernel(const float* __restrict__ logits,
     // Phase 1: max over valid.
     float local_max = -1e30f;
     for (int i = tid; i < n; i += blockDim.x) {
-        if (mask && mask[i] == 0.0f) continue;
+        if (mask && mask[i] < 0.5f) continue;
         const float v = logits[i];
         if (v > local_max) local_max = v;
     }
@@ -77,7 +77,7 @@ __global__ void softmax_xent_fused_kernel(const float* __restrict__ logits,
     // Phase 2: exp(x - m) into probs (zero on masked), accumulate sum.
     float local_sum = 0.0f;
     for (int i = tid; i < n; i += blockDim.x) {
-        if (mask && mask[i] == 0.0f) {
+        if (mask && mask[i] < 0.5f) {
             probs[i] = 0.0f;
             continue;
         }
@@ -97,7 +97,7 @@ __global__ void softmax_xent_fused_kernel(const float* __restrict__ logits,
     // Phase 3: normalise probs, compute loss + dLogits.
     float local_loss = 0.0f;
     for (int i = tid; i < n; i += blockDim.x) {
-        if (mask && mask[i] == 0.0f) {
+        if (mask && mask[i] < 0.5f) {
             dLogits[i] = 0.0f;
             continue;
         }

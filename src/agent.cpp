@@ -2,6 +2,7 @@
 #include "brogameagent/nav_grid.h"
 #include "brogameagent/steering.h"
 #include "brogameagent/perception.h"
+#include "brogameagent/world.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +13,93 @@ Agent::Agent() {
     // Mirror legacy default so Unit and the scripted speed agree.
     speed_ = unit_.moveSpeed;
     radius_ = unit_.radius;
+}
+
+Agent::~Agent() {
+    // Auto-deregister so a stale Agent* can't survive in World::agents_ and
+    // crash the next tick. World::~World clears registeredWorld_ on each
+    // registered agent first, so destruction order doesn't matter.
+    if (registeredWorld_) registeredWorld_->removeAgent(this);
+}
+
+// Copy/move: clone gameplay state but NEVER inherit the World registration.
+// A copy/moved-to Agent is unregistered; the source keeps any prior World
+// registration (the World still points at the source's address, not at us).
+
+Agent::Agent(const Agent& other)
+    : navGrid_(other.navGrid_),
+      registeredWorld_(nullptr),  // copy is unregistered
+      unit_(other.unit_),
+      x_(other.x_), z_(other.z_),
+      vx_(other.vx_), vz_(other.vz_),
+      yaw_(other.yaw_),
+      aimYaw_(other.aimYaw_), aimPitch_(other.aimPitch_),
+      speed_(other.speed_), radius_(other.radius_),
+      maxAccel_(other.maxAccel_), maxTurnRate_(other.maxTurnRate_),
+      hasTarget_(other.hasTarget_),
+      targetX_(other.targetX_), targetZ_(other.targetZ_),
+      path_(other.path_),
+      waypointIdx_(other.waypointIdx_),
+      lastPathTargetX_(other.lastPathTargetX_),
+      lastPathTargetZ_(other.lastPathTargetZ_) {}
+
+Agent::Agent(Agent&& other) noexcept
+    : navGrid_(other.navGrid_),
+      registeredWorld_(nullptr),  // moved-to is unregistered
+      unit_(std::move(other.unit_)),
+      x_(other.x_), z_(other.z_),
+      vx_(other.vx_), vz_(other.vz_),
+      yaw_(other.yaw_),
+      aimYaw_(other.aimYaw_), aimPitch_(other.aimPitch_),
+      speed_(other.speed_), radius_(other.radius_),
+      maxAccel_(other.maxAccel_), maxTurnRate_(other.maxTurnRate_),
+      hasTarget_(other.hasTarget_),
+      targetX_(other.targetX_), targetZ_(other.targetZ_),
+      path_(std::move(other.path_)),
+      waypointIdx_(other.waypointIdx_),
+      lastPathTargetX_(other.lastPathTargetX_),
+      lastPathTargetZ_(other.lastPathTargetZ_) {
+    // Source keeps its registration (if any) — the World still points at &other,
+    // not at *this. Source's ~Agent will deregister normally.
+}
+
+Agent& Agent::operator=(const Agent& other) {
+    if (this == &other) return *this;
+    // Preserve our own registration; copy gameplay state.
+    navGrid_ = other.navGrid_;
+    unit_ = other.unit_;
+    x_ = other.x_; z_ = other.z_;
+    vx_ = other.vx_; vz_ = other.vz_;
+    yaw_ = other.yaw_;
+    aimYaw_ = other.aimYaw_; aimPitch_ = other.aimPitch_;
+    speed_ = other.speed_; radius_ = other.radius_;
+    maxAccel_ = other.maxAccel_; maxTurnRate_ = other.maxTurnRate_;
+    hasTarget_ = other.hasTarget_;
+    targetX_ = other.targetX_; targetZ_ = other.targetZ_;
+    path_ = other.path_;
+    waypointIdx_ = other.waypointIdx_;
+    lastPathTargetX_ = other.lastPathTargetX_;
+    lastPathTargetZ_ = other.lastPathTargetZ_;
+    return *this;
+}
+
+Agent& Agent::operator=(Agent&& other) noexcept {
+    if (this == &other) return *this;
+    navGrid_ = other.navGrid_;
+    unit_ = std::move(other.unit_);
+    x_ = other.x_; z_ = other.z_;
+    vx_ = other.vx_; vz_ = other.vz_;
+    yaw_ = other.yaw_;
+    aimYaw_ = other.aimYaw_; aimPitch_ = other.aimPitch_;
+    speed_ = other.speed_; radius_ = other.radius_;
+    maxAccel_ = other.maxAccel_; maxTurnRate_ = other.maxTurnRate_;
+    hasTarget_ = other.hasTarget_;
+    targetX_ = other.targetX_; targetZ_ = other.targetZ_;
+    path_ = std::move(other.path_);
+    waypointIdx_ = other.waypointIdx_;
+    lastPathTargetX_ = other.lastPathTargetX_;
+    lastPathTargetZ_ = other.lastPathTargetZ_;
+    return *this;
 }
 
 void Agent::setNavGrid(const NavGrid* grid) { navGrid_ = grid; }

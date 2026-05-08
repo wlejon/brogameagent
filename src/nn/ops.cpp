@@ -113,12 +113,12 @@ void softmax_forward(const Tensor& logits, Tensor& probs, const float* mask) {
 
     float m = -1e30f;
     for (int i = 0; i < n; ++i) {
-        if (mask && mask[i] == 0.0f) continue;
+        if (mask && mask[i] < 0.5f) continue;
         if (lp[i] > m) m = lp[i];
     }
     float s = 0.0f;
     for (int i = 0; i < n; ++i) {
-        if (mask && mask[i] == 0.0f) { pp[i] = 0.0f; continue; }
+        if (mask && mask[i] < 0.5f) { pp[i] = 0.0f; continue; }
         pp[i] = std::exp(lp[i] - m);
         s += pp[i];
     }
@@ -143,12 +143,12 @@ float softmax_xent_segment(const float* lp, const float* tp,
     // Stable softmax over the segment.
     float m = -1e30f;
     for (int i = 0; i < n; ++i) {
-        if (mask && mask[i] == 0.0f) continue;
+        if (mask && mask[i] < 0.5f) continue;
         if (lp[i] > m) m = lp[i];
     }
     float s = 0.0f;
     for (int i = 0; i < n; ++i) {
-        if (mask && mask[i] == 0.0f) { pp[i] = 0.0f; continue; }
+        if (mask && mask[i] < 0.5f) { pp[i] = 0.0f; continue; }
         pp[i] = std::exp(lp[i] - m);
         s += pp[i];
     }
@@ -158,7 +158,7 @@ float softmax_xent_segment(const float* lp, const float* tp,
     // xent + dLogits = (p - t).
     float loss = 0.0f;
     for (int i = 0; i < n; ++i) {
-        if (mask && mask[i] == 0.0f) { dz[i] = 0.0f; continue; }
+        if (mask && mask[i] < 0.5f) { dz[i] = 0.0f; continue; }
         if (tp[i] > 0.0f) {
             const float p = pp[i] > 1e-12f ? pp[i] : 1e-12f;
             loss -= tp[i] * std::log(p);

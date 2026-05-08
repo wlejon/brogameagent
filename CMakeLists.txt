@@ -35,10 +35,12 @@ if(BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL)
         "BROGAMEAGENT_WITH_CUDA and BROGAMEAGENT_WITH_METAL are mutually exclusive.")
 endif()
 if(BROGAMEAGENT_WITH_CUDA)
-    # RTX 4090 = sm_89. Set BEFORE enable_language(CUDA) so the language
-    # detection probes use the right arch and don't backfill sm_52.
+    # Default to "native" (auto-detect compiling host's GPU; CMake 3.24+).
+    # Override at configure time with -DCMAKE_CUDA_ARCHITECTURES=89 (or a list)
+    # to cross-build for non-host targets. Set BEFORE enable_language(CUDA) so
+    # the language detection probes use the right arch and don't backfill sm_52.
     if(NOT CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES 89)
+        set(CMAKE_CUDA_ARCHITECTURES native)
     endif()
     enable_language(CUDA)
     set(CMAKE_CUDA_STANDARD 17)

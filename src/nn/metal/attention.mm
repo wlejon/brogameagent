@@ -67,13 +67,13 @@ kernel void k_row_masked_softmax(device const float* scores [[buffer(0)]],
     threadgroup float sdata[ROW_SM_BLOCK];
     device const float* srow = scores + i * N;
     device float*       arow = Attn + i * N;
-    if (has_mask && mask[i] == 0.0f) {
+    if (has_mask && mask[i] < 0.5f) {
         for (uint j = tid; j < N; j += tg_size) arow[j] = 0.0f;
         return;
     }
     float local_max = -1e30f;
     for (uint j = tid; j < N; j += tg_size) {
-        if (has_mask && mask[j] == 0.0f) continue;
+        if (has_mask && mask[j] < 0.5f) continue;
         float v = srow[j];
         if (v > local_max) local_max = v;
     }
@@ -90,7 +90,7 @@ kernel void k_row_masked_softmax(device const float* scores [[buffer(0)]],
 
     float local_sum = 0.0f;
     for (uint j = tid; j < N; j += tg_size) {
-        if (has_mask && mask[j] == 0.0f) {
+        if (has_mask && mask[j] < 0.5f) {
             arow[j] = 0.0f;
             continue;
         }
@@ -135,7 +135,7 @@ kernel void k_output_proj(device const float* Y    [[buffer(0)]],
                           uint2 gid [[thread_position_in_grid]]) {
     uint c = gid.x; uint i = gid.y;
     if (i >= N || c >= D) return;
-    if (has_mask && mask[i] == 0.0f) {
+    if (has_mask && mask[i] < 0.5f) {
         O[i * D + c] = 0.0f;
         return;
     }
@@ -156,7 +156,7 @@ kernel void k_wo_back_dY(device const float* dO  [[buffer(0)]],
                          uint2 gid [[thread_position_in_grid]]) {
     uint k = gid.x; uint i = gid.y;
     if (i >= N || k >= D) return;
-    if (has_mask && mask[i] == 0.0f) {
+    if (has_mask && mask[i] < 0.5f) {
         dY[i * D + k] = 0.0f;
         return;
     }
@@ -179,7 +179,7 @@ kernel void k_wo_back_dW(device const float* dO  [[buffer(0)]],
     if (c >= D || k >= D) return;
     float acc = 0.0f;
     for (uint i = 0; i < N; ++i) {
-        if (has_mask && mask[i] == 0.0f) continue;
+        if (has_mask && mask[i] < 0.5f) continue;
         acc += dO[i * D + c] * Y[i * D + k];
     }
     dWo[c * D + k] += acc;
@@ -229,7 +229,7 @@ kernel void k_row_softmax_back(device const float* Attn    [[buffer(0)]],
     device const float* prow  = Attn  + i * N;
     device const float* dprow = dAttn + i * N;
     device float*       drow  = dScores + i * N;
-    if (has_mask && mask[i] == 0.0f) {
+    if (has_mask && mask[i] < 0.5f) {
         for (uint j = tid; j < N; j += tg_size) drow[j] = 0.0f;
         return;
     }
@@ -245,7 +245,7 @@ kernel void k_row_softmax_back(device const float* Attn    [[buffer(0)]],
     }
     float dot = sdata[0];
     for (uint j = tid; j < N; j += tg_size) {
-        if (has_mask && mask[j] == 0.0f) {
+        if (has_mask && mask[j] < 0.5f) {
             drow[j] = 0.0f;
         } else {
             drow[j] = prow[j] * (dprow[j] - dot) * inv_sqrtd;

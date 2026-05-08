@@ -29,12 +29,12 @@ void LayerNorm::init(int n, float eps) {
 void LayerNorm::forward(const Tensor& x, Tensor& y) {
     const int n = x.size();
     assert(gamma_.size() == n && y.size() == n);
-    float m = 0.0f;
-    for (int i = 0; i < n; ++i) m += x[i];
-    m /= static_cast<float>(n);
-    float v = 0.0f;
-    for (int i = 0; i < n; ++i) { const float d = x[i] - m; v += d * d; }
-    v /= static_cast<float>(n);
+    float sum = 0.0f, sum_sq = 0.0f;
+    for (int i = 0; i < n; ++i) { sum += x[i]; sum_sq += x[i] * x[i]; }
+    const float nf = static_cast<float>(n);
+    const float m = sum / nf;
+    float v = sum_sq / nf - m * m;
+    if (v < 0.0f) v = 0.0f;  // guard against tiny negative from FP error
     const float rstd = 1.0f / std::sqrt(v + eps_);
     mean_ = m;
     rstd_ = rstd;

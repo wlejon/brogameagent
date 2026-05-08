@@ -59,11 +59,8 @@ private:
     int width_, height_;
     std::vector<uint8_t> grid_; // 0 = walkable, 1 = blocked
 
-    // Scratch buffers reused across findPath() calls to avoid per-call
-    // allocation. NOT thread-safe: do not call findPath() concurrently
-    // on the same NavGrid.
-    mutable std::vector<float> gScoreScratch_;
-    mutable std::vector<int>   cameFromScratch_;
+    // Scratch buffers for A* live in thread_local statics inside findPath()
+    // so concurrent pathfinding across threads doesn't race.
 };
 
 } // namespace brogameagent

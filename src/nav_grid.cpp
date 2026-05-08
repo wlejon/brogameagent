@@ -69,10 +69,14 @@ std::vector<Vec2> NavGrid::findPath(Vec2 from, Vec2 to) const {
     if (sx == gx && sz == gz) return {to};
 
     const int N = width_ * height_;
-    gScoreScratch_.assign(N, 1e18f);
-    cameFromScratch_.assign(N, -1);
-    auto& gScore = gScoreScratch_;
-    auto& cameFrom = cameFromScratch_;
+    // thread_local so concurrent findPath() across threads is safe; each
+    // thread reuses (and grows) its own scratch buffers.
+    thread_local std::vector<float> gScoreScratch;
+    thread_local std::vector<int>   cameFromScratch;
+    gScoreScratch.assign(N, 1e18f);
+    cameFromScratch.assign(N, -1);
+    auto& gScore   = gScoreScratch;
+    auto& cameFrom = cameFromScratch;
 
     auto idx = [&](int x, int z) { return z * width_ + x; };
     auto heuristic = [&](int x, int z) {

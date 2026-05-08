@@ -72,14 +72,14 @@ __global__ void mha_row_softmax_kernel(const float* __restrict__ scores,
     const float* srow = scores + static_cast<size_t>(row) * K;
     float* arow = Attn + static_cast<size_t>(row) * K;
 
-    if (mask && mask[i_within] == 0.0f) {
+    if (mask && mask[i_within] < 0.5f) {
         for (int j = tid; j < K; j += blockDim.x) arow[j] = 0.0f;
         return;
     }
 
     float local_max = -1e30f;
     for (int j = tid; j < K; j += blockDim.x) {
-        if (mask && mask[j] == 0.0f) continue;
+        if (mask && mask[j] < 0.5f) continue;
         const float v = srow[j];
         if (v > local_max) local_max = v;
     }
@@ -97,7 +97,7 @@ __global__ void mha_row_softmax_kernel(const float* __restrict__ scores,
 
     float local_sum = 0.0f;
     for (int j = tid; j < K; j += blockDim.x) {
-        if (mask && mask[j] == 0.0f) {
+        if (mask && mask[j] < 0.5f) {
             arow[j] = 0.0f;
             continue;
         }
@@ -147,7 +147,7 @@ __global__ void mha_output_proj_kernel(const float* __restrict__ Y,
     const int c = blockIdx.x * blockDim.x + threadIdx.x;
     const int i = blockIdx.y * blockDim.y + threadIdx.y;
     if (i >= K || c >= D) return;
-    if (mask && mask[i] == 0.0f) {
+    if (mask && mask[i] < 0.5f) {
         O[static_cast<size_t>(i) * D + c] = 0.0f;
         return;
     }
@@ -171,7 +171,7 @@ __global__ void mha_wo_back_dW_kernel(const float* __restrict__ dO,
     if (c >= D || k >= D) return;
     float acc = 0.0f;
     for (int i = 0; i < K; ++i) {
-        if (mask && mask[i] == 0.0f) continue;
+        if (mask && mask[i] < 0.5f) continue;
         acc += dO[static_cast<size_t>(i) * D + c] * Y[static_cast<size_t>(i) * D + k];
     }
     dWo[static_cast<size_t>(c) * D + k] += acc;
@@ -186,7 +186,7 @@ __global__ void mha_wo_back_dY_kernel(const float* __restrict__ dO,
     const int k = blockIdx.x * blockDim.x + threadIdx.x;
     const int i = blockIdx.y * blockDim.y + threadIdx.y;
     if (i >= K || k >= D) return;
-    if (mask && mask[i] == 0.0f) {
+    if (mask && mask[i] < 0.5f) {
         dY[static_cast<size_t>(i) * D + k] = 0.0f;
         return;
     }
@@ -248,7 +248,7 @@ __global__ void mha_row_softmax_back_kernel(const float* __restrict__ Attn,
     const float* dprow = dAttn + static_cast<size_t>(row) * K;
     float* drow = dScores + static_cast<size_t>(row) * K;
 
-    if (mask && mask[i_within] == 0.0f) {
+    if (mask && mask[i_within] < 0.5f) {
         for (int j = tid; j < K; j += blockDim.x) drow[j] = 0.0f;
         return;
     }
@@ -266,7 +266,7 @@ __global__ void mha_row_softmax_back_kernel(const float* __restrict__ Attn,
     const float dot = sdata[0];
 
     for (int j = tid; j < K; j += blockDim.x) {
-        if (mask && mask[j] == 0.0f) {
+        if (mask && mask[j] < 0.5f) {
             drow[j] = 0.0f;
         } else {
             drow[j] = prow[j] * (dprow[j] - dot) * inv_sqrtdh;

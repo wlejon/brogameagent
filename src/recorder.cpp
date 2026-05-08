@@ -2,7 +2,14 @@
 #include "brogameagent/agent.h"
 #include "brogameagent/world.h"
 
+#include <bit>
 #include <cstring>
+
+// .bgar / .bgargrid pack POD structs raw to disk. We've only ever shipped on
+// little-endian hosts; rather than silently produce a corrupt file on a future
+// big-endian platform, fail the build until someone adds byte-swap paths.
+static_assert(std::endian::native == std::endian::little,
+              "brogameagent replay format assumes little-endian host");
 
 namespace brogameagent {
 

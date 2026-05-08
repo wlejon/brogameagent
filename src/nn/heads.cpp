@@ -166,12 +166,12 @@ void FactoredPolicyHead::backward(const Tensor& dLogits, Tensor& dEmbed) {
 static void softmax_slice(const float* logits, int n, float* probs, const float* mask) {
     float m = -1e30f;
     for (int i = 0; i < n; ++i) {
-        if (mask && mask[i] == 0.0f) continue;
+        if (mask && mask[i] < 0.5f) continue;
         if (logits[i] > m) m = logits[i];
     }
     float s = 0.0f;
     for (int i = 0; i < n; ++i) {
-        if (mask && mask[i] == 0.0f) { probs[i] = 0.0f; continue; }
+        if (mask && mask[i] < 0.5f) { probs[i] = 0.0f; continue; }
         probs[i] = std::exp(logits[i] - m);
         s += probs[i];
     }
@@ -203,7 +203,7 @@ static float xent_slice(const float* logits, int n, const float* target,
     softmax_slice(logits, n, probs, mask);
     float loss = 0.0f;
     for (int i = 0; i < n; ++i) {
-        if (mask && mask[i] == 0.0f) { dLogits[i] = 0.0f; continue; }
+        if (mask && mask[i] < 0.5f) { dLogits[i] = 0.0f; continue; }
         if (target[i] > 0.0f) {
             const float p = probs[i] > 1e-12f ? probs[i] : 1e-12f;
             loss -= target[i] * std::log(p);

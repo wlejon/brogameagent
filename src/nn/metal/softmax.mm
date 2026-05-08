@@ -34,7 +34,7 @@ kernel void k_softmax_fw(device const float* logits [[buffer(0)]],
     // Phase 1: max over valid.
     float local_max = -1e30f;
     for (uint i = tid; i < n; i += tg_size) {
-        if (has_mask && mask[i] == 0.0f) continue;
+        if (has_mask && mask[i] < 0.5f) continue;
         float v = logits[i];
         if (v > local_max) local_max = v;
     }
@@ -52,7 +52,7 @@ kernel void k_softmax_fw(device const float* logits [[buffer(0)]],
     // Phase 2: exp(x - m), zero on masked.
     float local_sum = 0.0f;
     for (uint i = tid; i < n; i += tg_size) {
-        if (has_mask && mask[i] == 0.0f) {
+        if (has_mask && mask[i] < 0.5f) {
             probs[i] = 0.0f;
             continue;
         }
