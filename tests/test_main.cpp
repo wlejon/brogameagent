@@ -1597,7 +1597,8 @@ TEST(replay_records_damage_events_per_frame) {
     CHECK(r.frame(0).events.size() == 0);
     CHECK(r.frame(1).events.size() == 1);
     CHECK(r.frame(2).events.size() == 0);   // delta slice, not cumulative
-    const auto& e = r.frame(1).events[0];
+    auto f1 = r.frame(1);
+    const auto& e = f1.events[0];
     CHECK(e.attackerId == 10);
     CHECK(e.targetId == 11);
     CHECK_NEAR(e.amount, 20.0f, 1e-3f);
@@ -1639,7 +1640,8 @@ TEST(replay_records_projectiles) {
     ReplayReader r;
     CHECK(r.open(path));
     CHECK(r.frame(0).projectiles.size() == 1);
-    const auto& pp = r.frame(0).projectiles[0];
+    auto f0 = r.frame(0);
+    const auto& pp = f0.projectiles[0];
     CHECK(pp.ownerId == 1);
     CHECK_NEAR(pp.vx, 20.0f, 1e-4f);
     CHECK(pp.alive == 1);
