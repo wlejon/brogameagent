@@ -219,6 +219,21 @@ int GenericMcts::search() {
     Node& root = *root_;
     if (!root.expanded) expand(root);
 
+    // No legal actions at the root — the action space is empty for this
+    // state. Per the documented contract, return -1 rather than the default
+    // action 0.
+    bool any_legal = false;
+    for (int a = 0; a < num_actions; ++a) {
+        if (root.legal[static_cast<size_t>(a)]) { any_legal = true; break; }
+    }
+    if (!any_legal) {
+        stats_.iterations  = 0;
+        stats_.tree_size   = tree_size_;
+        stats_.best_visits = 0;
+        stats_.best_action = -1;
+        return -1;
+    }
+
     // Mix Dirichlet noise into the root prior post-expansion so we operate
     // on the normalized prior. Only entries on the legal set are touched.
     if (cfg_.dirichlet_alpha > 0.0f && cfg_.dirichlet_epsilon > 0.0f) {
