@@ -21,3 +21,5 @@ replays_checkpoint/
 checkpoints/
 *.pt
 build*/
+
+LastCoverageResults.log
