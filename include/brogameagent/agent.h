@@ -109,9 +109,9 @@ public:
     bool hasTarget() const { return hasTarget_; }
     bool atTarget() const;
 
-    const std::vector<Vec2>& path() const { return path_; }
+    const std::vector<bromath::Vec2>& path() const { return path_; }
     int currentWaypoint() const { return waypointIdx_; }
-    Vec2 velocity() const { return {vx_, vz_}; }
+    bromath::Vec2 velocity() const { return {vx_, vz_}; }
 
     /// Capture full resettable agent state into a snapshot.
     AgentSnapshot captureSnapshot() const;
@@ -149,7 +149,7 @@ private:
     bool hasTarget_ = false;
     float targetX_ = 0, targetZ_ = 0;
 
-    std::vector<Vec2> path_;
+    std::vector<bromath::Vec2> path_;
     int waypointIdx_ = 0;
 
     float lastPathTargetX_ = 0, lastPathTargetZ_ = 0;

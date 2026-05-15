@@ -18,8 +18,8 @@ namespace belief {
 /// One hypothesis about a hidden enemy's concrete state. Weights are reserved
 /// for later particle-resampling work; v1 keeps them uniform.
 struct EnemyParticle {
-    Vec2  pos{};
-    Vec2  vel{};
+    bromath::Vec2  pos{};
+    bromath::Vec2  vel{};
     float hp = 0.0f;
     float heading = 0.0f;
     float weight = 1.0f;
@@ -64,7 +64,7 @@ public:
     /// they uniform-sample over the nav grid. Ignored if the id already
     /// exists. `max_hp` is used only to clamp/normalise later estimates.
     void register_enemy(int enemy_id, float max_hp,
-                         const Vec2* initial_pos_prior = nullptr);
+                         const bromath::Vec2* initial_pos_prior = nullptr);
 
     /// Advance all particles by `dt` under the motion model and negative-info
     /// prune them against `visibility_source_world` from the perspective of
@@ -110,8 +110,8 @@ private:
     const EnemyBelief* find_(int enemy_id) const;
 
     void seed_uniform_(EnemyBelief& b);
-    void seed_around_(EnemyBelief& b, Vec2 center, float spread);
-    void clamp_to_nav_(Vec2& p) const;
+    void seed_around_(EnemyBelief& b, bromath::Vec2 center, float spread);
+    void clamp_to_nav_(bromath::Vec2& p) const;
 
     int                       team_id_ = 0;
     int                       num_particles_ = 32;

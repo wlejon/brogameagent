@@ -41,7 +41,7 @@ int main() {
     // Path from hero to enemy. The A* will route around the wall.
     auto path = grid.findPath({ hero.x(), hero.z() }, { enemy.x(), enemy.z() });
     std::printf("path length: %zu waypoints\n", path.size());
-    for (const auto& wp : path) std::printf("  -> (%.1f, %.1f)\n", wp.x, wp.z);
+    for (const auto& wp : path) std::printf("  -> (%.1f, %.1f)\n", wp.x, wp.y);
 
     // Drive the hero to enemy.x-1 (stop just in attack range).
     hero.setTarget(enemy.x() - 1.0f, enemy.z());

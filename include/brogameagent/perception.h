@@ -6,13 +6,13 @@
 namespace brogameagent {
 
 /// 2D line-of-sight check: returns true if line from→to is not blocked by any AABB.
-bool hasLineOfSight(Vec2 from, Vec2 to, const AABB* obstacles, int count);
+bool hasLineOfSight(bromath::Vec2 from, bromath::Vec2 to, const AABB* obstacles, int count);
 
 /// Combined visibility check: range + field-of-view + line-of-sight.
 /// @param facingYaw  Observer's forward yaw (same convention as AimResult::yaw).
 /// @param fovRadians Full cone angle; target must be within ±fov/2 of facing.
 /// @param maxRange   Ignored if <= 0.
-bool canSee(Vec2 from, Vec2 to,
+bool canSee(bromath::Vec2 from, bromath::Vec2 to,
             float facingYaw, float fovRadians, float maxRange,
             const AABB* obstacles, int count);
 

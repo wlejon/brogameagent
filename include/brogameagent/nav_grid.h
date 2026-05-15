@@ -27,10 +27,10 @@ public:
     /// Find a path from start to goal using A*.
     /// Returns an empty vector if no path exists.
     /// The returned path is smoothed (redundant waypoints removed).
-    std::vector<Vec2> findPath(Vec2 from, Vec2 to) const;
+    std::vector<bromath::Vec2> findPath(bromath::Vec2 from, bromath::Vec2 to) const;
 
     /// Line-of-sight check on the grid (Bresenham). Returns true if clear.
-    bool hasGridLOS(Vec2 from, Vec2 to) const;
+    bool hasGridLOS(bromath::Vec2 from, bromath::Vec2 to) const;
 
     // Grid dimensions
     int width() const { return width_; }
@@ -52,7 +52,7 @@ private:
     float toWorldZ(int gz) const;
     bool inBounds(int gx, int gz) const;
 
-    std::vector<Vec2> smoothPath(const std::vector<Vec2>& raw) const;
+    std::vector<bromath::Vec2> smoothPath(const std::vector<bromath::Vec2>& raw) const;
 
     float minX_, minZ_, maxX_, maxZ_;
     float cellSize_;

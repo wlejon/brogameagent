@@ -52,11 +52,11 @@ void build(const Agent& self, const World& world, float* out) {
         out[i++] = norm01(u.abilityCooldowns[s], COOLDOWN_NORM_SEC);
     }
 
-    Vec2 v = self.velocity();
-    float speed = std::sqrt(v.x * v.x + v.z * v.z);
+    bromath::Vec2 v = self.velocity();
+    float speed = std::sqrt(v.x * v.x + v.y * v.y);
     out[i++] = norm01(speed, u.moveSpeed);
 
-    float aimOff = angleDelta(self.yaw(), self.aimYaw());
+    float aimOff = bromath::angleDelta(self.yaw(), self.aimYaw());
     out[i++] = std::sin(aimOff);
     out[i++] = std::cos(aimOff);
 

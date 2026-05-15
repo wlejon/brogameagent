@@ -19,6 +19,9 @@
 #include <vector>
 
 using namespace brogameagent;
+using bromath::Vec2;
+using bromath::wrapAngle;
+using bromath::angleDelta;
 
 struct TestEntry {
     const char* name;
@@ -84,7 +87,7 @@ TEST(navgrid_path_straight_line) {
     CHECK(path.size() <= 2);
     // Last point should be near target
     CHECK_NEAR(path.back().x, 5.0f, 1.0f);
-    CHECK_NEAR(path.back().z, 0.0f, 1.0f);
+    CHECK_NEAR(path.back().y, 0.0f, 1.0f);
 }
 
 TEST(navgrid_path_around_obstacle) {
@@ -332,12 +335,12 @@ TEST(agent_accessors_reflect_state) {
     agent.update(1.0f / 60.0f);
     Vec2 v = agent.velocity();
     CHECK(v.x > 0.0f);
-    CHECK_NEAR(v.z, 0.0f, 0.5f);
+    CHECK_NEAR(v.y, 0.0f, 0.5f);
 
     agent.clearTarget();
     agent.update(1.0f / 60.0f);
     CHECK_NEAR(agent.velocity().x, 0.0f, 1e-4f);
-    CHECK_NEAR(agent.velocity().z, 0.0f, 1e-4f);
+    CHECK_NEAR(agent.velocity().y, 0.0f, 1e-4f);
 }
 
 TEST(agent_clear_target_stops) {
@@ -394,7 +397,7 @@ TEST(agent_maxAccel_clamps_velocity_change) {
     act.moveZ = -1.0f;
     agent.applyAction(act, 1.0f); // 1 second, accel cap gives max |dv|=2
     Vec2 v = agent.velocity();
-    float speed = std::sqrt(v.x * v.x + v.z * v.z);
+    float speed = std::sqrt(v.x * v.x + v.y * v.y);
     CHECK(speed <= 2.01f); // clamped to maxAccel * dt
 }
 
@@ -3858,7 +3861,7 @@ TEST(belief_collapses_on_sighting) {
     // All particles should be at (3, 1) exactly.
     for (const auto& p : tb.enemies()[0].particles) {
         CHECK_NEAR(p.pos.x, 3.0f, 1e-4f);
-        CHECK_NEAR(p.pos.z, 1.0f, 1e-4f);
+        CHECK_NEAR(p.pos.y, 1.0f, 1e-4f);
     }
 }
 

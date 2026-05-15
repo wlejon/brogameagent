@@ -39,9 +39,9 @@ bool NavGrid::isWalkable(float x, float z) const {
     return grid_[gz * width_ + gx] == 0;
 }
 
-bool NavGrid::hasGridLOS(Vec2 from, Vec2 to) const {
-    int x0 = toGridX(from.x), z0 = toGridZ(from.z);
-    int x1 = toGridX(to.x),   z1 = toGridZ(to.z);
+bool NavGrid::hasGridLOS(bromath::Vec2 from, bromath::Vec2 to) const {
+    int x0 = toGridX(from.x), z0 = toGridZ(from.y);
+    int x1 = toGridX(to.x),   z1 = toGridZ(to.y);
 
     int dx = std::abs(x1 - x0), dz = std::abs(z1 - z0);
     int sx = (x0 < x1) ? 1 : -1;
@@ -59,9 +59,9 @@ bool NavGrid::hasGridLOS(Vec2 from, Vec2 to) const {
 }
 
 // A* with 8-directional movement
-std::vector<Vec2> NavGrid::findPath(Vec2 from, Vec2 to) const {
-    int sx = toGridX(from.x), sz = toGridZ(from.z);
-    int gx = toGridX(to.x),   gz = toGridZ(to.z);
+std::vector<bromath::Vec2> NavGrid::findPath(bromath::Vec2 from, bromath::Vec2 to) const {
+    int sx = toGridX(from.x), sz = toGridZ(from.y);
+    int gx = toGridX(to.x),   gz = toGridZ(to.y);
 
     if (!inBounds(sx, sz) || !inBounds(gx, gz)) return {};
     if (grid_[sz * width_ + sx] != 0) return {};
@@ -136,7 +136,7 @@ std::vector<Vec2> NavGrid::findPath(Vec2 from, Vec2 to) const {
     int gi = idx(gx, gz);
     if (cameFrom[gi] == -1 && !(sx == gx && sz == gz)) return {};
 
-    std::vector<Vec2> raw;
+    std::vector<bromath::Vec2> raw;
     for (int i = gi; i != -1; i = cameFrom[i]) {
         int pz = i / width_, px = i % width_;
         raw.push_back({toWorldX(px), toWorldZ(pz)});
@@ -149,10 +149,10 @@ std::vector<Vec2> NavGrid::findPath(Vec2 from, Vec2 to) const {
     return smoothPath(raw);
 }
 
-std::vector<Vec2> NavGrid::smoothPath(const std::vector<Vec2>& raw) const {
+std::vector<bromath::Vec2> NavGrid::smoothPath(const std::vector<bromath::Vec2>& raw) const {
     if (raw.size() <= 2) return raw;
 
-    std::vector<Vec2> smooth;
+    std::vector<bromath::Vec2> smooth;
     smooth.push_back(raw.front());
 
     size_t current = 0;

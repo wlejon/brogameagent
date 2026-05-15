@@ -24,9 +24,9 @@ void patch_snapshot_with_particles(
         if (it == sampled.end()) continue;
         const belief::EnemyParticle& p = it->second;
         as.x  = p.pos.x;
-        as.z  = p.pos.z;
+        as.z  = p.pos.y;
         as.vx = p.vel.x;
-        as.vz = p.vel.z;
+        as.vz = p.vel.y;
         as.yaw = p.heading;
         // HP zero means the belief is convinced the enemy is dead; clamp to
         // [0, maxHp] to avoid negatives slipping into combat math.

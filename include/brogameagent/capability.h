@@ -119,22 +119,22 @@ public:
     /// Per-binding waypoint list used by LaneWalkCapability. Kept on the
     /// set because it's configuration specific to this binding, not to the
     /// capability class itself.
-    void               setLaneWaypoints(std::vector<Vec2> wps) { laneWaypoints_ = std::move(wps); laneIdx_ = 0; }
-    const std::vector<Vec2>& laneWaypoints() const { return laneWaypoints_; }
+    void               setLaneWaypoints(std::vector<bromath::Vec2> wps) { laneWaypoints_ = std::move(wps); laneIdx_ = 0; }
+    const std::vector<bromath::Vec2>& laneWaypoints() const { return laneWaypoints_; }
     int                laneIndex() const { return laneIdx_; }
     void               setLaneIndex(int idx) { laneIdx_ = idx; }
 
     /// Optional fallback point used by FleeCapability when no explicit
     /// direction is given (e.g. home base).
-    void setFallbackPoint(Vec2 p) { fallback_ = p; hasFallback_ = true; }
+    void setFallbackPoint(bromath::Vec2 p) { fallback_ = p; hasFallback_ = true; }
     bool hasFallbackPoint() const { return hasFallback_; }
-    Vec2 fallbackPoint() const { return fallback_; }
+    bromath::Vec2 fallbackPoint() const { return fallback_; }
 
 private:
     std::vector<std::unique_ptr<Capability>> caps_;
-    std::vector<Vec2> laneWaypoints_;
+    std::vector<bromath::Vec2> laneWaypoints_;
     int  laneIdx_     = 0;
-    Vec2 fallback_    {0, 0};
+    bromath::Vec2 fallback_    {0, 0};
     bool hasFallback_ = false;
 };
 

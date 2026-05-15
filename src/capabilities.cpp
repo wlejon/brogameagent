@@ -70,15 +70,15 @@ public:
         if (idx < 0) idx = 0;
         if (idx >= static_cast<int>(wps.size())) idx = static_cast<int>(wps.size()) - 1;
 
-        const Vec2 wp = wps[idx];
+        const bromath::Vec2 wp = wps[idx];
         const float dx = self.x() - wp.x;
-        const float dz = self.z() - wp.z;
+        const float dz = self.z() - wp.y;
         if (std::sqrt(dx*dx + dz*dz) <= kLaneWaypointReachRadius
             && idx + 1 < static_cast<int>(wps.size())) {
             idx++;
             set.setLaneIndex(idx);
         }
-        self.setTarget(wps[idx].x, wps[idx].z);
+        self.setTarget(wps[idx].x, wps[idx].y);
     }
 
     void start(const CapContext& ctx, Action& a) override {

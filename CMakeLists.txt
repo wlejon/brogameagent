@@ -34,6 +34,14 @@ if(BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL)
     message(FATAL_ERROR
         "BROGAMEAGENT_WITH_CUDA and BROGAMEAGENT_WITH_METAL are mutually exclusive.")
 endif()
+
+# --- bromath (shared header-only math, sibling repo) ---
+set(BROMATH_DIR "${CMAKE_SOURCE_DIR}/../bromath" CACHE PATH "bromath sibling")
+if(EXISTS "${BROMATH_DIR}/CMakeLists.txt")
+    add_subdirectory("${BROMATH_DIR}" "${CMAKE_BINARY_DIR}/bromath" EXCLUDE_FROM_ALL)
+else()
+    message(FATAL_ERROR "bromath not found at ${BROMATH_DIR}")
+endif()
 if(BROGAMEAGENT_WITH_CUDA)
     # Default to "native" (auto-detect compiling host's GPU; CMake 3.24+).
     # Override at configure time with -DCMAKE_CUDA_ARCHITECTURES=89 (or a list)
@@ -126,6 +134,9 @@ target_include_directories(brogameagent PUBLIC
 )
 target_include_directories(brogameagent PRIVATE src)
 target_compile_features(brogameagent PUBLIC cxx_std_20)
+# bromath is header-only INTERFACE; expose its include dirs without putting
+# the bromath target itself into our install-export set.
+target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:bromath::bromath>)
 
 if(MSVC)
     target_compile_options(brogameagent PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4>)

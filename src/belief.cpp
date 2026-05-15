@@ -11,7 +11,6 @@
 namespace brogameagent::belief {
 
 namespace {
-constexpr float TWO_PI = 6.28318530717958647692f;
 
 float gaussian(std::mt19937_64& rng, float mean, float stddev) {
     // Box–Muller. std::normal_distribution is implementation-defined across
@@ -20,7 +19,7 @@ float gaussian(std::mt19937_64& rng, float mean, float stddev) {
     float u1 = std::max(1e-7f, u01(rng));
     float u2 = u01(rng);
     float mag = std::sqrt(-2.0f * std::log(u1));
-    return mean + stddev * mag * std::cos(TWO_PI * u2);
+    return mean + stddev * mag * std::cos(bromath::TWO_PI * u2);
 }
 
 } // namespace
@@ -47,21 +46,21 @@ const EnemyBelief* TeamBelief::find_(int id) const {
     return nullptr;
 }
 
-void TeamBelief::clamp_to_nav_(Vec2& p) const {
+void TeamBelief::clamp_to_nav_(bromath::Vec2& p) const {
     if (!nav_) return;
     // First clamp to bounds.
     p.x = std::clamp(p.x, nav_->minX() + 0.1f, nav_->maxX() - 0.1f);
-    p.z = std::clamp(p.z, nav_->minZ() + 0.1f, nav_->maxZ() - 0.1f);
+    p.y = std::clamp(p.y, nav_->minZ() + 0.1f, nav_->maxZ() - 0.1f);
     // If we landed inside an obstacle, nudge outward radially by up to a few
     // cell widths. Cheap fallback; good enough for particle clouds.
-    if (!nav_->isWalkable(p.x, p.z)) {
+    if (!nav_->isWalkable(p.x, p.y)) {
         const float cs = nav_->cellSize();
         for (int k = 1; k <= 6; k++) {
             const float r = cs * static_cast<float>(k);
             for (int ang = 0; ang < 8; ang++) {
-                float a = static_cast<float>(ang) * (TWO_PI / 8.0f);
-                Vec2 cand{ p.x + r * std::cos(a), p.z + r * std::sin(a) };
-                if (nav_->isWalkable(cand.x, cand.z)) { p = cand; return; }
+                float a = static_cast<float>(ang) * (bromath::TWO_PI / 8.0f);
+                bromath::Vec2 cand{ p.x + r * std::cos(a), p.y + r * std::sin(a) };
+                if (nav_->isWalkable(cand.x, cand.y)) { p = cand; return; }
             }
         }
     }
@@ -75,9 +74,9 @@ void TeamBelief::seed_uniform_(EnemyBelief& b) {
         std::uniform_real_distribution<float> uz(nav_->minZ(), nav_->maxZ());
         int tries = 0;
         while (static_cast<int>(b.particles.size()) < num_particles_ && tries < num_particles_ * 20) {
-            Vec2 p{ ux(rng_), uz(rng_) };
+            bromath::Vec2 p{ ux(rng_), uz(rng_) };
             tries++;
-            if (!nav_->isWalkable(p.x, p.z)) continue;
+            if (!nav_->isWalkable(p.x, p.y)) continue;
             b.particles.push_back({p, {0,0}, b.max_hp, 0.0f, 1.0f});
         }
         if (b.particles.empty()) {
@@ -93,19 +92,19 @@ void TeamBelief::seed_uniform_(EnemyBelief& b) {
     }
 }
 
-void TeamBelief::seed_around_(EnemyBelief& b, Vec2 center, float spread) {
+void TeamBelief::seed_around_(EnemyBelief& b, bromath::Vec2 center, float spread) {
     b.particles.clear();
     b.particles.reserve(num_particles_);
     for (int i = 0; i < num_particles_; i++) {
-        Vec2 p{ center.x + gaussian(rng_, 0.0f, spread),
-                center.z + gaussian(rng_, 0.0f, spread) };
+        bromath::Vec2 p{ center.x + gaussian(rng_, 0.0f, spread),
+                center.y + gaussian(rng_, 0.0f, spread) };
         clamp_to_nav_(p);
         b.particles.push_back({p, {0,0}, b.max_hp, 0.0f, 1.0f});
     }
 }
 
 void TeamBelief::register_enemy(int enemy_id, float max_hp,
-                                  const Vec2* initial_pos_prior) {
+                                  const bromath::Vec2* initial_pos_prior) {
     if (find_(enemy_id)) return;
     EnemyBelief b;
     b.enemy_id = enemy_id;
@@ -128,7 +127,7 @@ void TeamBelief::propagate(const World& world_for_geometry,
     // Build a list of "observer poses" for this team — the set of (pos, yaw)
     // from which FOV/LOS is computed. Particles that would be visible from
     // any of these but aren't in the *current* observation get pruned.
-    struct Observer { Vec2 pos; float yaw; };
+    struct Observer { bromath::Vec2 pos; float yaw; };
     std::vector<Observer> observers;
     observers.reserve(8);
     for (Agent* a : world_for_geometry.agents()) {
@@ -140,16 +139,16 @@ void TeamBelief::propagate(const World& world_for_geometry,
     const AABB* obs_ptr = obstacles.empty() ? nullptr : obstacles.data();
     const int   obs_n   = static_cast<int>(obstacles.size());
 
-    auto visible_from_team = [&](Vec2 p) {
+    auto visible_from_team = [&](bromath::Vec2 p) {
         for (auto& o : observers) {
             if (vis.max_range > 0.0f) {
-                float dx = p.x - o.pos.x, dz = p.z - o.pos.z;
+                float dx = p.x - o.pos.x, dz = p.y - o.pos.y;
                 if (dx*dx + dz*dz > vis.max_range * vis.max_range) continue;
             }
-            if (vis.fov_radians < TWO_PI - 1e-4f) {
-                float dx = p.x - o.pos.x, dz = p.z - o.pos.z;
+            if (vis.fov_radians < bromath::TWO_PI - 1e-4f) {
+                float dx = p.x - o.pos.x, dz = p.y - o.pos.y;
                 float angle = std::atan2(dx, -dz);
-                if (std::fabs(wrapAngle(angle - o.yaw)) > vis.fov_radians * 0.5f) continue;
+                if (std::fabs(bromath::wrapAngle(angle - o.yaw)) > vis.fov_radians * 0.5f) continue;
             }
             if (vis.check_los && !hasLineOfSight(o.pos, p, obs_ptr, obs_n)) continue;
             return true;
@@ -166,14 +165,14 @@ void TeamBelief::propagate(const World& world_for_geometry,
             float ax = gaussian(rng_, 0.0f, motion_.accel_std);
             float az = gaussian(rng_, 0.0f, motion_.accel_std);
             p.vel.x += ax * dt;
-            p.vel.z += az * dt;
-            float vmag = std::sqrt(p.vel.x*p.vel.x + p.vel.z*p.vel.z);
+            p.vel.y += az * dt;
+            float vmag = std::sqrt(p.vel.x*p.vel.x + p.vel.y*p.vel.y);
             if (vmag > motion_.max_speed) {
                 float s = motion_.max_speed / vmag;
-                p.vel.x *= s; p.vel.z *= s;
+                p.vel.x *= s; p.vel.y *= s;
             }
             p.pos.x += p.vel.x * dt;
-            p.pos.z += p.vel.z * dt;
+            p.pos.y += p.vel.y * dt;
             clamp_to_nav_(p.pos);
         }
 
@@ -226,8 +225,8 @@ void TeamBelief::update(const obs::TeamObservation& o) {
             // reseed cloud around the last-seen pose with some spread.
             if (b->visible) {
                 // Transitioning from visible to hidden: spread.
-                Vec2 center = b->particles.empty()
-                    ? Vec2{0,0}
+                bromath::Vec2 center = b->particles.empty()
+                    ? bromath::Vec2{0,0}
                     : b->particles.front().pos;
                 seed_around_(*b, center, motion_.spread_on_loss);
             }
@@ -257,9 +256,9 @@ std::unordered_map<int, EnemyParticle> TeamBelief::mean() const {
         double sw = 0;
         for (const auto& p : b.particles) {
             sx += p.pos.x * p.weight;
-            sz += p.pos.z * p.weight;
+            sz += p.pos.y * p.weight;
             svx += p.vel.x * p.weight;
-            svz += p.vel.z * p.weight;
+            svz += p.vel.y * p.weight;
             shp += p.hp * p.weight;
             sh += p.heading * p.weight;
             sw += p.weight;

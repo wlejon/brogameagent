@@ -6,10 +6,10 @@
 namespace brogameagent {
 
 // 2D ray vs AABB (XZ plane). Returns fraction [0,1] of hit, or -1.
-static float rayVsAABB2D(Vec2 origin, Vec2 dir, float len, const AABB& box) {
+static float rayVsAABB2D(bromath::Vec2 origin, bromath::Vec2 dir, float len, const AABB& box) {
     float invLen = 1.0f / len;
     float dx = dir.x * invLen;
-    float dz = dir.z * invLen;
+    float dz = dir.y * invLen;
 
     float x0 = box.cx - box.hw, x1 = box.cx + box.hw;
     float z0 = box.cz - box.hd, z1 = box.cz + box.hd;
@@ -28,10 +28,10 @@ static float rayVsAABB2D(Vec2 origin, Vec2 dir, float len, const AABB& box) {
     }
 
     if (std::abs(dz) < 1e-9f) {
-        if (origin.z < z0 || origin.z > z1) return -1;
+        if (origin.y < z0 || origin.y > z1) return -1;
     } else {
-        float t1 = (z0 - origin.z) / dz;
-        float t2 = (z1 - origin.z) / dz;
+        float t1 = (z0 - origin.y) / dz;
+        float t2 = (z1 - origin.y) / dz;
         if (t1 > t2) std::swap(t1, t2);
         tmin = std::max(tmin, t1);
         tmax = std::min(tmax, t2);
@@ -41,26 +41,26 @@ static float rayVsAABB2D(Vec2 origin, Vec2 dir, float len, const AABB& box) {
     return tmin;
 }
 
-bool canSee(Vec2 from, Vec2 to,
+bool canSee(bromath::Vec2 from, bromath::Vec2 to,
             float facingYaw, float fovRadians, float maxRange,
             const AABB* obstacles, int count)
 {
-    Vec2 diff = to - from;
-    float dist = diff.length();
+    bromath::Vec2 diff = to - from;
+    float dist = bromath::vlen(diff);
     if (dist < 0.001f) return true;
     if (maxRange > 0 && dist > maxRange) return false;
 
-    // Yaw to target (same convention: atan2(dx, -dz), 0 = -Z)
-    float targetYaw = std::atan2(diff.x, -diff.z);
-    float delta = std::abs(wrapAngle(targetYaw - facingYaw));
+    // Yaw to target (same convention: atan2(dx, -dy), 0 = -Y in Vec2 = -Z in world)
+    float targetYaw = std::atan2(diff.x, -diff.y);
+    float delta = std::abs(bromath::wrapAngle(targetYaw - facingYaw));
     if (delta > fovRadians * 0.5f) return false;
 
     return hasLineOfSight(from, to, obstacles, count);
 }
 
-bool hasLineOfSight(Vec2 from, Vec2 to, const AABB* obstacles, int count) {
-    Vec2 diff = to - from;
-    float len = diff.length();
+bool hasLineOfSight(bromath::Vec2 from, bromath::Vec2 to, const AABB* obstacles, int count) {
+    bromath::Vec2 diff = to - from;
+    float len = bromath::vlen(diff);
     if (len < 0.001f) return true;
 
     for (int i = 0; i < count; i++) {

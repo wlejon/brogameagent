@@ -104,9 +104,9 @@ void Recorder::recordFrame(uint32_t stepIdx, float elapsed, const World& world) 
         st.id             = a->unit().id;
         st.x              = a->x();
         st.z              = a->z();
-        Vec2 v            = a->velocity();
+        bromath::Vec2 v   = a->velocity();
         st.vx             = v.x;
-        st.vz             = v.z;
+        st.vz             = v.y;
         st.yaw            = a->yaw();
         st.aimYaw         = a->aimYaw();
         st.hp             = a->unit().hp;

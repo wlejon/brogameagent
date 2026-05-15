@@ -17,8 +17,8 @@ namespace obs {
 struct AgentObservation {
     int   id = 0;
     int   team_id = 0;
-    Vec2  pos{};
-    Vec2  vel{};
+    bromath::Vec2  pos{};
+    bromath::Vec2  vel{};
     float hp = 0.0f;
     float max_hp = 0.0f;
     float heading = 0.0f;

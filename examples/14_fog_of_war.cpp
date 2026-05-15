@@ -63,7 +63,7 @@ int main() {
                                /*accel_std*/ 4.0f,
                                /*spread_on_loss*/ 3.0f },
         /*rng_seed=*/0xD00DU);
-    Vec2 prior_center{ 6, 0 };
+    bromath::Vec2 prior_center{ 6, 0 };
     team_belief->register_enemy(enemy.unit().id, enemy.unit().maxHp, &prior_center);
 
     // Fold the very first observation in (enemy is hidden — wall occludes).

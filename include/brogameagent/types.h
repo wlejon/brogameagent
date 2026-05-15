@@ -1,53 +1,26 @@
 #pragma once
 
-#include <cmath>
+// Domain types unique to brogameagent. General-purpose math (Vec2, angle
+// wrapping, scalar constants) lives in bromath — include "bromath/bromath.h"
+// and use bromath:: types directly. brogameagent never re-exports those.
+
+#include <bromath/bromath.h>
 
 namespace brogameagent {
 
-struct Vec2 {
-    float x = 0, z = 0;
-
-    Vec2() = default;
-    Vec2(float x, float z) : x(x), z(z) {}
-
-    Vec2 operator+(const Vec2& o) const { return {x + o.x, z + o.z}; }
-    Vec2 operator-(const Vec2& o) const { return {x - o.x, z - o.z}; }
-    Vec2 operator*(float s) const { return {x * s, z * s}; }
-
-    float dot(const Vec2& o) const { return x * o.x + z * o.z; }
-    float lengthSq() const { return x * x + z * z; }
-    float length() const { return std::sqrt(x * x + z * z); }
-    Vec2 normalized() const {
-        float len = length();
-        if (len < 0.0001f) return {0, 0};
-        return {x / len, z / len};
-    }
-};
-
+/// Axis-aligned bounding box on the ground plane, in CENTER + HALF-EXTENTS form.
+/// Kept local (not bromath::AABB2 which is min/max) because the perception
+/// ray-vs-AABB and the navgrid obstacle marker both consume centre+half-extents
+/// directly — converting would just push the same math one layer up.
 struct AABB {
     float cx, cz;   // center
     float hw, hd;    // half-width (x), half-depth (z)
 };
 
+/// Yaw/pitch aim solution (radians, FPS convention: yaw=0 faces -Z/-Y).
 struct AimResult {
     float yaw;
     float pitch;
 };
-
-/// Wrap an angle (radians) into [-pi, pi].
-inline float wrapAngle(float a) {
-    constexpr float TWO_PI     = 6.28318530717958647692f;
-    constexpr float PI         = 3.14159265358979323846f;
-    constexpr float INV_TWO_PI = 1.0f / TWO_PI;
-    // Equivalent to fmod(a + PI, TWO_PI) - PI but with floor-based reduction
-    // (no fmod libcall). For x = a + PI:  x mod TWO_PI  =  x - TWO_PI*floor(x/TWO_PI).
-    const float x = a + PI;
-    return x - TWO_PI * std::floor(x * INV_TWO_PI) - PI;
-}
-
-/// Shortest signed delta from `from` to `to`, in [-pi, pi].
-inline float angleDelta(float from, float to) {
-    return wrapAngle(to - from);
-}
 
 } // namespace brogameagent

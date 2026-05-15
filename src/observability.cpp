@@ -39,21 +39,20 @@ bool team_can_see(const World& world, int team, const Agent& target,
     for (Agent* a : world.agents()) {
         if (!a->unit().alive()) continue;
         if (a->unit().teamId != team) continue;
-        Vec2 from{ a->x(), a->z() };
-        Vec2 to  { target.x(), target.z() };
+        bromath::Vec2 from{ a->x(), a->z() };
+        bromath::Vec2 to  { target.x(), target.z() };
 
         if (cfg.max_range > 0.0f) {
             float dx = to.x - from.x;
-            float dz = to.z - from.z;
+            float dz = to.y - from.y;
             if (dx * dx + dz * dz > cfg.max_range * cfg.max_range) continue;
         }
         // FOV: treat >= 2π as "omniscient cone" and skip the angular test.
-        const float TWO_PI = 6.28318530717958647692f;
-        if (cfg.fov_radians < TWO_PI - 1e-4f) {
+        if (cfg.fov_radians < bromath::TWO_PI - 1e-4f) {
             float dx = to.x - from.x;
-            float dz = to.z - from.z;
+            float dz = to.y - from.y;
             float angle_to = std::atan2(dx, -dz);
-            float delta = std::fabs(wrapAngle(angle_to - a->yaw()));
+            float delta = std::fabs(bromath::wrapAngle(angle_to - a->yaw()));
             if (delta > cfg.fov_radians * 0.5f) continue;
         }
         if (cfg.check_los && !hasLineOfSight(from, to, obs_ptr, obs_n)) continue;

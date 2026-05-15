@@ -155,11 +155,11 @@ void Agent::integrate_(float desiredVx, float desiredVz, float dt) {
     if (speedSq > 1e-6f) {
         float desiredYaw = std::atan2(vx_, -vz_);
         if (maxTurnRate_ > 0.0f) {
-            float delta = angleDelta(yaw_, desiredYaw);
+            float delta = bromath::angleDelta(yaw_, desiredYaw);
             float maxStep = maxTurnRate_ * dt;
             if (delta > maxStep)       delta = maxStep;
             else if (delta < -maxStep) delta = -maxStep;
-            yaw_ = wrapAngle(yaw_ + delta);
+            yaw_ = bromath::wrapAngle(yaw_ + delta);
         } else {
             yaw_ = desiredYaw;
         }
@@ -206,7 +206,7 @@ void Agent::update(float dt) {
         return;
     }
 
-    Vec2 pos{x_, z_};
+    bromath::Vec2 pos{x_, z_};
     SteeringOutput steer = followPath(pos, path_, waypointIdx_, radius_ * 2.0f);
     integrate_(steer.fx * speed_, steer.fz * speed_, dt);
 }
@@ -236,7 +236,7 @@ void Agent::applyAction(const AgentAction& action, float dt) {
     float ms = unit_.effectiveMoveSpeed();
     integrate_(worldDx * ms, worldDz * ms, dt);
 
-    aimYaw_ = wrapAngle(action.aimYaw);
+    aimYaw_ = bromath::wrapAngle(action.aimYaw);
     aimPitch_ = action.aimPitch;
 
     unit_.tickCooldowns(dt);
@@ -278,7 +278,7 @@ void Agent::applySnapshot(const AgentSnapshot& s) {
 
 void Agent::recomputePath() {
     if (!navGrid_) {
-        path_ = {Vec2{targetX_, targetZ_}};
+        path_ = {bromath::Vec2{targetX_, targetZ_}};
         waypointIdx_ = 0;
         lastPathTargetX_ = targetX_;
         lastPathTargetZ_ = targetZ_;
