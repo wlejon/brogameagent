@@ -36,11 +36,16 @@ if(BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL)
 endif()
 
 # --- bromath (shared header-only math, sibling repo) ---
-set(BROMATH_DIR "${CMAKE_SOURCE_DIR}/../bromath" CACHE PATH "bromath sibling")
-if(EXISTS "${BROMATH_DIR}/CMakeLists.txt")
-    add_subdirectory("${BROMATH_DIR}" "${CMAKE_BINARY_DIR}/bromath" EXCLUDE_FROM_ALL)
-else()
-    message(FATAL_ERROR "bromath not found at ${BROMATH_DIR}")
+# Guard against double-add — when consumed as a sibling lib from another
+# parent project (bro, etc.) the parent or another sibling may have already
+# added bromath. First-loader wins.
+if(NOT TARGET bromath)
+    set(BROMATH_DIR "${CMAKE_SOURCE_DIR}/../bromath" CACHE PATH "bromath sibling")
+    if(EXISTS "${BROMATH_DIR}/CMakeLists.txt")
+        add_subdirectory("${BROMATH_DIR}" "${CMAKE_BINARY_DIR}/bromath" EXCLUDE_FROM_ALL)
+    else()
+        message(FATAL_ERROR "bromath not found at ${BROMATH_DIR}")
+    endif()
 endif()
 if(BROGAMEAGENT_WITH_CUDA)
     # Default to "native" (auto-detect compiling host's GPU; CMake 3.24+).
