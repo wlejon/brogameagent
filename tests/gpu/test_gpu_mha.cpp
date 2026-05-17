@@ -2,13 +2,13 @@
 
 #include "parity_helpers.h"
 
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/ops.h>
 #include <brogameagent/nn/multi_head_attention.h>
 
 using namespace bga_parity;
 using brogameagent::nn::MultiHeadAttention;
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace {
 
@@ -47,8 +47,8 @@ void run_mha(int K, int D, int H, uint64_t seed, const std::vector<float>* mask)
 
     // GPU path.
     GpuTensor gX, gWq, gWk, gWv, gWo;
-    upload(X, gX);
-    upload(Wq, gWq); upload(Wk, gWk); upload(Wv, gWv); upload(Wo, gWo);
+    upload_to(X, gX);
+    upload_to(Wq, gWq); upload_to(Wk, gWk); upload_to(Wv, gWv); upload_to(Wo, gWo);
 
     GpuTensor gQh, gKh, gVh, gAttnh, gYconcat, gO;
     const int dh = D / H;
@@ -57,19 +57,19 @@ void run_mha(int K, int D, int H, uint64_t seed, const std::vector<float>* mask)
 
     auto d_mask_buf = upload_mask(mask);
     float* d_mask = d_mask_buf.device_ptr();
-    brogameagent::nn::gpu::mha_forward_gpu(
+    brotensor::mha_forward_gpu(
         gX, gWq, gWk, gWv, gWo, d_mask, H,
         gQh, gKh, gVh, gAttnh, gYconcat, gO);
 
     Tensor O_gpu = download_to_host(gO);
 
     GpuTensor gdO, gdX, gdWq, gdWk, gdWv, gdWo;
-    upload(dO, gdO);
+    upload_to(dO, gdO);
     gdX.resize(K, D);
-    upload(dWq_init, gdWq); upload(dWk_init, gdWk);
-    upload(dWv_init, gdWv); upload(dWo_init, gdWo);
+    upload_to(dWq_init, gdWq); upload_to(dWk_init, gdWk);
+    upload_to(dWv_init, gdWv); upload_to(dWo_init, gdWo);
 
-    brogameagent::nn::gpu::mha_backward_gpu(
+    brotensor::mha_backward_gpu(
         gdO, gX, gQh, gKh, gVh, gAttnh, gYconcat,
         gWq, gWk, gWv, gWo, d_mask, H,
         gdX, gdWq, gdWk, gdWv, gdWo);

@@ -6,8 +6,8 @@
 #include "multi_head_attention.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_GPU
-#include "gpu/tensor.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/tensor.h>
 #endif
 
 #include <cstdint>
@@ -63,18 +63,18 @@ public:
     void forward(const Tensor& X, const float* mask, Tensor& Y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_GPU
-    void forward(const gpu::GpuTensor& X, const float* mask_dev,
-                 gpu::GpuTensor& Y);
-    void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+#ifdef BROTENSOR_HAS_GPU
+    void forward(const brotensor::GpuTensor& X, const float* mask_dev,
+                 brotensor::GpuTensor& Y);
+    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
 
     // Inference-only batched forward. Input/output is (B*K, D) flat (each
     // contiguous K-row chunk is one batch element's tokens). mask_R_dev
     // is (B*K,) or null. Composes the inference-batched RowLN, MHA, and
     // FF forwards with full elementwise residual adds — no host syncs.
-    void forward_inference_batched(const gpu::GpuTensor& X_RD,
+    void forward_inference_batched(const brotensor::GpuTensor& X_RD,
                                     const float* mask_R_dev,
-                                    gpu::GpuTensor& Y_RD,
+                                    brotensor::GpuTensor& Y_RD,
                                     int B, int K);
 #endif
 
@@ -118,13 +118,13 @@ public:
         float eps = 1e-5f;
 
         Device device_ = Device::CPU;
-#ifdef BGA_HAS_GPU
-        gpu::GpuTensor gamma_g, beta_g;
-        gpu::GpuTensor dGamma_g, dBeta_g;
-        gpu::GpuTensor vGamma_g, vBeta_g;
-        gpu::GpuTensor mGamma_g, mBeta_g;
-        gpu::GpuTensor vAGamma_g, vABeta_g;
-        gpu::GpuTensor xhat_g;  // (K, D)
+#ifdef BROTENSOR_HAS_GPU
+        brotensor::GpuTensor gamma_g, beta_g;
+        brotensor::GpuTensor dGamma_g, dBeta_g;
+        brotensor::GpuTensor vGamma_g, vBeta_g;
+        brotensor::GpuTensor mGamma_g, mBeta_g;
+        brotensor::GpuTensor vAGamma_g, vABeta_g;
+        brotensor::GpuTensor xhat_g;  // (K, D)
 #endif
 
         void init(int D, float eps);
@@ -135,15 +135,15 @@ public:
         // X, Y both (K, D).
         void forward(const Tensor& X, Tensor& Y);
         void backward(const Tensor& dY, Tensor& dX);
-#ifdef BGA_HAS_GPU
-        void forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y);
-        void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+#ifdef BROTENSOR_HAS_GPU
+        void forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y);
+        void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
 
         // Inference-only batched forward over R independent rows of length D
         // (R = X_RD.rows). Uses layernorm_forward_inference_batched_gpu —
         // no host syncs, no caches.
-        void forward_inference_batched(const gpu::GpuTensor& X_RD,
-                                        gpu::GpuTensor& Y_RD);
+        void forward_inference_batched(const brotensor::GpuTensor& X_RD,
+                                        brotensor::GpuTensor& Y_RD);
 #endif
         void save_to(std::vector<uint8_t>& out) const;
         void load_from(const uint8_t* data, size_t& offset, size_t size);
@@ -169,10 +169,10 @@ private:
     bool has_mask_ = false;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // GPU-side scratch tensors mirroring the host caches above. Only the
     // ones actually consulted by backward are kept around.
-    gpu::GpuTensor LN1_out_g_, MHA_out_g_, A_cache_g_, LN2_out_g_, FF_out_g_;
+    brotensor::GpuTensor LN1_out_g_, MHA_out_g_, A_cache_g_, LN2_out_g_, FF_out_g_;
 #endif
 };
 

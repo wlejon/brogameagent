@@ -1,9 +1,10 @@
 #include "brogameagent/nn/feedforward.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_GPU
-#include "brogameagent/nn/gpu/ops.h"
-#include "brogameagent/nn/gpu/runtime.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/ops.h>
+#include <brotensor/runtime.h>
+#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -113,8 +114,8 @@ void FeedForward::backward(const Tensor& dY, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_GPU
-void FeedForward::forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y) {
+#ifdef BROTENSOR_HAS_GPU
+void FeedForward::forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y) {
     assert(device_ == Device::GPU);
     const int K = X.rows;
     const int D = X.cols;
@@ -128,112 +129,112 @@ void FeedForward::forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y) {
 
     // Per-row linear forward (loop over K rows, view each as a (D,1)/(df,1)).
     for (int i = 0; i < K; ++i) {
-        gpu::GpuTensor x_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor x_row = brotensor::GpuTensor::view(
             X.data + static_cast<size_t>(i) * D, D, 1);
-        gpu::GpuTensor h_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
             H_pre_g_.data + static_cast<size_t>(i) * df_, df_, 1);
-        gpu::linear_forward_gpu(W1_g_, b1_g_, x_row, h_row);
+        brotensor::linear_forward_gpu(W1_g_, b1_g_, x_row, h_row);
     }
     // Flat ReLU over (K * df) entries.
-    gpu::relu_forward_gpu(H_pre_g_, H_post_g_);
+    brotensor::relu_forward_gpu(H_pre_g_, H_post_g_);
 
     // Layer 2 per-row.
     for (int i = 0; i < K; ++i) {
-        gpu::GpuTensor h_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
             H_post_g_.data + static_cast<size_t>(i) * df_, df_, 1);
-        gpu::GpuTensor y_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor y_row = brotensor::GpuTensor::view(
             Y.data + static_cast<size_t>(i) * D, D, 1);
-        gpu::linear_forward_gpu(W2_g_, b2_g_, h_row, y_row);
+        brotensor::linear_forward_gpu(W2_g_, b2_g_, h_row, y_row);
     }
 }
 
-void FeedForward::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
+void FeedForward::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
     assert(device_ == Device::GPU);
     const int K = X_cache_g_.rows;
     const int D = X_cache_g_.cols;
     if (dX.rows != K || dX.cols != D) dX.resize(K, D);
 
     // dHpost (K, df), dHpre (K, df) — temporaries.
-    gpu::GpuTensor dHpost(K, df_);
-    gpu::GpuTensor dHpre(K, df_);
+    brotensor::GpuTensor dHpost(K, df_);
+    brotensor::GpuTensor dHpre(K, df_);
 
     // Layer 2 backward, per-row. dHpost rows are *overwritten* by linear_backward.
     for (int i = 0; i < K; ++i) {
-        gpu::GpuTensor h_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
             H_post_g_.data + static_cast<size_t>(i) * df_, df_, 1);
-        gpu::GpuTensor dy_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor dy_row = brotensor::GpuTensor::view(
             const_cast<float*>(dY.data) + static_cast<size_t>(i) * D, D, 1);
-        gpu::GpuTensor dHpost_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor dHpost_row = brotensor::GpuTensor::view(
             dHpost.data + static_cast<size_t>(i) * df_, df_, 1);
-        gpu::linear_backward_gpu(W2_g_, h_row, dy_row,
+        brotensor::linear_backward_gpu(W2_g_, h_row, dy_row,
                                  dHpost_row, dW2_g_, dB2_g_);
     }
 
     // ReLU backward over flat (K * df).
-    gpu::relu_backward_gpu(H_pre_g_, dHpost, dHpre);
+    brotensor::relu_backward_gpu(H_pre_g_, dHpost, dHpre);
 
     // Layer 1 backward, per-row. dX rows overwritten.
     for (int i = 0; i < K; ++i) {
-        gpu::GpuTensor x_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor x_row = brotensor::GpuTensor::view(
             X_cache_g_.data + static_cast<size_t>(i) * D, D, 1);
-        gpu::GpuTensor dHpre_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor dHpre_row = brotensor::GpuTensor::view(
             dHpre.data + static_cast<size_t>(i) * df_, df_, 1);
-        gpu::GpuTensor dX_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor dX_row = brotensor::GpuTensor::view(
             dX.data + static_cast<size_t>(i) * D, D, 1);
-        gpu::linear_backward_gpu(W1_g_, x_row, dHpre_row,
+        brotensor::linear_backward_gpu(W1_g_, x_row, dHpre_row,
                                  dX_row, dW1_g_, dB1_g_);
     }
 }
 
-void FeedForward::forward_inference_batched(const gpu::GpuTensor& X_RD,
-                                            gpu::GpuTensor& Y_RD) {
+void FeedForward::forward_inference_batched(const brotensor::GpuTensor& X_RD,
+                                            brotensor::GpuTensor& Y_RD) {
     assert(device_ == Device::GPU);
     const int R = X_RD.rows;
     if (Y_RD.rows != R || Y_RD.cols != d_) Y_RD.resize(R, d_);
     if (R == 0) return;
-    gpu::GpuTensor H_pre (R, df_);
-    gpu::GpuTensor H_post(R, df_);
-    gpu::linear_forward_batched_gpu(W1_g_, b1_g_, X_RD, H_pre);
-    gpu::relu_forward_batched_gpu(H_pre, H_post);
-    gpu::linear_forward_batched_gpu(W2_g_, b2_g_, H_post, Y_RD);
+    brotensor::GpuTensor H_pre (R, df_);
+    brotensor::GpuTensor H_post(R, df_);
+    brotensor::linear_forward_batched_gpu(W1_g_, b1_g_, X_RD, H_pre);
+    brotensor::relu_forward_batched_gpu(H_pre, H_post);
+    brotensor::linear_forward_batched_gpu(W2_g_, b2_g_, H_post, Y_RD);
 }
 #endif
 
 void FeedForward::to(Device d) {
     if (d == device_) return;
     device_require_cuda("FeedForward");
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (d == Device::GPU) {
-        gpu::upload(W1_, W1_g_); gpu::upload(b1_, b1_g_);
-        gpu::upload(W2_, W2_g_); gpu::upload(b2_, b2_g_);
-        gpu::upload(dW1_, dW1_g_); gpu::upload(dB1_, dB1_g_);
-        gpu::upload(dW2_, dW2_g_); gpu::upload(dB2_, dB2_g_);
-        gpu::upload(vW1_, vW1_g_); gpu::upload(vB1_, vB1_g_);
-        gpu::upload(vW2_, vW2_g_); gpu::upload(vB2_, vB2_g_);
-        gpu::upload(mW1_, mW1_g_); gpu::upload(mB1_, mB1_g_);
-        gpu::upload(mW2_, mW2_g_); gpu::upload(mB2_, mB2_g_);
-        gpu::upload(vAW1_, vAW1_g_); gpu::upload(vAB1_, vAB1_g_);
-        gpu::upload(vAW2_, vAW2_g_); gpu::upload(vAB2_, vAB2_g_);
+        upload_to(W1_, W1_g_); upload_to(b1_, b1_g_);
+        upload_to(W2_, W2_g_); upload_to(b2_, b2_g_);
+        upload_to(dW1_, dW1_g_); upload_to(dB1_, dB1_g_);
+        upload_to(dW2_, dW2_g_); upload_to(dB2_, dB2_g_);
+        upload_to(vW1_, vW1_g_); upload_to(vB1_, vB1_g_);
+        upload_to(vW2_, vW2_g_); upload_to(vB2_, vB2_g_);
+        upload_to(mW1_, mW1_g_); upload_to(mB1_, mB1_g_);
+        upload_to(mW2_, mW2_g_); upload_to(mB2_, mB2_g_);
+        upload_to(vAW1_, vAW1_g_); upload_to(vAB1_, vAB1_g_);
+        upload_to(vAW2_, vAW2_g_); upload_to(vAB2_, vAB2_g_);
         device_ = Device::GPU;
     } else {
-        gpu::download(W1_g_, W1_); gpu::download(b1_g_, b1_);
-        gpu::download(W2_g_, W2_); gpu::download(b2_g_, b2_);
-        gpu::download(dW1_g_, dW1_); gpu::download(dB1_g_, dB1_);
-        gpu::download(dW2_g_, dW2_); gpu::download(dB2_g_, dB2_);
-        gpu::download(vW1_g_, vW1_); gpu::download(vB1_g_, vB1_);
-        gpu::download(vW2_g_, vW2_); gpu::download(vB2_g_, vB2_);
-        gpu::download(mW1_g_, mW1_); gpu::download(mB1_g_, mB1_);
-        gpu::download(mW2_g_, mW2_); gpu::download(mB2_g_, mB2_);
-        gpu::download(vAW1_g_, vAW1_); gpu::download(vAB1_g_, vAB1_);
-        gpu::download(vAW2_g_, vAW2_); gpu::download(vAB2_g_, vAB2_);
-        gpu::cuda_sync();
+        download_to(W1_g_, W1_); download_to(b1_g_, b1_);
+        download_to(W2_g_, W2_); download_to(b2_g_, b2_);
+        download_to(dW1_g_, dW1_); download_to(dB1_g_, dB1_);
+        download_to(dW2_g_, dW2_); download_to(dB2_g_, dB2_);
+        download_to(vW1_g_, vW1_); download_to(vB1_g_, vB1_);
+        download_to(vW2_g_, vW2_); download_to(vB2_g_, vB2_);
+        download_to(mW1_g_, mW1_); download_to(mB1_g_, mB1_);
+        download_to(mW2_g_, mW2_); download_to(mB2_g_, mB2_);
+        download_to(vAW1_g_, vAW1_); download_to(vAB1_g_, vAB1_);
+        download_to(vAW2_g_, vAW2_); download_to(vAB2_g_, vAB2_);
+        brotensor::cuda_sync();
         device_ = Device::CPU;
     }
 #endif
 }
 
 void FeedForward::zero_grad() {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         dW1_g_.zero(); dB1_g_.zero(); dW2_g_.zero(); dB2_g_.zero();
         return;
@@ -253,12 +254,12 @@ static void sgd_buf_(Tensor& W, Tensor& vW, const Tensor& dW,
 }
 
 void FeedForward::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::sgd_step_gpu(W1_g_, dW1_g_, vW1_g_, lr, momentum);
-        gpu::sgd_step_gpu(b1_g_, dB1_g_, vB1_g_, lr, momentum);
-        gpu::sgd_step_gpu(W2_g_, dW2_g_, vW2_g_, lr, momentum);
-        gpu::sgd_step_gpu(b2_g_, dB2_g_, vB2_g_, lr, momentum);
+        brotensor::sgd_step_gpu(W1_g_, dW1_g_, vW1_g_, lr, momentum);
+        brotensor::sgd_step_gpu(b1_g_, dB1_g_, vB1_g_, lr, momentum);
+        brotensor::sgd_step_gpu(W2_g_, dW2_g_, vW2_g_, lr, momentum);
+        brotensor::sgd_step_gpu(b2_g_, dB2_g_, vB2_g_, lr, momentum);
         return;
     }
 #endif
@@ -269,12 +270,12 @@ void FeedForward::sgd_step(float lr, float momentum) {
 }
 
 void FeedForward::adam_step(float lr, float beta1, float beta2, float eps, int step) {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::adam_step_gpu(W1_g_, dW1_g_, mW1_g_, vAW1_g_, lr, beta1, beta2, eps, step);
-        gpu::adam_step_gpu(b1_g_, dB1_g_, mB1_g_, vAB1_g_, lr, beta1, beta2, eps, step);
-        gpu::adam_step_gpu(W2_g_, dW2_g_, mW2_g_, vAW2_g_, lr, beta1, beta2, eps, step);
-        gpu::adam_step_gpu(b2_g_, dB2_g_, mB2_g_, vAB2_g_, lr, beta1, beta2, eps, step);
+        brotensor::adam_step_gpu(W1_g_, dW1_g_, mW1_g_, vAW1_g_, lr, beta1, beta2, eps, step);
+        brotensor::adam_step_gpu(b1_g_, dB1_g_, mB1_g_, vAB1_g_, lr, beta1, beta2, eps, step);
+        brotensor::adam_step_gpu(W2_g_, dW2_g_, mW2_g_, vAW2_g_, lr, beta1, beta2, eps, step);
+        brotensor::adam_step_gpu(b2_g_, dB2_g_, mB2_g_, vAB2_g_, lr, beta1, beta2, eps, step);
         return;
     }
 #endif
@@ -285,12 +286,12 @@ void FeedForward::adam_step(float lr, float beta1, float beta2, float eps, int s
 }
 
 void FeedForward::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         auto* self = const_cast<FeedForward*>(this);
-        gpu::download(W1_g_, self->W1_); gpu::download(b1_g_, self->b1_);
-        gpu::download(W2_g_, self->W2_); gpu::download(b2_g_, self->b2_);
-        gpu::cuda_sync();
+        download_to(W1_g_, self->W1_); download_to(b1_g_, self->b1_);
+        download_to(W2_g_, self->W2_); download_to(b2_g_, self->b2_);
+        brotensor::cuda_sync();
     }
 #endif
     tensor_write(W1_, out); tensor_write(b1_, out);
@@ -314,18 +315,18 @@ void FeedForward::load_from(const uint8_t* data, size_t& offset, size_t size) {
     vAW2_.resize(d_, df_); vAB2_.resize(d_, 1);
     mW1_.zero(); mB1_.zero(); mW2_.zero(); mB2_.zero();
     vAW1_.zero(); vAB1_.zero(); vAW2_.zero(); vAB2_.zero();
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::upload(W1_, W1_g_); gpu::upload(b1_, b1_g_);
-        gpu::upload(W2_, W2_g_); gpu::upload(b2_, b2_g_);
-        gpu::upload(dW1_, dW1_g_); gpu::upload(dB1_, dB1_g_);
-        gpu::upload(dW2_, dW2_g_); gpu::upload(dB2_, dB2_g_);
-        gpu::upload(vW1_, vW1_g_); gpu::upload(vB1_, vB1_g_);
-        gpu::upload(vW2_, vW2_g_); gpu::upload(vB2_, vB2_g_);
-        gpu::upload(mW1_, mW1_g_); gpu::upload(mB1_, mB1_g_);
-        gpu::upload(mW2_, mW2_g_); gpu::upload(mB2_, mB2_g_);
-        gpu::upload(vAW1_, vAW1_g_); gpu::upload(vAB1_, vAB1_g_);
-        gpu::upload(vAW2_, vAW2_g_); gpu::upload(vAB2_, vAB2_g_);
+        upload_to(W1_, W1_g_); upload_to(b1_, b1_g_);
+        upload_to(W2_, W2_g_); upload_to(b2_, b2_g_);
+        upload_to(dW1_, dW1_g_); upload_to(dB1_, dB1_g_);
+        upload_to(dW2_, dW2_g_); upload_to(dB2_, dB2_g_);
+        upload_to(vW1_, vW1_g_); upload_to(vB1_, vB1_g_);
+        upload_to(vW2_, vW2_g_); upload_to(vB2_, vB2_g_);
+        upload_to(mW1_, mW1_g_); upload_to(mB1_, mB1_g_);
+        upload_to(mW2_, mW2_g_); upload_to(mB2_, mB2_g_);
+        upload_to(vAW1_, vAW1_g_); upload_to(vAB1_, vAB1_g_);
+        upload_to(vAW2_, vAW2_g_); upload_to(vAB2_, vAB2_g_);
     }
 #endif
 }

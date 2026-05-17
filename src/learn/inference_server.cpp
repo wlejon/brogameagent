@@ -1,9 +1,10 @@
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
 
 #include "brogameagent/learn/inference_server.h"
 
-#include "brogameagent/nn/gpu/runtime.h"
-#include "brogameagent/nn/gpu/tensor.h"
+#include <brotensor/runtime.h>
+#include <brotensor/tensor.h>
+#include <brogameagent/nn/gpu_glue.h>
 #include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/tensor.h"
 
@@ -13,7 +14,6 @@
 
 namespace brogameagent::learn {
 
-namespace gpu = brogameagent::nn::gpu;
 using brogameagent::nn::Tensor;
 
 BatchedInferenceServer::BatchedInferenceServer(BatchedNet* net, Config cfg)
@@ -99,7 +99,7 @@ void BatchedInferenceServer::worker_loop_() {
     Tensor host_X;       // (B, in_dim)
     Tensor host_logits;  // (B, num_actions)
     Tensor host_values;  // (B, 1)
-    gpu::GpuTensor X_BD, logits_BD, values_B1;
+    brotensor::GpuTensor X_BD, logits_BD, values_B1;
 
     std::vector<std::unique_ptr<Pending>> batch;
     batch.reserve(cfg_.max_batch_size);
@@ -153,11 +153,11 @@ void BatchedInferenceServer::worker_loop_() {
         }
 
         try {
-            gpu::upload(host_X, X_BD);
+            upload_to(host_X, X_BD);
             net_->forward_batched(X_BD, logits_BD, values_B1);
-            gpu::download(logits_BD, host_logits);
-            gpu::download(values_B1, host_values);
-            gpu::cuda_sync();
+            download_to(logits_BD, host_logits);
+            download_to(values_B1, host_values);
+            brotensor::cuda_sync();
 
             for (int b = 0; b < B; ++b) {
                 EvalResult r;
@@ -189,4 +189,4 @@ void BatchedInferenceServer::run_batch_(
 
 } // namespace brogameagent::learn
 
-#endif // BGA_HAS_GPU
+#endif // BROTENSOR_HAS_GPU

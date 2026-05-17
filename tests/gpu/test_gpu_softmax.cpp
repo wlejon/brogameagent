@@ -2,12 +2,12 @@
 
 #include "parity_helpers.h"
 
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/ops.h>
 #include <brogameagent/nn/ops.h>
 
 using namespace bga_parity;
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace {
 
@@ -24,16 +24,16 @@ void run_softmax(int n, uint64_t seed, const std::vector<float>* mask) {
 
     // GPU.
     GpuTensor glogits, gprobs, gdProbs, gdLogits;
-    upload(logits, glogits);
-    upload(dProbs, gdProbs);
+    upload_to(logits, glogits);
+    upload_to(dProbs, gdProbs);
     gprobs.resize(n, 1);
     gdLogits.resize(n, 1);
 
     auto d_mask_buf = upload_mask(mask);
     float* d_mask = d_mask_buf.device_ptr();
-    brogameagent::nn::gpu::softmax_forward_gpu(glogits, gprobs, d_mask);
+    brotensor::softmax_forward_gpu(glogits, gprobs, d_mask);
     Tensor probs_gpu = download_to_host(gprobs);
-    brogameagent::nn::gpu::softmax_backward_gpu(gprobs, gdProbs, gdLogits);
+    brotensor::softmax_backward_gpu(gprobs, gdProbs, gdLogits);
     Tensor dLogits_gpu = download_to_host(gdLogits);
 
     compare_tensors(probs_cpu, probs_gpu, "softmax_forward");

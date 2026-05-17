@@ -19,7 +19,7 @@
 #include "brogameagent/learn/generic_replay_buffer.h"
 #include "brogameagent/learn/generic_trainer.h"
 #include "brogameagent/nn/device.h"
-#include "brogameagent/nn/gpu/runtime.h"
+#include <brotensor/runtime.h>
 #include "brogameagent/nn/policy_value_net.h"
 
 #include <chrono>
@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    nn::gpu::cuda_init();
+    brotensor::cuda_init();
 
     int total_actions = 0;
     for (int h : a.head_sizes) total_actions += h;
@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
                         s, last.loss_total, last.loss_value, last.loss_policy);
         }
     }
-    nn::gpu::cuda_sync();
+    brotensor::cuda_sync();
     auto t1 = std::chrono::steady_clock::now();
     long ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
     std::printf("train\tdone\tms=%ld\tinitial=%.6f\tfinal=%.6f\n",

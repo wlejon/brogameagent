@@ -4,8 +4,8 @@
 #include "device.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_GPU
-#include "gpu/tensor.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/tensor.h>
 #endif
 
 #include <cstdint>
@@ -50,15 +50,15 @@ public:
     void forward(const Tensor& X, Tensor& Y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_GPU
-    void forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y);
-    void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+#ifdef BROTENSOR_HAS_GPU
+    void forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y);
+    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
 
     // Inference-only batched forward. Input/output (R, D); FF is purely
     // position-wise so we just call batched Linear→ReLU→Linear over R rows
     // in three launches. Allocates two scratch (R, d_ff) tensors per call.
-    void forward_inference_batched(const gpu::GpuTensor& X_RD,
-                                    gpu::GpuTensor& Y_RD);
+    void forward_inference_batched(const brotensor::GpuTensor& X_RD,
+                                    brotensor::GpuTensor& Y_RD);
 #endif
 
     Device device() const { return device_; }
@@ -108,16 +108,16 @@ private:
     Tensor H_post_;    // (K, d_ff) post-ReLU
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_GPU
-    gpu::GpuTensor W1_g_, b1_g_, W2_g_, b2_g_;
-    gpu::GpuTensor dW1_g_, dB1_g_, dW2_g_, dB2_g_;
-    gpu::GpuTensor vW1_g_, vB1_g_, vW2_g_, vB2_g_;
-    gpu::GpuTensor mW1_g_, mB1_g_, mW2_g_, mB2_g_;
-    gpu::GpuTensor vAW1_g_, vAB1_g_, vAW2_g_, vAB2_g_;
+#ifdef BROTENSOR_HAS_GPU
+    brotensor::GpuTensor W1_g_, b1_g_, W2_g_, b2_g_;
+    brotensor::GpuTensor dW1_g_, dB1_g_, dW2_g_, dB2_g_;
+    brotensor::GpuTensor vW1_g_, vB1_g_, vW2_g_, vB2_g_;
+    brotensor::GpuTensor mW1_g_, mB1_g_, mW2_g_, mB2_g_;
+    brotensor::GpuTensor vAW1_g_, vAB1_g_, vAW2_g_, vAB2_g_;
     // Forward caches mirroring the (K, D)/(K, df) host caches.
-    gpu::GpuTensor X_cache_g_;
-    gpu::GpuTensor H_pre_g_;
-    gpu::GpuTensor H_post_g_;
+    brotensor::GpuTensor X_cache_g_;
+    brotensor::GpuTensor H_pre_g_;
+    brotensor::GpuTensor H_post_g_;
 #endif
 };
 

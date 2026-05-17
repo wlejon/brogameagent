@@ -5,8 +5,8 @@
 #include "tensor.h"
 #include "transformer_block.h"
 
-#ifdef BGA_HAS_GPU
-#include "gpu/tensor.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/tensor.h>
 #endif
 
 #include <cstdint>
@@ -53,18 +53,18 @@ public:
     void forward(const Tensor& X, const float* mask, Tensor& Y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_GPU
-    void forward(const gpu::GpuTensor& X, const float* mask_dev,
-                 gpu::GpuTensor& Y);
-    void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+#ifdef BROTENSOR_HAS_GPU
+    void forward(const brotensor::GpuTensor& X, const float* mask_dev,
+                 brotensor::GpuTensor& Y);
+    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
 
     // Inference-only batched forward. (B*K, D) input → (B*K, D) output.
     // Mask is (B*K,) or null. Stacks forward_inference_batched on each
     // block, ping-ponging two scratch buffers, then applies the optional
     // final LayerNorm (pre-norm only). No host syncs anywhere.
-    void forward_inference_batched(const gpu::GpuTensor& X_RD,
+    void forward_inference_batched(const brotensor::GpuTensor& X_RD,
                                     const float* mask_R_dev,
-                                    gpu::GpuTensor& Y_RD,
+                                    brotensor::GpuTensor& Y_RD,
                                     int B, int K);
 #endif
 
@@ -95,10 +95,10 @@ private:
     Tensor pre_final_ln_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // Inter-block activations on device.
-    std::vector<gpu::GpuTensor> activations_g_;
-    gpu::GpuTensor pre_final_ln_g_;
+    std::vector<brotensor::GpuTensor> activations_g_;
+    brotensor::GpuTensor pre_final_ln_g_;
 #endif
 };
 

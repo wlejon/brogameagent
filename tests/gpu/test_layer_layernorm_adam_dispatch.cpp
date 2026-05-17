@@ -50,8 +50,8 @@ void run_dispatch_adam(int n, uint64_t seed, int n_steps) {
         cpu.adam_step(lr, b1, b2, eps, step);
 
         // GPU path.
-        brogameagent::nn::gpu::GpuTensor gx, gy, gdY, gdX;
-        upload(x, gx); upload(dY, gdY);
+        brotensor::GpuTensor gx, gy, gdY, gdX;
+        upload_to(x, gx); upload_to(dY, gdY);
         gy.resize(n, 1); gdX.resize(n, 1);
         gpu_ln.zero_grad();
         gpu_ln.forward(gx, gy);

@@ -2,12 +2,12 @@
 
 #include "parity_helpers.h"
 
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/ops.h>
 #include <brogameagent/nn/tensor.h>
 
 using namespace bga_parity;
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace {
 
@@ -32,10 +32,10 @@ void run_sgd(int n, uint64_t seed, float lr, float momentum) {
     cpu_sgd_step(param_cpu, vel_cpu, grad, lr, momentum);
 
     GpuTensor gparam, ggrad, gvel;
-    upload(param, gparam);
-    upload(grad, ggrad);
-    upload(vel, gvel);
-    brogameagent::nn::gpu::sgd_step_gpu(gparam, ggrad, gvel, lr, momentum);
+    upload_to(param, gparam);
+    upload_to(grad, ggrad);
+    upload_to(vel, gvel);
+    brotensor::sgd_step_gpu(gparam, ggrad, gvel, lr, momentum);
 
     compare_tensors(param_cpu, download_to_host(gparam), "sgd.param");
     compare_tensors(vel_cpu,   download_to_host(gvel),   "sgd.velocity");

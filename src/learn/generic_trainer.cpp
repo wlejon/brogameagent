@@ -1,10 +1,11 @@
 #include "brogameagent/learn/generic_trainer.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_GPU
-#include "brogameagent/nn/gpu/ops.h"
-#include "brogameagent/nn/gpu/runtime.h"
-#include "brogameagent/nn/gpu/device_buffer.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/ops.h>
+#include <brotensor/runtime.h>
+#include <brotensor/device_buffer.h>
+#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -30,13 +31,13 @@ public:
     std::vector<uint8_t> save() const override { return n_->save(); }
     void forward(const nn::Tensor& x, float& v, nn::Tensor& l) override { n_->forward(x, v, l); }
     void backward(float dV, const nn::Tensor& dL) override { n_->backward(dV, dL); }
-#ifdef BGA_HAS_GPU
-    void forward_batched_train(const nn::gpu::GpuTensor& X, nn::gpu::GpuTensor& L,
-                               nn::gpu::GpuTensor& V) override {
+#ifdef BROTENSOR_HAS_GPU
+    void forward_batched_train(const brotensor::GpuTensor& X, brotensor::GpuTensor& L,
+                               brotensor::GpuTensor& V) override {
         n_->forward_batched_train(X, L, V);
     }
-    void backward_batched(const nn::gpu::GpuTensor& dL,
-                          const nn::gpu::GpuTensor& dV) override {
+    void backward_batched(const brotensor::GpuTensor& dL,
+                          const brotensor::GpuTensor& dV) override {
         n_->backward_batched(dL, dV);
     }
 #endif
@@ -56,13 +57,13 @@ public:
     std::vector<uint8_t> save() const override { return n_->save(); }
     void forward(const nn::Tensor& x, float& v, nn::Tensor& l) override { n_->forward(x, v, l); }
     void backward(float dV, const nn::Tensor& dL) override { n_->backward(dV, dL); }
-#ifdef BGA_HAS_GPU
-    void forward_batched_train(const nn::gpu::GpuTensor& X, nn::gpu::GpuTensor& L,
-                               nn::gpu::GpuTensor& V) override {
+#ifdef BROTENSOR_HAS_GPU
+    void forward_batched_train(const brotensor::GpuTensor& X, brotensor::GpuTensor& L,
+                               brotensor::GpuTensor& V) override {
         n_->forward_batched_train(X, L, V);
     }
-    void backward_batched(const nn::gpu::GpuTensor& dL,
-                          const nn::gpu::GpuTensor& dV) override {
+    void backward_batched(const brotensor::GpuTensor& dL,
+                          const brotensor::GpuTensor& dV) override {
         n_->backward_batched(dL, dV);
     }
 #endif
@@ -87,7 +88,7 @@ void GenericExItTrainer::set_net(nn::SingleHeroNetTX* net) {
 
 GenericTrainStep GenericExItTrainer::step() {
     if (!net_ || !buf_ || buf_->size() == 0) return {};
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (cfg_.device == nn::Device::GPU) {
         return step_gpu_();
     }
@@ -195,7 +196,7 @@ void GenericExItTrainer::maybe_publish() {
     ++publishes_;
 }
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
 void GenericExItTrainer::ensure_gpu_staging_() {
     if (gpu_ready_) return;
     const int B      = cfg_.batch;
@@ -267,12 +268,12 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
     }
     if (valid == 0) return s;
 
-    nn::gpu::upload(X_h, X_BD_g_);
-    nn::gpu::upload(T_h, T_BL_g_);
-    nn::gpu::upload(V_h, V_B1_g_);
+    nn::upload_to(X_h, X_BD_g_);
+    nn::upload_to(T_h, T_BL_g_);
+    nn::upload_to(V_h, V_B1_g_);
     const float* mask_dev = nullptr;
     if (any_mask) {
-        nn::gpu::upload(M_h, M_BL_g_);
+        nn::upload_to(M_h, M_BL_g_);
         mask_dev = M_BL_g_.data;
     }
 
@@ -283,12 +284,12 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
 
     // Per-sample value MSE: writes dV_B1_g_ = (pred - target),
     // lv_per_sample_g_ = 0.5 * d^2.
-    nn::gpu::mse_vec_per_sample_gpu(values_B1_g_, V_B1_g_,
+    brotensor::mse_vec_per_sample_gpu(values_B1_g_, V_B1_g_,
                                     dV_B1_g_, lv_per_sample_g_);
 
     // Per-(sample, head) softmax-xent: writes probs, dLog = (p - t) on valid,
     // lp_per_sample = sum-over-heads of head xent.
-    nn::gpu::softmax_xent_fused_batched_gpu(
+    brotensor::softmax_xent_fused_batched_gpu(
         logits_BL_g_, T_BL_g_, mask_dev,
         head_offsets_dev_.device_ptr(), n_heads,
         probs_BL_g_, dLog_BL_g_, lp_per_sample_g_);
@@ -297,8 +298,8 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
     //   dV  *= value_weight / B
     //   dLog *= policy_weight / B / n_heads
     const float B_f = static_cast<float>(B);
-    nn::gpu::scale_inplace_gpu(dV_B1_g_, cfg_.value_weight / B_f);
-    nn::gpu::scale_inplace_gpu(dLog_BL_g_,
+    brotensor::scale_inplace_gpu(dV_B1_g_, cfg_.value_weight / B_f);
+    brotensor::scale_inplace_gpu(dLog_BL_g_,
                                cfg_.policy_weight / B_f / static_cast<float>(n_heads));
 
     // Backward + optimizer (all on device).
@@ -307,9 +308,9 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
 
     // Single sync + downloads of the two per-sample loss vectors.
     nn::Tensor lv_h, lp_h;
-    nn::gpu::download(lv_per_sample_g_, lv_h);
-    nn::gpu::download(lp_per_sample_g_, lp_h);
-    nn::gpu::cuda_sync();
+    nn::download_to(lv_per_sample_g_, lv_h);
+    nn::download_to(lp_per_sample_g_, lp_h);
+    brotensor::cuda_sync();
 
     float tot_lv = 0.0f, tot_lp = 0.0f;
     for (int b = 0; b < B; ++b) tot_lv += lv_h[b];

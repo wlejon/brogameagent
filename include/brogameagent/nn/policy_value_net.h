@@ -4,8 +4,8 @@
 #include "device.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_GPU
-#include "gpu/tensor.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/tensor.h>
 #include "brogameagent/learn/batched_net.h"
 #endif
 
@@ -43,7 +43,7 @@ namespace brogameagent::nn {
 // Wire format: distinct magic from SingleHeroNet so we can't mix them up.
 
 class PolicyValueNet
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     : public brogameagent::learn::BatchedNet
 #endif
 {
@@ -74,26 +74,26 @@ public:
     void forward(const Tensor& x, float& value, Tensor& logits);
     void backward(float dValue, const Tensor& dLogits);
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // GPU code path. Parameters must already be on Device::GPU (call to()).
     //   x:      (in_dim, 1)
     //   logits: (num_actions, 1)
     // The scalar value prediction is left in the layer-owned cache; access
     // it via value_gpu(). The caller must keep x alive until backward()
     // (Linear caches a view of x).
-    void forward(const gpu::GpuTensor& x, gpu::GpuTensor& logits);
+    void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& logits);
 
     // Backward expects gradient on the value output written into a 1-element
     // tensor returned by dValue_gpu() (caller writes (2/N)*(v_pred - v_tgt)
     // or whatever loss derivative there).
     //   dLogits: (num_actions, 1)
-    void backward(const gpu::GpuTensor& dLogits);
+    void backward(const brotensor::GpuTensor& dLogits);
 
     // Layer-owned scalar caches:
     //   value_gpu()  — (1,1) post-tanh value prediction (read after forward).
     //   dValue_gpu() — (1,1) gradient slot the caller writes BEFORE backward.
-    const gpu::GpuTensor& value_gpu()  const { return v_post_tanh_g_; }
-    gpu::GpuTensor&       dValue_gpu()       { return dPostTanh_g_; }
+    const brotensor::GpuTensor& value_gpu()  const { return v_post_tanh_g_; }
+    brotensor::GpuTensor&       dValue_gpu()       { return dPostTanh_g_; }
 
     // Inference-only batched GPU forward.
     //   X_BD:      (B, in_dim)        observations stacked row-wise
@@ -104,9 +104,9 @@ public:
     // forward is K kernel launches regardless of B. Does NOT touch the
     // single-sample backward caches; safe to call concurrently with no
     // pending backward. Parameters must already be on Device::GPU.
-    void forward_batched(const gpu::GpuTensor& X_BD,
-                         gpu::GpuTensor& logits_BL,
-                         gpu::GpuTensor& values_B1) override;
+    void forward_batched(const brotensor::GpuTensor& X_BD,
+                         brotensor::GpuTensor& logits_BL,
+                         brotensor::GpuTensor& values_B1) override;
 
     // BatchedNet interface accessors.
     int input_dim()  const override { return cfg_.in_dim; }
@@ -117,16 +117,16 @@ public:
     //   X_BD:      (B, in_dim)
     //   logits_BL: (B, num_actions) — resized if mis-shaped
     //   values_B1: (B, 1)            — resized if mis-shaped
-    void forward_batched_train(const gpu::GpuTensor& X_BD,
-                               gpu::GpuTensor& logits_BL,
-                               gpu::GpuTensor& values_B1);
+    void forward_batched_train(const brotensor::GpuTensor& X_BD,
+                               brotensor::GpuTensor& logits_BL,
+                               brotensor::GpuTensor& values_B1);
 
     // Training-time batched backward.
     //   dLogits_BL: (B, num_actions)
     //   dValues_B1: (B, 1)
     // Accumulates dW/dB across the whole minibatch into each layer.
-    void backward_batched(const gpu::GpuTensor& dLogits_BL,
-                          const gpu::GpuTensor& dValues_B1);
+    void backward_batched(const brotensor::GpuTensor& dLogits_BL,
+                          const brotensor::GpuTensor& dValues_B1);
 #endif
 
     Device device() const { return device_; }
@@ -183,38 +183,38 @@ private:
     std::vector<int> head_offsets_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // GPU forward caches (layer-owned; sized at to(GPU) and reused).
-    std::vector<gpu::GpuTensor> trunk_raw_g_;
-    std::vector<gpu::GpuTensor> trunk_act_g_;
-    gpu::GpuTensor v_h_raw_g_, v_h_act_g_;
-    gpu::GpuTensor v_pre_tanh_g_, v_post_tanh_g_;
+    std::vector<brotensor::GpuTensor> trunk_raw_g_;
+    std::vector<brotensor::GpuTensor> trunk_act_g_;
+    brotensor::GpuTensor v_h_raw_g_, v_h_act_g_;
+    brotensor::GpuTensor v_pre_tanh_g_, v_post_tanh_g_;
     // Backward scratch (layer-owned to avoid per-step alloc).
-    gpu::GpuTensor dPostTanh_g_, dPreTanh_g_;
-    gpu::GpuTensor dVAct_g_, dVRaw_g_;
-    gpu::GpuTensor dTrunkFromV_g_, dTrunkFromP_g_;
-    gpu::GpuTensor dHAct_g_, dHRaw_g_, dPrev_g_;
-    gpu::GpuTensor dXdiscard_g_;  // discarded gradient at trunk input
+    brotensor::GpuTensor dPostTanh_g_, dPreTanh_g_;
+    brotensor::GpuTensor dVAct_g_, dVRaw_g_;
+    brotensor::GpuTensor dTrunkFromV_g_, dTrunkFromP_g_;
+    brotensor::GpuTensor dHAct_g_, dHRaw_g_, dPrev_g_;
+    brotensor::GpuTensor dXdiscard_g_;  // discarded gradient at trunk input
 
     // Batched-inference scratch (grown lazily in forward_batched).
-    std::vector<gpu::GpuTensor> trunk_raw_bg_;
-    std::vector<gpu::GpuTensor> trunk_act_bg_;
-    gpu::GpuTensor v_h_raw_bg_, v_h_act_bg_;
-    gpu::GpuTensor v_pre_tanh_bg_;
+    std::vector<brotensor::GpuTensor> trunk_raw_bg_;
+    std::vector<brotensor::GpuTensor> trunk_act_bg_;
+    brotensor::GpuTensor v_h_raw_bg_, v_h_act_bg_;
+    brotensor::GpuTensor v_pre_tanh_bg_;
 
     // Batched-training caches (grown lazily in forward_batched_train,
     // independent from the inference-only ..._bg_ caches above so the two
     // call paths can coexist without clobbering each other).
-    std::vector<gpu::GpuTensor> trunk_raw_btr_g_;
-    std::vector<gpu::GpuTensor> trunk_act_btr_g_;
-    gpu::GpuTensor v_h_raw_btr_g_, v_h_act_btr_g_;
-    gpu::GpuTensor v_pre_tanh_btr_g_, v_post_tanh_btr_g_;
+    std::vector<brotensor::GpuTensor> trunk_raw_btr_g_;
+    std::vector<brotensor::GpuTensor> trunk_act_btr_g_;
+    brotensor::GpuTensor v_h_raw_btr_g_, v_h_act_btr_g_;
+    brotensor::GpuTensor v_pre_tanh_btr_g_, v_post_tanh_btr_g_;
     // Batched-training backward scratch.
-    gpu::GpuTensor dPreTanh_btr_g_;
-    gpu::GpuTensor dVAct_btr_g_, dVRaw_btr_g_;
-    gpu::GpuTensor dHAct_btr_g_, dHRaw_btr_g_, dPrev_btr_g_;
-    gpu::GpuTensor dXdiscard_btr_g_;
-    gpu::GpuTensor dTrunkFromP_btr_g_;
+    brotensor::GpuTensor dPreTanh_btr_g_;
+    brotensor::GpuTensor dVAct_btr_g_, dVRaw_btr_g_;
+    brotensor::GpuTensor dHAct_btr_g_, dHRaw_btr_g_, dPrev_btr_g_;
+    brotensor::GpuTensor dXdiscard_btr_g_;
+    brotensor::GpuTensor dTrunkFromP_btr_g_;
 #endif
 };
 

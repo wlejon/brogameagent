@@ -15,8 +15,8 @@
 #include <brogameagent/learn/generic_replay_buffer.h>
 #include <brogameagent/learn/generic_trainer.h>
 #include <brogameagent/nn/device.h>
-#include <brogameagent/nn/gpu/runtime.h>
-#include <brogameagent/nn/gpu/tensor.h>
+#include <brotensor/runtime.h>
+#include <brotensor/tensor.h>
 #include <brogameagent/nn/policy_value_net.h>
 
 #include <cmath>
@@ -95,7 +95,7 @@ bool close(float a, float b, float atol, float rtol) {
 }  // namespace
 
 int main() {
-    brogameagent::nn::gpu::cuda_init();
+    brotensor::cuda_init();
 
     PolicyValueNet::Config cfg;
     cfg.in_dim       = 16;

@@ -2,14 +2,14 @@
 
 #include "parity_helpers.h"
 
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/ops.h>
 #include <brogameagent/nn/tensor.h>
 
 #include <vector>
 
 using namespace bga_parity;
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace {
 
@@ -36,11 +36,11 @@ void run_concat(const std::vector<int>& sizes, uint64_t seed) {
     std::vector<GpuTensor> g_parts(sizes.size());
     std::vector<const GpuTensor*> g_parts_ptr;
     for (size_t i = 0; i < sizes.size(); ++i) {
-        upload(parts_cpu[i], g_parts[i]);
+        upload_to(parts_cpu[i], g_parts[i]);
         g_parts_ptr.push_back(&g_parts[i]);
     }
     GpuTensor gcat;
-    brogameagent::nn::gpu::concat_rows_gpu(g_parts_ptr, gcat);
+    brotensor::concat_rows_gpu(g_parts_ptr, gcat);
     cuda_sync();
 
     Tensor cat_gpu = download_to_host(gcat);
@@ -54,7 +54,7 @@ void run_concat(const std::vector<int>& sizes, uint64_t seed) {
         g_split[i].resize(sizes[i], 1);
         g_split_ptr.push_back(&g_split[i]);
     }
-    brogameagent::nn::gpu::split_rows_gpu(gcat, g_split_ptr);
+    brotensor::split_rows_gpu(gcat, g_split_ptr);
     cuda_sync();
 
     for (size_t i = 0; i < sizes.size(); ++i) {

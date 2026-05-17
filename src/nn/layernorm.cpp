@@ -1,8 +1,9 @@
 #include "brogameagent/nn/layernorm.h"
 
-#ifdef BGA_HAS_GPU
-#include "brogameagent/nn/gpu/ops.h"
-#include "brogameagent/nn/gpu/runtime.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/ops.h>
+#include <brotensor/runtime.h>
+#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -70,18 +71,18 @@ void LayerNorm::backward(const Tensor& dY, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_GPU
-void LayerNorm::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
+#ifdef BROTENSOR_HAS_GPU
+void LayerNorm::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y) {
     assert(device_ == Device::GPU);
     const int n = gamma_.size();
     if (xhat_g_.rows != n || xhat_g_.cols != 1) xhat_g_.resize(n, 1);
-    gpu::layernorm_forward_gpu(x, gamma_g_, beta_g_, y, xhat_g_,
+    brotensor::layernorm_forward_gpu(x, gamma_g_, beta_g_, y, xhat_g_,
                                mean_, rstd_, eps_);
 }
 
-void LayerNorm::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
+void LayerNorm::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
     assert(device_ == Device::GPU);
-    gpu::layernorm_backward_gpu(dY, xhat_g_, gamma_g_, rstd_,
+    brotensor::layernorm_backward_gpu(dY, xhat_g_, gamma_g_, rstd_,
                                 dX, dGamma_g_, dBeta_g_);
 }
 #endif
@@ -89,42 +90,42 @@ void LayerNorm::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
 void LayerNorm::to(Device d) {
     if (d == device_) return;
     device_require_cuda("LayerNorm");
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (d == Device::GPU) {
         // Upload params/grads/velocities; allocate xhat mirror.
-        gpu::upload(gamma_, gamma_g_);
-        gpu::upload(beta_,  beta_g_);
-        gpu::upload(dGamma_, dGamma_g_);
-        gpu::upload(dBeta_,  dBeta_g_);
-        gpu::upload(vGamma_, vGamma_g_);
-        gpu::upload(vBeta_,  vBeta_g_);
-        gpu::upload(mGamma_, mGamma_g_);
-        gpu::upload(mBeta_,  mBeta_g_);
-        gpu::upload(vAGamma_, vAGamma_g_);
-        gpu::upload(vABeta_,  vABeta_g_);
+        upload_to(gamma_, gamma_g_);
+        upload_to(beta_,  beta_g_);
+        upload_to(dGamma_, dGamma_g_);
+        upload_to(dBeta_,  dBeta_g_);
+        upload_to(vGamma_, vGamma_g_);
+        upload_to(vBeta_,  vBeta_g_);
+        upload_to(mGamma_, mGamma_g_);
+        upload_to(mBeta_,  mBeta_g_);
+        upload_to(vAGamma_, vAGamma_g_);
+        upload_to(vABeta_,  vABeta_g_);
         const int n = gamma_.size();
         if (xhat_g_.rows != n || xhat_g_.cols != 1) xhat_g_.resize(n, 1);
         device_ = Device::GPU;
     } else {
         // Download back to host.
-        gpu::download(gamma_g_, gamma_);
-        gpu::download(beta_g_,  beta_);
-        gpu::download(dGamma_g_, dGamma_);
-        gpu::download(dBeta_g_,  dBeta_);
-        gpu::download(vGamma_g_, vGamma_);
-        gpu::download(vBeta_g_,  vBeta_);
-        gpu::download(mGamma_g_, mGamma_);
-        gpu::download(mBeta_g_,  mBeta_);
-        gpu::download(vAGamma_g_, vAGamma_);
-        gpu::download(vABeta_g_,  vABeta_);
-        gpu::cuda_sync();
+        download_to(gamma_g_, gamma_);
+        download_to(beta_g_,  beta_);
+        download_to(dGamma_g_, dGamma_);
+        download_to(dBeta_g_,  dBeta_);
+        download_to(vGamma_g_, vGamma_);
+        download_to(vBeta_g_,  vBeta_);
+        download_to(mGamma_g_, mGamma_);
+        download_to(mBeta_g_,  mBeta_);
+        download_to(vAGamma_g_, vAGamma_);
+        download_to(vABeta_g_,  vABeta_);
+        brotensor::cuda_sync();
         device_ = Device::CPU;
     }
 #endif
 }
 
 void LayerNorm::zero_grad() {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         dGamma_g_.zero();
         dBeta_g_.zero();
@@ -136,10 +137,10 @@ void LayerNorm::zero_grad() {
 }
 
 void LayerNorm::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::sgd_step_gpu(gamma_g_, dGamma_g_, vGamma_g_, lr, momentum);
-        gpu::sgd_step_gpu(beta_g_,  dBeta_g_,  vBeta_g_,  lr, momentum);
+        brotensor::sgd_step_gpu(gamma_g_, dGamma_g_, vGamma_g_, lr, momentum);
+        brotensor::sgd_step_gpu(beta_g_,  dBeta_g_,  vBeta_g_,  lr, momentum);
         return;
     }
 #endif
@@ -153,11 +154,11 @@ void LayerNorm::sgd_step(float lr, float momentum) {
 }
 
 void LayerNorm::adam_step(float lr, float beta1, float beta2, float eps, int step) {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::adam_step_gpu(gamma_g_, dGamma_g_, mGamma_g_, vAGamma_g_,
+        brotensor::adam_step_gpu(gamma_g_, dGamma_g_, mGamma_g_, vAGamma_g_,
                            lr, beta1, beta2, eps, step);
-        gpu::adam_step_gpu(beta_g_,  dBeta_g_,  mBeta_g_,  vABeta_g_,
+        brotensor::adam_step_gpu(beta_g_,  dBeta_g_,  mBeta_g_,  vABeta_g_,
                            lr, beta1, beta2, eps, step);
         return;
     }
@@ -167,14 +168,14 @@ void LayerNorm::adam_step(float lr, float beta1, float beta2, float eps, int ste
 }
 
 void LayerNorm::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         // Sync host shadow before serializing. const_cast is local to here:
         // download writes into the (logically cached) host Tensor.
         auto* self = const_cast<LayerNorm*>(this);
-        gpu::download(gamma_g_, self->gamma_);
-        gpu::download(beta_g_,  self->beta_);
-        gpu::cuda_sync();
+        download_to(gamma_g_, self->gamma_);
+        download_to(beta_g_,  self->beta_);
+        brotensor::cuda_sync();
     }
 #endif
     tensor_write(gamma_, out);
@@ -192,19 +193,19 @@ void LayerNorm::load_from(const uint8_t* data, size_t& offset, size_t size) {
     mGamma_.zero(); mBeta_.zero();
     vAGamma_.zero(); vABeta_.zero();
     xhat_.resize(n, 1);
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         // Re-upload after deserialization.
-        gpu::upload(gamma_, gamma_g_);
-        gpu::upload(beta_,  beta_g_);
-        gpu::upload(dGamma_, dGamma_g_);
-        gpu::upload(dBeta_,  dBeta_g_);
-        gpu::upload(vGamma_, vGamma_g_);
-        gpu::upload(vBeta_,  vBeta_g_);
-        gpu::upload(mGamma_, mGamma_g_);
-        gpu::upload(mBeta_,  mBeta_g_);
-        gpu::upload(vAGamma_, vAGamma_g_);
-        gpu::upload(vABeta_,  vABeta_g_);
+        upload_to(gamma_, gamma_g_);
+        upload_to(beta_,  beta_g_);
+        upload_to(dGamma_, dGamma_g_);
+        upload_to(dBeta_,  dBeta_g_);
+        upload_to(vGamma_, vGamma_g_);
+        upload_to(vBeta_,  vBeta_g_);
+        upload_to(mGamma_, mGamma_g_);
+        upload_to(mBeta_,  mBeta_g_);
+        upload_to(vAGamma_, vAGamma_g_);
+        upload_to(vABeta_,  vABeta_g_);
         if (xhat_g_.rows != n || xhat_g_.cols != 1) xhat_g_.resize(n, 1);
     }
 #endif

@@ -1,9 +1,10 @@
 #include "brogameagent/nn/multi_head_attention.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_GPU
-#include "brogameagent/nn/gpu/ops.h"
-#include "brogameagent/nn/gpu/runtime.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/ops.h>
+#include <brotensor/runtime.h>
+#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -249,10 +250,10 @@ void MultiHeadAttention::backward(const Tensor& dO, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_GPU
-void MultiHeadAttention::forward(const gpu::GpuTensor& X,
+#ifdef BROTENSOR_HAS_GPU
+void MultiHeadAttention::forward(const brotensor::GpuTensor& X,
                                  const float* mask_dev,
-                                 gpu::GpuTensor& O) {
+                                 brotensor::GpuTensor& O) {
     assert(device_ == Device::GPU);
     const int K = X.rows;
     const int D = X.cols;
@@ -267,14 +268,14 @@ void MultiHeadAttention::forward(const gpu::GpuTensor& X,
     if (Yconcat_g_.rows != K || Yconcat_g_.cols != D) Yconcat_g_.resize(K, D);
     // Clone X for backward (matches CPU semantics where X_cache_ shadows input).
     X_cache_g_ = X.clone();
-    gpu::mha_forward_gpu(X, Wq_g_, Wk_g_, Wv_g_, Wo_g_,
+    brotensor::mha_forward_gpu(X, Wq_g_, Wk_g_, Wv_g_, Wo_g_,
                          mask_dev, h_,
                          Qh_g_, Kh_g_, Vh_g_, Attnh_g_, Yconcat_g_, O);
 }
 
-void MultiHeadAttention::backward(const gpu::GpuTensor& dO, gpu::GpuTensor& dX) {
+void MultiHeadAttention::backward(const brotensor::GpuTensor& dO, brotensor::GpuTensor& dX) {
     assert(device_ == Device::GPU);
-    gpu::mha_backward_gpu(dO, X_cache_g_, Qh_g_, Kh_g_, Vh_g_, Attnh_g_, Yconcat_g_,
+    brotensor::mha_backward_gpu(dO, X_cache_g_, Qh_g_, Kh_g_, Vh_g_, Attnh_g_, Yconcat_g_,
                           Wq_g_, Wk_g_, Wv_g_, Wo_g_,
                           last_mask_dev_, h_,
                           dX, dWq_g_, dWk_g_, dWv_g_, dWo_g_);
@@ -284,8 +285,8 @@ void MultiHeadAttention::backward(const gpu::GpuTensor& dO, gpu::GpuTensor& dX) 
 // reuses internal Qh/Kh/Vh/Attnh/Yconcat scratch across the B iterations
 // — they are clobbered each call, fine since no backward will run.
 void MultiHeadAttention::forward_inference_batched(
-        const gpu::GpuTensor& X_RD, const float* mask_R_dev,
-        gpu::GpuTensor& Y_RD, int B, int K) {
+        const brotensor::GpuTensor& X_RD, const float* mask_R_dev,
+        brotensor::GpuTensor& Y_RD, int B, int K) {
     assert(device_ == Device::GPU);
     if (Y_RD.rows != B * K || Y_RD.cols != d_) Y_RD.resize(B * K, d_);
     if (B == 0 || K == 0) return;
@@ -298,12 +299,12 @@ void MultiHeadAttention::forward_inference_batched(
     n_ = K;
 
     for (int b = 0; b < B; ++b) {
-        gpu::GpuTensor X_view = gpu::GpuTensor::view(
+        brotensor::GpuTensor X_view = brotensor::GpuTensor::view(
             X_RD.data + static_cast<size_t>(b) * K * d_, K, d_);
-        gpu::GpuTensor Y_view = gpu::GpuTensor::view(
+        brotensor::GpuTensor Y_view = brotensor::GpuTensor::view(
             Y_RD.data + static_cast<size_t>(b) * K * d_, K, d_);
         const float* mask_b = mask_R_dev ? mask_R_dev + b * K : nullptr;
-        gpu::mha_forward_gpu(X_view, Wq_g_, Wk_g_, Wv_g_, Wo_g_,
+        brotensor::mha_forward_gpu(X_view, Wq_g_, Wk_g_, Wv_g_, Wo_g_,
                              mask_b, h_,
                              Qh_g_, Kh_g_, Vh_g_, Attnh_g_, Yconcat_g_, Y_view);
     }
@@ -313,38 +314,38 @@ void MultiHeadAttention::forward_inference_batched(
 void MultiHeadAttention::to(Device d) {
     if (d == device_) return;
     device_require_cuda("MultiHeadAttention");
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (d == Device::GPU) {
-        gpu::upload(Wq_, Wq_g_); gpu::upload(Wk_, Wk_g_);
-        gpu::upload(Wv_, Wv_g_); gpu::upload(Wo_, Wo_g_);
-        gpu::upload(dWq_, dWq_g_); gpu::upload(dWk_, dWk_g_);
-        gpu::upload(dWv_, dWv_g_); gpu::upload(dWo_, dWo_g_);
-        gpu::upload(vWq_, vWq_g_); gpu::upload(vWk_, vWk_g_);
-        gpu::upload(vWv_, vWv_g_); gpu::upload(vWo_, vWo_g_);
-        gpu::upload(mWq_, mWq_g_); gpu::upload(mWk_, mWk_g_);
-        gpu::upload(mWv_, mWv_g_); gpu::upload(mWo_, mWo_g_);
-        gpu::upload(vAWq_, vAWq_g_); gpu::upload(vAWk_, vAWk_g_);
-        gpu::upload(vAWv_, vAWv_g_); gpu::upload(vAWo_, vAWo_g_);
+        upload_to(Wq_, Wq_g_); upload_to(Wk_, Wk_g_);
+        upload_to(Wv_, Wv_g_); upload_to(Wo_, Wo_g_);
+        upload_to(dWq_, dWq_g_); upload_to(dWk_, dWk_g_);
+        upload_to(dWv_, dWv_g_); upload_to(dWo_, dWo_g_);
+        upload_to(vWq_, vWq_g_); upload_to(vWk_, vWk_g_);
+        upload_to(vWv_, vWv_g_); upload_to(vWo_, vWo_g_);
+        upload_to(mWq_, mWq_g_); upload_to(mWk_, mWk_g_);
+        upload_to(mWv_, mWv_g_); upload_to(mWo_, mWo_g_);
+        upload_to(vAWq_, vAWq_g_); upload_to(vAWk_, vAWk_g_);
+        upload_to(vAWv_, vAWv_g_); upload_to(vAWo_, vAWo_g_);
         device_ = Device::GPU;
     } else {
-        gpu::download(Wq_g_, Wq_); gpu::download(Wk_g_, Wk_);
-        gpu::download(Wv_g_, Wv_); gpu::download(Wo_g_, Wo_);
-        gpu::download(dWq_g_, dWq_); gpu::download(dWk_g_, dWk_);
-        gpu::download(dWv_g_, dWv_); gpu::download(dWo_g_, dWo_);
-        gpu::download(vWq_g_, vWq_); gpu::download(vWk_g_, vWk_);
-        gpu::download(vWv_g_, vWv_); gpu::download(vWo_g_, vWo_);
-        gpu::download(mWq_g_, mWq_); gpu::download(mWk_g_, mWk_);
-        gpu::download(mWv_g_, mWv_); gpu::download(mWo_g_, mWo_);
-        gpu::download(vAWq_g_, vAWq_); gpu::download(vAWk_g_, vAWk_);
-        gpu::download(vAWv_g_, vAWv_); gpu::download(vAWo_g_, vAWo_);
-        gpu::cuda_sync();
+        download_to(Wq_g_, Wq_); download_to(Wk_g_, Wk_);
+        download_to(Wv_g_, Wv_); download_to(Wo_g_, Wo_);
+        download_to(dWq_g_, dWq_); download_to(dWk_g_, dWk_);
+        download_to(dWv_g_, dWv_); download_to(dWo_g_, dWo_);
+        download_to(vWq_g_, vWq_); download_to(vWk_g_, vWk_);
+        download_to(vWv_g_, vWv_); download_to(vWo_g_, vWo_);
+        download_to(mWq_g_, mWq_); download_to(mWk_g_, mWk_);
+        download_to(mWv_g_, mWv_); download_to(mWo_g_, mWo_);
+        download_to(vAWq_g_, vAWq_); download_to(vAWk_g_, vAWk_);
+        download_to(vAWv_g_, vAWv_); download_to(vAWo_g_, vAWo_);
+        brotensor::cuda_sync();
         device_ = Device::CPU;
     }
 #endif
 }
 
 void MultiHeadAttention::zero_grad() {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         dWq_g_.zero(); dWk_g_.zero(); dWv_g_.zero(); dWo_g_.zero();
         return;
@@ -363,12 +364,12 @@ static void sgd_mat_(Tensor& W, Tensor& vW, const Tensor& dW, float lr, float mo
 }
 
 void MultiHeadAttention::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::sgd_step_gpu(Wq_g_, dWq_g_, vWq_g_, lr, momentum);
-        gpu::sgd_step_gpu(Wk_g_, dWk_g_, vWk_g_, lr, momentum);
-        gpu::sgd_step_gpu(Wv_g_, dWv_g_, vWv_g_, lr, momentum);
-        gpu::sgd_step_gpu(Wo_g_, dWo_g_, vWo_g_, lr, momentum);
+        brotensor::sgd_step_gpu(Wq_g_, dWq_g_, vWq_g_, lr, momentum);
+        brotensor::sgd_step_gpu(Wk_g_, dWk_g_, vWk_g_, lr, momentum);
+        brotensor::sgd_step_gpu(Wv_g_, dWv_g_, vWv_g_, lr, momentum);
+        brotensor::sgd_step_gpu(Wo_g_, dWo_g_, vWo_g_, lr, momentum);
         return;
     }
 #endif
@@ -380,12 +381,12 @@ void MultiHeadAttention::sgd_step(float lr, float momentum) {
 
 void MultiHeadAttention::adam_step(float lr, float beta1, float beta2,
                                    float eps, int step) {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::adam_step_gpu(Wq_g_, dWq_g_, mWq_g_, vAWq_g_, lr, beta1, beta2, eps, step);
-        gpu::adam_step_gpu(Wk_g_, dWk_g_, mWk_g_, vAWk_g_, lr, beta1, beta2, eps, step);
-        gpu::adam_step_gpu(Wv_g_, dWv_g_, mWv_g_, vAWv_g_, lr, beta1, beta2, eps, step);
-        gpu::adam_step_gpu(Wo_g_, dWo_g_, mWo_g_, vAWo_g_, lr, beta1, beta2, eps, step);
+        brotensor::adam_step_gpu(Wq_g_, dWq_g_, mWq_g_, vAWq_g_, lr, beta1, beta2, eps, step);
+        brotensor::adam_step_gpu(Wk_g_, dWk_g_, mWk_g_, vAWk_g_, lr, beta1, beta2, eps, step);
+        brotensor::adam_step_gpu(Wv_g_, dWv_g_, mWv_g_, vAWv_g_, lr, beta1, beta2, eps, step);
+        brotensor::adam_step_gpu(Wo_g_, dWo_g_, mWo_g_, vAWo_g_, lr, beta1, beta2, eps, step);
         return;
     }
 #endif
@@ -396,12 +397,12 @@ void MultiHeadAttention::adam_step(float lr, float beta1, float beta2,
 }
 
 void MultiHeadAttention::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         auto* self = const_cast<MultiHeadAttention*>(this);
-        gpu::download(Wq_g_, self->Wq_); gpu::download(Wk_g_, self->Wk_);
-        gpu::download(Wv_g_, self->Wv_); gpu::download(Wo_g_, self->Wo_);
-        gpu::cuda_sync();
+        download_to(Wq_g_, self->Wq_); download_to(Wk_g_, self->Wk_);
+        download_to(Wv_g_, self->Wv_); download_to(Wo_g_, self->Wo_);
+        brotensor::cuda_sync();
     }
 #endif
     // Mirrors ScaledDotProductAttention: just the four weight matrices.
@@ -431,18 +432,18 @@ void MultiHeadAttention::load_from(const uint8_t* data, size_t& offset, size_t s
     Vh_.assign(h_, Tensor(n_, dh_));
     Attnh_.assign(h_, Tensor(n_, n_));
     Yconcat_.resize(n_, d_);
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::upload(Wq_, Wq_g_); gpu::upload(Wk_, Wk_g_);
-        gpu::upload(Wv_, Wv_g_); gpu::upload(Wo_, Wo_g_);
-        gpu::upload(dWq_, dWq_g_); gpu::upload(dWk_, dWk_g_);
-        gpu::upload(dWv_, dWv_g_); gpu::upload(dWo_, dWo_g_);
-        gpu::upload(vWq_, vWq_g_); gpu::upload(vWk_, vWk_g_);
-        gpu::upload(vWv_, vWv_g_); gpu::upload(vWo_, vWo_g_);
-        gpu::upload(mWq_, mWq_g_); gpu::upload(mWk_, mWk_g_);
-        gpu::upload(mWv_, mWv_g_); gpu::upload(mWo_, mWo_g_);
-        gpu::upload(vAWq_, vAWq_g_); gpu::upload(vAWk_, vAWk_g_);
-        gpu::upload(vAWv_, vAWv_g_); gpu::upload(vAWo_, vAWo_g_);
+        upload_to(Wq_, Wq_g_); upload_to(Wk_, Wk_g_);
+        upload_to(Wv_, Wv_g_); upload_to(Wo_, Wo_g_);
+        upload_to(dWq_, dWq_g_); upload_to(dWk_, dWk_g_);
+        upload_to(dWv_, dWv_g_); upload_to(dWo_, dWo_g_);
+        upload_to(vWq_, vWq_g_); upload_to(vWk_, vWk_g_);
+        upload_to(vWv_, vWv_g_); upload_to(vWo_, vWo_g_);
+        upload_to(mWq_, mWq_g_); upload_to(mWk_, mWk_g_);
+        upload_to(mWv_, mWv_g_); upload_to(mWo_, mWo_g_);
+        upload_to(vAWq_, vAWq_g_); upload_to(vAWk_, vAWk_g_);
+        upload_to(vAWv_, vAWv_g_); upload_to(vAWo_, vAWo_g_);
     }
 #endif
 }

@@ -5,14 +5,14 @@
 
 #include "parity_helpers.h"
 
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/ops.h>
 #include <brogameagent/nn/ops.h>
 
 #include <vector>
 
 using namespace bga_parity;
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 // ─── linear_forward_batched ────────────────────────────────────────────────
 
@@ -28,23 +28,23 @@ static void run_linear_batched(int B, int in_dim, int out_dim, uint64_t seed) {
 
     // Reference: B sequential single-sample GPU calls into a (B, out_dim) buffer.
     GpuTensor gW, gb, gX_BD, gY_BD;
-    upload(W, gW); upload(b, gb); upload(X_BD, gX_BD);
+    upload_to(W, gW); upload_to(b, gb); upload_to(X_BD, gX_BD);
     Tensor Y_ref(B, out_dim);
     for (int i = 0; i < B; ++i) {
         Tensor xi(in_dim, 1);
         for (int j = 0; j < in_dim; ++j)
             xi.data[j] = X_BD.data[static_cast<size_t>(i) * in_dim + j];
         GpuTensor gxi, gyi;
-        upload(xi, gxi);
+        upload_to(xi, gxi);
         gyi.resize(out_dim, 1);
-        brogameagent::nn::gpu::linear_forward_gpu(gW, gb, gxi, gyi);
+        brotensor::linear_forward_gpu(gW, gb, gxi, gyi);
         Tensor yi = download_to_host(gyi);
         for (int j = 0; j < out_dim; ++j)
             Y_ref.data[static_cast<size_t>(i) * out_dim + j] = yi.data[j];
     }
 
     // Batched call.
-    brogameagent::nn::gpu::linear_forward_batched_gpu(gW, gb, gX_BD, gY_BD);
+    brotensor::linear_forward_batched_gpu(gW, gb, gX_BD, gY_BD);
     Tensor Y_batched = download_to_host(gY_BD);
     BGA_CHECK(Y_batched.rows == B);
     BGA_CHECK(Y_batched.cols == out_dim);
@@ -70,17 +70,17 @@ static void run_relu_batched(int B, int D, uint64_t seed) {
         for (int j = 0; j < D; ++j)
             xi.data[j] = X_BD.data[static_cast<size_t>(i) * D + j];
         GpuTensor gxi, gyi;
-        upload(xi, gxi);
+        upload_to(xi, gxi);
         gyi.resize(D, 1);
-        brogameagent::nn::gpu::relu_forward_gpu(gxi, gyi);
+        brotensor::relu_forward_gpu(gxi, gyi);
         Tensor yi = download_to_host(gyi);
         for (int j = 0; j < D; ++j)
             Y_ref.data[static_cast<size_t>(i) * D + j] = yi.data[j];
     }
 
     GpuTensor gX, gY;
-    upload(X_BD, gX);
-    brogameagent::nn::gpu::relu_forward_batched_gpu(gX, gY);
+    upload_to(X_BD, gX);
+    brotensor::relu_forward_batched_gpu(gX, gY);
     Tensor Y_batched = download_to_host(gY);
     compare_tensors(Y_ref, Y_batched, "relu_forward_batched");
 }
@@ -102,17 +102,17 @@ static void run_tanh_batched(int B, int D, uint64_t seed) {
         for (int j = 0; j < D; ++j)
             xi.data[j] = X_BD.data[static_cast<size_t>(i) * D + j];
         GpuTensor gxi, gyi;
-        upload(xi, gxi);
+        upload_to(xi, gxi);
         gyi.resize(D, 1);
-        brogameagent::nn::gpu::tanh_forward_gpu(gxi, gyi);
+        brotensor::tanh_forward_gpu(gxi, gyi);
         Tensor yi = download_to_host(gyi);
         for (int j = 0; j < D; ++j)
             Y_ref.data[static_cast<size_t>(i) * D + j] = yi.data[j];
     }
 
     GpuTensor gX, gY;
-    upload(X_BD, gX);
-    brogameagent::nn::gpu::tanh_forward_batched_gpu(gX, gY);
+    upload_to(X_BD, gX);
+    brotensor::tanh_forward_batched_gpu(gX, gY);
     Tensor Y_batched = download_to_host(gY);
     compare_tensors(Y_ref, Y_batched, "tanh_forward_batched");
 }
@@ -138,16 +138,16 @@ static void run_add_batched(int B, int D, uint64_t seed) {
             xi.data[j] = X.data[static_cast<size_t>(i) * D + j];
         }
         GpuTensor gyi, gxi;
-        upload(yi, gyi); upload(xi, gxi);
-        brogameagent::nn::gpu::add_inplace_gpu(gyi, gxi);
+        upload_to(yi, gyi); upload_to(xi, gxi);
+        brotensor::add_inplace_gpu(gyi, gxi);
         Tensor out = download_to_host(gyi);
         for (int j = 0; j < D; ++j)
             Y_ref.data[static_cast<size_t>(i) * D + j] = out.data[j];
     }
 
     GpuTensor gY, gX;
-    upload(Y_init, gY); upload(X, gX);
-    brogameagent::nn::gpu::add_inplace_batched_gpu(gY, gX);
+    upload_to(Y_init, gY); upload_to(X, gX);
+    brotensor::add_inplace_batched_gpu(gY, gX);
     Tensor Y_batched = download_to_host(gY);
     compare_tensors(Y_ref, Y_batched, "add_inplace_batched");
 }

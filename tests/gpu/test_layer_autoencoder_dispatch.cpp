@@ -11,7 +11,7 @@
 #include <brogameagent/nn/autoencoder.h>
 #include <brogameagent/nn/decoder.h>
 #include <brogameagent/nn/encoder.h>
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/ops.h>
 #include <brogameagent/nn/tensor.h>
 #include <brogameagent/observation.h>
 
@@ -78,8 +78,8 @@ void run_encoder_parity(uint64_t seed,
     // GPU.
     gpu_enc.to(Device::GPU);
     BGA_CHECK(gpu_enc.device() == Device::GPU);
-    brogameagent::nn::gpu::GpuTensor gx, gy, gdY, gdX;
-    upload(x, gx); upload(dY, gdY);
+    brotensor::GpuTensor gx, gy, gdY, gdX;
+    upload_to(x, gx); upload_to(dY, gdY);
     gy.resize(cpu.out_dim(), 1); gdX.resize(obs::TOTAL, 1);
     gpu_enc.zero_grad();
     gpu_enc.forward(gx, gy);
@@ -147,8 +147,8 @@ void run_decoder_parity(uint64_t seed) {
     cpu.backward(dY, dX_cpu);
 
     gpu_dec.to(Device::GPU);
-    brogameagent::nn::gpu::GpuTensor gx, gy, gdY, gdX;
-    upload(x, gx); upload(dY, gdY);
+    brotensor::GpuTensor gx, gy, gdY, gdX;
+    upload_to(x, gx); upload_to(dY, gdY);
     gy.resize(obs::TOTAL, 1); gdX.resize(cpu.in_dim(), 1);
     gpu_dec.zero_grad();
     gpu_dec.forward(gx, gy);
@@ -212,8 +212,8 @@ void run_autoencoder_parity(uint64_t seed) {
 
     gpu_ae.to(Device::GPU);
     BGA_CHECK(gpu_ae.device() == Device::GPU);
-    brogameagent::nn::gpu::GpuTensor gx, gxhat, gdXh;
-    upload(x, gx); upload(dXh, gdXh);
+    brotensor::GpuTensor gx, gxhat, gdXh;
+    upload_to(x, gx); upload_to(dXh, gdXh);
     gxhat.resize(obs::TOTAL, 1);
     gpu_ae.zero_grad();
     gpu_ae.forward(gx, gxhat);
@@ -228,7 +228,7 @@ void run_autoencoder_parity(uint64_t seed) {
     // After stepping: forward again and compare reconstructions.
     Tensor x_hat_cpu2(obs::TOTAL, 1);
     cpu.forward(x, x_hat_cpu2);
-    brogameagent::nn::gpu::GpuTensor gxhat2;
+    brotensor::GpuTensor gxhat2;
     gxhat2.resize(obs::TOTAL, 1);
     gpu_ae.forward(gx, gxhat2);
     Tensor x_hat_gpu2 = download_to_host(gxhat2);
@@ -254,9 +254,9 @@ void run_gpu_smoke_training() {
                         {1, 1, 1, 0, 0},
                         {1, 1, 0, 0});
 
-    brogameagent::nn::gpu::GpuTensor gx, target_g, gxhat, gdXh;
-    upload(x, gx);
-    upload(x, target_g);
+    brotensor::GpuTensor gx, target_g, gxhat, gdXh;
+    upload_to(x, gx);
+    upload_to(x, target_g);
     gxhat.resize(obs::TOTAL, 1);
     gdXh.resize(obs::TOTAL, 1);
 
@@ -265,11 +265,11 @@ void run_gpu_smoke_training() {
     for (int s = 0; s < steps; ++s) {
         ae.zero_grad();
         ae.forward(gx, gxhat);
-        const float loss = brogameagent::nn::gpu::mse_vec_forward_gpu(gxhat, target_g);
+        const float loss = brotensor::mse_vec_forward_gpu(gxhat, target_g);
         BGA_CHECK(std::isfinite(loss));
         if (s == 0) loss_first = loss;
         if (s == steps - 1) loss_last = loss;
-        brogameagent::nn::gpu::mse_vec_backward_gpu(gxhat, target_g, gdXh);
+        brotensor::mse_vec_backward_gpu(gxhat, target_g, gdXh);
         ae.backward(gdXh);
         ae.sgd_step(0.05f, 0.9f);
     }

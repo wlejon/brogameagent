@@ -1,13 +1,14 @@
-#include <brogameagent/nn/gpu/runtime.h>
-#include <brogameagent/nn/gpu/tensor.h>
+#include <brotensor/runtime.h>
+#include <brotensor/tensor.h>
 #include <brogameagent/nn/tensor.h>
+#include <brogameagent/nn/gpu_glue.h>
 
 #include <cmath>
 #include <cstdio>
 #include <vector>
 
 using namespace brogameagent::nn;
-using namespace brogameagent::nn::gpu;
+using namespace brotensor;
 
 // Lightweight inline harness — matches the style of tests/test_main.cpp but
 // kept self-contained so the GPU smoke test isolates a single concern.
@@ -30,14 +31,14 @@ static void test_upload_download_roundtrip() {
     for (int i = 0; i < h.size(); ++i) h.data[i] = static_cast<float>(i) * 0.5f - 1.0f;
 
     GpuTensor g;
-    upload(h, g);
+    upload_to(h, g);
     cuda_sync();
     CHECK(g.rows == 3);
     CHECK(g.cols == 4);
     CHECK(g.data != nullptr);
 
     Tensor back;
-    download(g, back);
+    download_to(g, back);
     cuda_sync();
     CHECK(back.rows == 3);
     CHECK(back.cols == 4);
@@ -51,7 +52,7 @@ static void test_clone() {
     for (int i = 0; i < h.size(); ++i) h.data[i] = static_cast<float>(i + 1);
 
     GpuTensor a;
-    upload(h, a);
+    upload_to(h, a);
     GpuTensor b = a.clone();
     CHECK(b.rows == 2);
     CHECK(b.cols == 3);
@@ -62,10 +63,10 @@ static void test_clone() {
     // independent.
     Tensor h2(2, 3);
     for (int i = 0; i < h2.size(); ++i) h2.data[i] = -42.0f;
-    upload(h2, a);
+    upload_to(h2, a);
 
     Tensor downB;
-    download(b, downB);
+    download_to(b, downB);
     for (int i = 0; i < downB.size(); ++i) {
         CHECK_NEAR(downB.data[i], static_cast<float>(i + 1), 1e-6f);
     }
@@ -84,7 +85,7 @@ static void test_resize_and_zero() {
 
     g.zero();
     Tensor h;
-    download(g, h);
+    download_to(g, h);
     for (int i = 0; i < h.size(); ++i) CHECK_NEAR(h.data[i], 0.0f, 1e-6f);
 
     // Resize to same shape is a no-op (data pointer should remain valid).

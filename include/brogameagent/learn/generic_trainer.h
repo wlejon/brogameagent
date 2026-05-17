@@ -6,9 +6,9 @@
 #include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/net_tx.h"
 
-#ifdef BGA_HAS_GPU
-#include "brogameagent/nn/gpu/tensor.h"
-#include "brogameagent/nn/gpu/device_buffer.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/tensor.h>
+#include <brotensor/device_buffer.h>
 #endif
 
 #include <cstdint>
@@ -77,15 +77,15 @@ public:
     virtual void forward(const nn::Tensor& x, float& value, nn::Tensor& logits) = 0;
     virtual void backward(float dValue, const nn::Tensor& dLogits) = 0;
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // GPU batched-train forward/backward. PolicyValueNet implements these
     // with true batched kernels; SingleHeroNetTX implements them via
     // per-element loops over the single-sample GPU forward/backward.
-    virtual void forward_batched_train(const nn::gpu::GpuTensor& X_BD,
-                                       nn::gpu::GpuTensor& logits_BL,
-                                       nn::gpu::GpuTensor& values_B1) = 0;
-    virtual void backward_batched(const nn::gpu::GpuTensor& dLogits_BL,
-                                  const nn::gpu::GpuTensor& dValues_B1) = 0;
+    virtual void forward_batched_train(const brotensor::GpuTensor& X_BD,
+                                       brotensor::GpuTensor& logits_BL,
+                                       brotensor::GpuTensor& values_B1) = 0;
+    virtual void backward_batched(const brotensor::GpuTensor& dLogits_BL,
+                                  const brotensor::GpuTensor& dValues_B1) = 0;
 #endif
 };
 
@@ -104,7 +104,7 @@ public:
 class GenericExItTrainer {
 public:
     GenericExItTrainer() = default;
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // Non-copyable when GPU is enabled: GpuTensor / DeviceBuffer members are
     // move-only RAII handles. Default destructor is sufficient.
     GenericExItTrainer(const GenericExItTrainer&) = delete;
@@ -131,7 +131,7 @@ private:
     void maybe_publish();
 
     GenericTrainStep step_cpu_();
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     GenericTrainStep step_gpu_();
     void ensure_gpu_staging_();
 #endif
@@ -146,28 +146,28 @@ private:
     int                         publishes_ = 0;
     int                         adam_step_ = 0;     // unused (SGD), reserved
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // Reusable batched-step GPU staging buffers, allocated lazily on first
     // GPU step. All shaped (B, *) where B == cfg_.batch — sized once and
     // never re-resized, regardless of how many valid samples land in the
     // minibatch (we always upload exactly B rows per step).
-    nn::gpu::GpuTensor X_BD_g_;          // (B, in_dim)         observations
-    nn::gpu::GpuTensor T_BL_g_;          // (B, n_act)          policy target
-    nn::gpu::GpuTensor M_BL_g_;          // (B, n_act)          optional mask
-    nn::gpu::GpuTensor V_B1_g_;          // (B, 1)              value target
-    nn::gpu::GpuTensor logits_BL_g_;     // (B, n_act)          forward output
-    nn::gpu::GpuTensor values_B1_g_;     // (B, 1)              forward output
-    nn::gpu::GpuTensor probs_BL_g_;      // (B, n_act)          softmax output
-    nn::gpu::GpuTensor dLog_BL_g_;       // (B, n_act)          d(loss)/d(logits)
-    nn::gpu::GpuTensor dV_B1_g_;         // (B, 1)              d(loss)/d(value)
-    nn::gpu::GpuTensor lp_per_sample_g_; // (B, 1) policy loss per sample
-    nn::gpu::GpuTensor lv_per_sample_g_; // (B, 1) value  loss per sample
+    brotensor::GpuTensor X_BD_g_;          // (B, in_dim)         observations
+    brotensor::GpuTensor T_BL_g_;          // (B, n_act)          policy target
+    brotensor::GpuTensor M_BL_g_;          // (B, n_act)          optional mask
+    brotensor::GpuTensor V_B1_g_;          // (B, 1)              value target
+    brotensor::GpuTensor logits_BL_g_;     // (B, n_act)          forward output
+    brotensor::GpuTensor values_B1_g_;     // (B, 1)              forward output
+    brotensor::GpuTensor probs_BL_g_;      // (B, n_act)          softmax output
+    brotensor::GpuTensor dLog_BL_g_;       // (B, n_act)          d(loss)/d(logits)
+    brotensor::GpuTensor dV_B1_g_;         // (B, 1)              d(loss)/d(value)
+    brotensor::GpuTensor lp_per_sample_g_; // (B, 1) policy loss per sample
+    brotensor::GpuTensor lv_per_sample_g_; // (B, 1) value  loss per sample
     bool  has_mask_for_step_ = false;    // re-evaluated per step
     bool  gpu_ready_         = false;
 
     // Device int buffer for head_offsets (cumulative). Sized at gpu_ready_
     // time to net->head_offsets().size(). DeviceBuffer is backend-neutral.
-    nn::gpu::DeviceBuffer<int> head_offsets_dev_;
+    brotensor::DeviceBuffer<int> head_offsets_dev_;
 #endif
 };
 

@@ -6,8 +6,8 @@
 #include "net.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_GPU
-#include "gpu/tensor.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/tensor.h>
 #endif
 
 #include <cstdint>
@@ -41,9 +41,9 @@ public:
     void forward(const Tensor& x, Tensor& x_hat);
     void backward(const Tensor& dX_hat);
 
-#ifdef BGA_HAS_GPU
-    void forward(const gpu::GpuTensor& x, gpu::GpuTensor& x_hat);
-    void backward(const gpu::GpuTensor& dX_hat);
+#ifdef BROTENSOR_HAS_GPU
+    void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& x_hat);
+    void backward(const brotensor::GpuTensor& dX_hat);
 #endif
 
     Device device() const { return device_; }
@@ -76,10 +76,10 @@ private:
     Tensor dEmbed_;      // scratch for backward
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_GPU
-    gpu::GpuTensor embed_g_;
-    gpu::GpuTensor dEmbed_g_;
-    gpu::GpuTensor dX_obs_g_;   // discarded grad wrt observation; allocated once.
+#ifdef BROTENSOR_HAS_GPU
+    brotensor::GpuTensor embed_g_;
+    brotensor::GpuTensor dEmbed_g_;
+    brotensor::GpuTensor dX_obs_g_;   // discarded grad wrt observation; allocated once.
 #endif
 };
 

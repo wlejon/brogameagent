@@ -1,9 +1,10 @@
 #include "brogameagent/nn/transformer_block.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_GPU
-#include "brogameagent/nn/gpu/ops.h"
-#include "brogameagent/nn/gpu/runtime.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/ops.h>
+#include <brotensor/runtime.h>
+#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -28,7 +29,7 @@ void TransformerBlock::RowLN::init(int D, float e) {
 }
 
 void TransformerBlock::RowLN::zero_grad() {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         dGamma_g.zero(); dBeta_g.zero();
         return;
@@ -38,10 +39,10 @@ void TransformerBlock::RowLN::zero_grad() {
 }
 
 void TransformerBlock::RowLN::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::sgd_step_gpu(gamma_g, dGamma_g, vGamma_g, lr, momentum);
-        gpu::sgd_step_gpu(beta_g,  dBeta_g,  vBeta_g,  lr, momentum);
+        brotensor::sgd_step_gpu(gamma_g, dGamma_g, vGamma_g, lr, momentum);
+        brotensor::sgd_step_gpu(beta_g,  dBeta_g,  vBeta_g,  lr, momentum);
         return;
     }
 #endif
@@ -56,11 +57,11 @@ void TransformerBlock::RowLN::sgd_step(float lr, float momentum) {
 
 void TransformerBlock::RowLN::adam_step(float lr, float beta1, float beta2,
                                         float eps_a, int step) {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::adam_step_gpu(gamma_g, dGamma_g, mGamma_g, vAGamma_g,
+        brotensor::adam_step_gpu(gamma_g, dGamma_g, mGamma_g, vAGamma_g,
                            lr, beta1, beta2, eps_a, step);
-        gpu::adam_step_gpu(beta_g,  dBeta_g,  mBeta_g,  vABeta_g,
+        brotensor::adam_step_gpu(beta_g,  dBeta_g,  mBeta_g,  vABeta_g,
                            lr, beta1, beta2, eps_a, step);
         return;
     }
@@ -120,8 +121,8 @@ void TransformerBlock::RowLN::backward(const Tensor& dY, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_GPU
-void TransformerBlock::RowLN::forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y) {
+#ifdef BROTENSOR_HAS_GPU
+void TransformerBlock::RowLN::forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y) {
     assert(device_ == Device::GPU);
     const int K = X.rows;
     const int D = X.cols;
@@ -134,71 +135,71 @@ void TransformerBlock::RowLN::forward(const gpu::GpuTensor& X, gpu::GpuTensor& Y
     // Per-row layernorm via the per-vector kernel; mean/rstd are host scalars
     // populated by each call (one host↔device sync per row).
     for (int i = 0; i < K; ++i) {
-        gpu::GpuTensor x_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor x_row = brotensor::GpuTensor::view(
             const_cast<float*>(X.data) + static_cast<size_t>(i) * D, D, 1);
-        gpu::GpuTensor y_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor y_row = brotensor::GpuTensor::view(
             Y.data + static_cast<size_t>(i) * D, D, 1);
-        gpu::GpuTensor xhat_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor xhat_row = brotensor::GpuTensor::view(
             xhat_g.data + static_cast<size_t>(i) * D, D, 1);
-        gpu::layernorm_forward_gpu(x_row, gamma_g, beta_g,
+        brotensor::layernorm_forward_gpu(x_row, gamma_g, beta_g,
                                    y_row, xhat_row,
                                    mean[i], rstd[i], eps);
     }
 }
 
-void TransformerBlock::RowLN::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
+void TransformerBlock::RowLN::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
     assert(device_ == Device::GPU);
     const int K = dY.rows;
     const int D = dY.cols;
     if (dX.rows != K || dX.cols != D) dX.resize(K, D);
     for (int i = 0; i < K; ++i) {
-        gpu::GpuTensor dy_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor dy_row = brotensor::GpuTensor::view(
             const_cast<float*>(dY.data) + static_cast<size_t>(i) * D, D, 1);
-        gpu::GpuTensor xhat_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor xhat_row = brotensor::GpuTensor::view(
             xhat_g.data + static_cast<size_t>(i) * D, D, 1);
-        gpu::GpuTensor dx_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor dx_row = brotensor::GpuTensor::view(
             dX.data + static_cast<size_t>(i) * D, D, 1);
-        gpu::layernorm_backward_gpu(dy_row, xhat_row, gamma_g, rstd[i],
+        brotensor::layernorm_backward_gpu(dy_row, xhat_row, gamma_g, rstd[i],
                                     dx_row, dGamma_g, dBeta_g);
     }
 }
 
 void TransformerBlock::RowLN::forward_inference_batched(
-        const gpu::GpuTensor& X_RD, gpu::GpuTensor& Y_RD) {
-    gpu::layernorm_forward_inference_batched_gpu(X_RD, gamma_g, beta_g, Y_RD, eps);
+        const brotensor::GpuTensor& X_RD, brotensor::GpuTensor& Y_RD) {
+    brotensor::layernorm_forward_inference_batched_gpu(X_RD, gamma_g, beta_g, Y_RD, eps);
 }
 #endif
 
 void TransformerBlock::RowLN::to(Device d) {
     if (d == device_) return;
     device_require_cuda("TransformerBlock::RowLN");
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (d == Device::GPU) {
-        gpu::upload(gamma, gamma_g); gpu::upload(beta, beta_g);
-        gpu::upload(dGamma, dGamma_g); gpu::upload(dBeta, dBeta_g);
-        gpu::upload(vGamma, vGamma_g); gpu::upload(vBeta, vBeta_g);
-        gpu::upload(mGamma, mGamma_g); gpu::upload(mBeta, mBeta_g);
-        gpu::upload(vAGamma, vAGamma_g); gpu::upload(vABeta, vABeta_g);
+        upload_to(gamma, gamma_g); upload_to(beta, beta_g);
+        upload_to(dGamma, dGamma_g); upload_to(dBeta, dBeta_g);
+        upload_to(vGamma, vGamma_g); upload_to(vBeta, vBeta_g);
+        upload_to(mGamma, mGamma_g); upload_to(mBeta, mBeta_g);
+        upload_to(vAGamma, vAGamma_g); upload_to(vABeta, vABeta_g);
         device_ = Device::GPU;
     } else {
-        gpu::download(gamma_g, gamma); gpu::download(beta_g, beta);
-        gpu::download(dGamma_g, dGamma); gpu::download(dBeta_g, dBeta);
-        gpu::download(vGamma_g, vGamma); gpu::download(vBeta_g, vBeta);
-        gpu::download(mGamma_g, mGamma); gpu::download(mBeta_g, mBeta);
-        gpu::download(vAGamma_g, vAGamma); gpu::download(vABeta_g, vABeta);
-        gpu::cuda_sync();
+        download_to(gamma_g, gamma); download_to(beta_g, beta);
+        download_to(dGamma_g, dGamma); download_to(dBeta_g, dBeta);
+        download_to(vGamma_g, vGamma); download_to(vBeta_g, vBeta);
+        download_to(mGamma_g, mGamma); download_to(mBeta_g, mBeta);
+        download_to(vAGamma_g, vAGamma); download_to(vABeta_g, vABeta);
+        brotensor::cuda_sync();
         device_ = Device::CPU;
     }
 #endif
 }
 
 void TransformerBlock::RowLN::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         auto* self = const_cast<RowLN*>(this);
-        gpu::download(gamma_g, self->gamma);
-        gpu::download(beta_g, self->beta);
-        gpu::cuda_sync();
+        download_to(gamma_g, self->gamma);
+        download_to(beta_g, self->beta);
+        brotensor::cuda_sync();
     }
 #endif
     tensor_write(gamma, out);
@@ -214,13 +215,13 @@ void TransformerBlock::RowLN::load_from(const uint8_t* data, size_t& offset, siz
     mGamma.resize(D, 1); mBeta.resize(D, 1);
     vAGamma.resize(D, 1); vABeta.resize(D, 1);
     mGamma.zero(); mBeta.zero(); vAGamma.zero(); vABeta.zero();
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::upload(gamma, gamma_g); gpu::upload(beta, beta_g);
-        gpu::upload(dGamma, dGamma_g); gpu::upload(dBeta, dBeta_g);
-        gpu::upload(vGamma, vGamma_g); gpu::upload(vBeta, vBeta_g);
-        gpu::upload(mGamma, mGamma_g); gpu::upload(mBeta, mBeta_g);
-        gpu::upload(vAGamma, vAGamma_g); gpu::upload(vABeta, vABeta_g);
+        upload_to(gamma, gamma_g); upload_to(beta, beta_g);
+        upload_to(dGamma, dGamma_g); upload_to(dBeta, dBeta_g);
+        upload_to(vGamma, vGamma_g); upload_to(vBeta, vBeta_g);
+        upload_to(mGamma, mGamma_g); upload_to(mBeta, mBeta_g);
+        upload_to(vAGamma, vAGamma_g); upload_to(vABeta, vABeta_g);
     }
 #endif
 }
@@ -351,14 +352,14 @@ void TransformerBlock::backward(const Tensor& dY, Tensor& dX) {
     (void)mask_ptr;
 }
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
 
 namespace {
 // Tiny add kernel (Y[i] += X[i]). Using add_inplace_gpu from ops.
 } // namespace
 
-void TransformerBlock::forward(const gpu::GpuTensor& X, const float* mask_dev,
-                               gpu::GpuTensor& Y) {
+void TransformerBlock::forward(const brotensor::GpuTensor& X, const float* mask_dev,
+                               brotensor::GpuTensor& Y) {
     assert(device_ == Device::GPU);
     const int K = X.rows;
     const int D = X.cols;
@@ -378,7 +379,7 @@ void TransformerBlock::forward(const gpu::GpuTensor& X, const float* mask_dev,
         ln1_.forward(X, LN1_out_g_);
         mha_.forward(LN1_out_g_, mask_dev, MHA_out_g_);
         A_cache_g_ = X.clone();
-        gpu::add_inplace_gpu(A_cache_g_, MHA_out_g_);
+        brotensor::add_inplace_gpu(A_cache_g_, MHA_out_g_);
 
         // y = a + FF(LN2(a))
         ln2_.forward(A_cache_g_, LN2_out_g_);
@@ -386,23 +387,23 @@ void TransformerBlock::forward(const gpu::GpuTensor& X, const float* mask_dev,
         // Y = A + FF_out
         // We can't directly memcpy; clone A then add FF_out_g_.
         Y = A_cache_g_.clone();
-        gpu::add_inplace_gpu(Y, FF_out_g_);
+        brotensor::add_inplace_gpu(Y, FF_out_g_);
     } else {
         // post-norm: a = LN1(x + MHA(x))
         mha_.forward(X, mask_dev, MHA_out_g_);
-        gpu::GpuTensor pre_ln1 = X.clone();
-        gpu::add_inplace_gpu(pre_ln1, MHA_out_g_);
+        brotensor::GpuTensor pre_ln1 = X.clone();
+        brotensor::add_inplace_gpu(pre_ln1, MHA_out_g_);
         ln1_.forward(pre_ln1, A_cache_g_);
 
         // y = LN2(a + FF(a))
         ff_.forward(A_cache_g_, FF_out_g_);
-        gpu::GpuTensor pre_ln2 = A_cache_g_.clone();
-        gpu::add_inplace_gpu(pre_ln2, FF_out_g_);
+        brotensor::GpuTensor pre_ln2 = A_cache_g_.clone();
+        brotensor::add_inplace_gpu(pre_ln2, FF_out_g_);
         ln2_.forward(pre_ln2, Y);
     }
 }
 
-void TransformerBlock::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
+void TransformerBlock::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
     assert(device_ == Device::GPU);
     const int K = dY.rows;
     const int D = dY.cols;
@@ -410,46 +411,46 @@ void TransformerBlock::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
 
     if (cfg_.norm == NormPlacement::PreNorm) {
         // y = a + FF(LN2(a))
-        gpu::GpuTensor dA = dY.clone();
-        gpu::GpuTensor dLN2_out(K, D);
+        brotensor::GpuTensor dA = dY.clone();
+        brotensor::GpuTensor dLN2_out(K, D);
         ff_.backward(dY, dLN2_out);
-        gpu::GpuTensor dA_from_ln(K, D);
+        brotensor::GpuTensor dA_from_ln(K, D);
         ln2_.backward(dLN2_out, dA_from_ln);
-        gpu::add_inplace_gpu(dA, dA_from_ln);
+        brotensor::add_inplace_gpu(dA, dA_from_ln);
 
         // a = x + MHA(LN1(x))
         // dMHA_out = dA → propagate through MHA + LN1. Compute that first
         // because the MHA backward consumes dA before we reuse it as dX.
-        gpu::GpuTensor dLN1_out(K, D);
+        brotensor::GpuTensor dLN1_out(K, D);
         mha_.backward(dA, dLN1_out);
-        gpu::GpuTensor dX_from_ln(K, D);
+        brotensor::GpuTensor dX_from_ln(K, D);
         ln1_.backward(dLN1_out, dX_from_ln);
         // dX = dA (residual) + dX_from_ln. Move dA in to free a buffer.
         dX = std::move(dA);
-        gpu::add_inplace_gpu(dX, dX_from_ln);
+        brotensor::add_inplace_gpu(dX, dX_from_ln);
     } else {
         // Post-norm.
-        gpu::GpuTensor d_pre_ln2(K, D);
+        brotensor::GpuTensor d_pre_ln2(K, D);
         ln2_.backward(dY, d_pre_ln2);
-        gpu::GpuTensor dA_ff(K, D);
+        brotensor::GpuTensor dA_ff(K, D);
         ff_.backward(d_pre_ln2, dA_ff);
-        gpu::GpuTensor dA = d_pre_ln2.clone();
-        gpu::add_inplace_gpu(dA, dA_ff);
+        brotensor::GpuTensor dA = d_pre_ln2.clone();
+        brotensor::add_inplace_gpu(dA, dA_ff);
 
-        gpu::GpuTensor d_pre_ln1(K, D);
+        brotensor::GpuTensor d_pre_ln1(K, D);
         ln1_.backward(dA, d_pre_ln1);
 
         // dX = d_pre_ln1 (residual) + MHA.bwd. MHA consumes d_pre_ln1 first.
-        gpu::GpuTensor dX_from_mha(K, D);
+        brotensor::GpuTensor dX_from_mha(K, D);
         mha_.backward(d_pre_ln1, dX_from_mha);
         dX = std::move(d_pre_ln1);
-        gpu::add_inplace_gpu(dX, dX_from_mha);
+        brotensor::add_inplace_gpu(dX, dX_from_mha);
     }
 }
 
 void TransformerBlock::forward_inference_batched(
-        const gpu::GpuTensor& X_RD, const float* mask_R_dev,
-        gpu::GpuTensor& Y_RD, int B, int K) {
+        const brotensor::GpuTensor& X_RD, const float* mask_R_dev,
+        brotensor::GpuTensor& Y_RD, int B, int K) {
     const int D = cfg_.dim;
     const int R = B * K;
     if (Y_RD.rows != R || Y_RD.cols != D) Y_RD.resize(R, D);
@@ -457,31 +458,31 @@ void TransformerBlock::forward_inference_batched(
 
     if (cfg_.norm == NormPlacement::PreNorm) {
         // a = X + MHA(LN1(X), mask)
-        gpu::GpuTensor LN_out(R, D);
-        gpu::GpuTensor MHA_out(R, D);
+        brotensor::GpuTensor LN_out(R, D);
+        brotensor::GpuTensor MHA_out(R, D);
         ln1_.forward_inference_batched(X_RD, LN_out);
         mha_.forward_inference_batched(LN_out, mask_R_dev, MHA_out, B, K);
-        gpu::copy_d2d_gpu(X_RD, 0, Y_RD, 0, R * D);
-        gpu::add_inplace_gpu(Y_RD, MHA_out);
+        brotensor::copy_d2d_gpu(X_RD, 0, Y_RD, 0, R * D);
+        brotensor::add_inplace_gpu(Y_RD, MHA_out);
         // Y += FF(LN2(Y))
-        gpu::GpuTensor LN2_out(R, D);
-        gpu::GpuTensor FF_out (R, D);
+        brotensor::GpuTensor LN2_out(R, D);
+        brotensor::GpuTensor FF_out (R, D);
         ln2_.forward_inference_batched(Y_RD, LN2_out);
         ff_ .forward_inference_batched(LN2_out, FF_out);
-        gpu::add_inplace_gpu(Y_RD, FF_out);
+        brotensor::add_inplace_gpu(Y_RD, FF_out);
     } else {
         // post-norm: a = LN1(X + MHA(X, mask)); Y = LN2(a + FF(a))
-        gpu::GpuTensor MHA_out(R, D);
+        brotensor::GpuTensor MHA_out(R, D);
         mha_.forward_inference_batched(X_RD, mask_R_dev, MHA_out, B, K);
-        gpu::GpuTensor tmp(R, D);
-        gpu::copy_d2d_gpu(X_RD, 0, tmp, 0, R * D);
-        gpu::add_inplace_gpu(tmp, MHA_out);
-        gpu::GpuTensor a(R, D);
+        brotensor::GpuTensor tmp(R, D);
+        brotensor::copy_d2d_gpu(X_RD, 0, tmp, 0, R * D);
+        brotensor::add_inplace_gpu(tmp, MHA_out);
+        brotensor::GpuTensor a(R, D);
         ln1_.forward_inference_batched(tmp, a);
-        gpu::GpuTensor FF_out(R, D);
+        brotensor::GpuTensor FF_out(R, D);
         ff_.forward_inference_batched(a, FF_out);
-        gpu::copy_d2d_gpu(a, 0, tmp, 0, R * D);
-        gpu::add_inplace_gpu(tmp, FF_out);
+        brotensor::copy_d2d_gpu(a, 0, tmp, 0, R * D);
+        brotensor::add_inplace_gpu(tmp, FF_out);
         ln2_.forward_inference_batched(tmp, Y_RD);
     }
 }

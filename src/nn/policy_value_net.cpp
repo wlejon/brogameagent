@@ -1,9 +1,9 @@
 #include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/ops.h"
 
-#ifdef BGA_HAS_GPU
-#include "brogameagent/nn/gpu/ops.h"
-#include "brogameagent/nn/gpu/runtime.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/ops.h>
+#include <brotensor/runtime.h>
 #endif
 
 #include <cassert>
@@ -142,32 +142,32 @@ void PolicyValueNet::backward(float dValue, const Tensor& dLogits) {
     }
 }
 
-#ifdef BGA_HAS_GPU
-void PolicyValueNet::forward(const gpu::GpuTensor& x, gpu::GpuTensor& logits) {
+#ifdef BROTENSOR_HAS_GPU
+void PolicyValueNet::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& logits) {
     assert(device_ == Device::GPU);
 
     // Trunk: Linear → ReLU per layer. Caches owned by `this`.
-    const gpu::GpuTensor* h = &x;
+    const brotensor::GpuTensor* h = &x;
     for (size_t i = 0; i < trunk_.size(); ++i) {
         trunk_[i].forward(*h, trunk_raw_g_[i]);
-        gpu::relu_forward_gpu(trunk_raw_g_[i], trunk_act_g_[i]);
+        brotensor::relu_forward_gpu(trunk_raw_g_[i], trunk_act_g_[i]);
         h = &trunk_act_g_[i];
     }
 
     // Value head: Linear → ReLU → Linear → tanh. Result lives in
     // v_post_tanh_g_ (accessible via value_gpu()).
     v_fc1_.forward(*h, v_h_raw_g_);
-    gpu::relu_forward_gpu(v_h_raw_g_, v_h_act_g_);
+    brotensor::relu_forward_gpu(v_h_raw_g_, v_h_act_g_);
     v_fc2_.forward(v_h_act_g_, v_pre_tanh_g_);
-    gpu::tanh_forward_gpu(v_pre_tanh_g_, v_post_tanh_g_);
+    brotensor::tanh_forward_gpu(v_pre_tanh_g_, v_post_tanh_g_);
 
     // Policy head.
     p_fc_.forward(*h, logits);
 }
 
-void PolicyValueNet::forward_batched(const gpu::GpuTensor& X_BD,
-                                     gpu::GpuTensor& logits_BL,
-                                     gpu::GpuTensor& values_B1) {
+void PolicyValueNet::forward_batched(const brotensor::GpuTensor& X_BD,
+                                     brotensor::GpuTensor& logits_BL,
+                                     brotensor::GpuTensor& values_B1) {
     assert(device_ == Device::GPU);
     const int B = X_BD.rows;
 
@@ -181,29 +181,29 @@ void PolicyValueNet::forward_batched(const gpu::GpuTensor& X_BD,
 
     // Trunk: Linear(W, b) → ReLU per layer. Each call resizes its output to
     // (B, hidden[i]) automatically.
-    const gpu::GpuTensor* h = &X_BD;
+    const brotensor::GpuTensor* h = &X_BD;
     for (size_t i = 0; i < trunk_.size(); ++i) {
-        gpu::linear_forward_batched_gpu(trunk_[i].W_g(), trunk_[i].b_g(),
+        brotensor::linear_forward_batched_gpu(trunk_[i].W_g(), trunk_[i].b_g(),
                                         *h, trunk_raw_bg_[i]);
-        gpu::relu_forward_batched_gpu(trunk_raw_bg_[i], trunk_act_bg_[i]);
+        brotensor::relu_forward_batched_gpu(trunk_raw_bg_[i], trunk_act_bg_[i]);
         h = &trunk_act_bg_[i];
     }
 
     // Value head: Linear → ReLU → Linear → Tanh, all batched.
-    gpu::linear_forward_batched_gpu(v_fc1_.W_g(), v_fc1_.b_g(), *h, v_h_raw_bg_);
-    gpu::relu_forward_batched_gpu(v_h_raw_bg_, v_h_act_bg_);
-    gpu::linear_forward_batched_gpu(v_fc2_.W_g(), v_fc2_.b_g(),
+    brotensor::linear_forward_batched_gpu(v_fc1_.W_g(), v_fc1_.b_g(), *h, v_h_raw_bg_);
+    brotensor::relu_forward_batched_gpu(v_h_raw_bg_, v_h_act_bg_);
+    brotensor::linear_forward_batched_gpu(v_fc2_.W_g(), v_fc2_.b_g(),
                                     v_h_act_bg_, v_pre_tanh_bg_);
     if (values_B1.rows != B || values_B1.cols != 1) values_B1.resize(B, 1);
-    gpu::tanh_forward_batched_gpu(v_pre_tanh_bg_, values_B1);
+    brotensor::tanh_forward_batched_gpu(v_pre_tanh_bg_, values_B1);
 
     // Policy head.
-    gpu::linear_forward_batched_gpu(p_fc_.W_g(), p_fc_.b_g(), *h, logits_BL);
+    brotensor::linear_forward_batched_gpu(p_fc_.W_g(), p_fc_.b_g(), *h, logits_BL);
 }
 
-void PolicyValueNet::forward_batched_train(const gpu::GpuTensor& X_BD,
-                                           gpu::GpuTensor& logits_BL,
-                                           gpu::GpuTensor& values_B1) {
+void PolicyValueNet::forward_batched_train(const brotensor::GpuTensor& X_BD,
+                                           brotensor::GpuTensor& logits_BL,
+                                           brotensor::GpuTensor& values_B1) {
     assert(device_ == Device::GPU);
     const int B = X_BD.rows;
 
@@ -215,48 +215,48 @@ void PolicyValueNet::forward_batched_train(const gpu::GpuTensor& X_BD,
     }
 
     // Trunk: Linear (caches X view) → ReLU.
-    const gpu::GpuTensor* h = &X_BD;
+    const brotensor::GpuTensor* h = &X_BD;
     for (size_t i = 0; i < trunk_.size(); ++i) {
         trunk_[i].forward_batched_train(*h, trunk_raw_btr_g_[i]);
-        gpu::relu_forward_batched_gpu(trunk_raw_btr_g_[i], trunk_act_btr_g_[i]);
+        brotensor::relu_forward_batched_gpu(trunk_raw_btr_g_[i], trunk_act_btr_g_[i]);
         h = &trunk_act_btr_g_[i];
     }
 
     // Value head: Linear → ReLU → Linear → Tanh.
     v_fc1_.forward_batched_train(*h, v_h_raw_btr_g_);
-    gpu::relu_forward_batched_gpu(v_h_raw_btr_g_, v_h_act_btr_g_);
+    brotensor::relu_forward_batched_gpu(v_h_raw_btr_g_, v_h_act_btr_g_);
     v_fc2_.forward_batched_train(v_h_act_btr_g_, v_pre_tanh_btr_g_);
     if (values_B1.rows != B || values_B1.cols != 1) values_B1.resize(B, 1);
-    gpu::tanh_forward_batched_gpu(v_pre_tanh_btr_g_, values_B1);
+    brotensor::tanh_forward_batched_gpu(v_pre_tanh_btr_g_, values_B1);
     // Stash post-tanh (== values_B1) for tanh_backward via a non-owning view.
-    v_post_tanh_btr_g_ = gpu::GpuTensor::view(values_B1.data,
+    v_post_tanh_btr_g_ = brotensor::GpuTensor::view(values_B1.data,
                                               values_B1.rows, values_B1.cols);
 
     // Policy head: Linear (no activation).
     p_fc_.forward_batched_train(*h, logits_BL);
 }
 
-void PolicyValueNet::backward_batched(const gpu::GpuTensor& dLogits_BL,
-                                      const gpu::GpuTensor& dValues_B1) {
+void PolicyValueNet::backward_batched(const brotensor::GpuTensor& dLogits_BL,
+                                      const brotensor::GpuTensor& dValues_B1) {
     assert(device_ == Device::GPU);
 
     // ── Value head backward ───────────────────────────────────────────────
-    gpu::tanh_backward_batched_gpu(v_post_tanh_btr_g_, dValues_B1, dPreTanh_btr_g_);
+    brotensor::tanh_backward_batched_gpu(v_post_tanh_btr_g_, dValues_B1, dPreTanh_btr_g_);
     v_fc2_.backward_batched(dPreTanh_btr_g_, dVAct_btr_g_);
-    gpu::relu_backward_batched_gpu(v_h_raw_btr_g_, dVAct_btr_g_, dVRaw_btr_g_);
+    brotensor::relu_backward_batched_gpu(v_h_raw_btr_g_, dVAct_btr_g_, dVRaw_btr_g_);
     // Write directly into dHAct so we can fold in the policy-head gradient
     // afterwards via add_inplace.
     v_fc1_.backward_batched(dVRaw_btr_g_, dHAct_btr_g_);
 
     // ── Policy head backward ──────────────────────────────────────────────
     p_fc_.backward_batched(dLogits_BL, dTrunkFromP_btr_g_);
-    gpu::add_inplace_batched_gpu(dHAct_btr_g_, dTrunkFromP_btr_g_);
+    brotensor::add_inplace_batched_gpu(dHAct_btr_g_, dTrunkFromP_btr_g_);
 
     // ── Walk trunk backwards. Ping-pong between dHAct and dPrev ──────────
-    gpu::GpuTensor* cur  = &dHAct_btr_g_;
-    gpu::GpuTensor* next = &dPrev_btr_g_;
+    brotensor::GpuTensor* cur  = &dHAct_btr_g_;
+    brotensor::GpuTensor* next = &dPrev_btr_g_;
     for (int li = static_cast<int>(trunk_.size()) - 1; li >= 0; --li) {
-        gpu::relu_backward_batched_gpu(trunk_raw_btr_g_[li], *cur, dHRaw_btr_g_);
+        brotensor::relu_backward_batched_gpu(trunk_raw_btr_g_[li], *cur, dHRaw_btr_g_);
         if (li == 0) {
             trunk_[li].backward_batched(dHRaw_btr_g_, dXdiscard_btr_g_);
         } else {
@@ -266,14 +266,14 @@ void PolicyValueNet::backward_batched(const gpu::GpuTensor& dLogits_BL,
     }
 }
 
-void PolicyValueNet::backward(const gpu::GpuTensor& dLogits) {
+void PolicyValueNet::backward(const brotensor::GpuTensor& dLogits) {
     assert(device_ == Device::GPU);
 
     // ── Value head backward ───────────────────────────────────────────────
     // Caller wrote d(loss)/d(value) into dPostTanh_g_ via dValue_gpu().
-    gpu::tanh_backward_gpu(v_post_tanh_g_, dPostTanh_g_, dPreTanh_g_);
+    brotensor::tanh_backward_gpu(v_post_tanh_g_, dPostTanh_g_, dPreTanh_g_);
     v_fc2_.backward(dPreTanh_g_, dVAct_g_);
-    gpu::relu_backward_gpu(v_h_raw_g_, dVAct_g_, dVRaw_g_);
+    brotensor::relu_backward_gpu(v_h_raw_g_, dVAct_g_, dVRaw_g_);
     // Write straight into dHAct_g_ to avoid a device→device copy.
     v_fc1_.backward(dVRaw_g_, dHAct_g_);
 
@@ -281,13 +281,13 @@ void PolicyValueNet::backward(const gpu::GpuTensor& dLogits) {
     p_fc_.backward(dLogits, dTrunkFromP_g_);
 
     // dHAct += dTrunkFromP.
-    gpu::add_inplace_gpu(dHAct_g_, dTrunkFromP_g_);
+    brotensor::add_inplace_gpu(dHAct_g_, dTrunkFromP_g_);
 
     // ── Walk trunk backwards. Ping-pong between dHAct_g_ and dPrev_g_ ────
-    gpu::GpuTensor* cur  = &dHAct_g_;
-    gpu::GpuTensor* next = &dPrev_g_;
+    brotensor::GpuTensor* cur  = &dHAct_g_;
+    brotensor::GpuTensor* next = &dPrev_g_;
     for (int li = static_cast<int>(trunk_.size()) - 1; li >= 0; --li) {
-        gpu::relu_backward_gpu(trunk_raw_g_[li], *cur, dHRaw_g_);
+        brotensor::relu_backward_gpu(trunk_raw_g_[li], *cur, dHRaw_g_);
         if (li == 0) {
             // Trunk-input gradient is discarded.
             trunk_[li].backward(dHRaw_g_, dXdiscard_g_);
@@ -302,7 +302,7 @@ void PolicyValueNet::backward(const gpu::GpuTensor& dLogits) {
 void PolicyValueNet::to(Device d) {
     if (d == device_) return;
     device_require_cuda("PolicyValueNet");
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (d == Device::GPU) {
         for (auto& l : trunk_) l.to(Device::GPU);
         v_fc1_.to(Device::GPU);

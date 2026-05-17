@@ -3,11 +3,12 @@
 #include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/tensor.h"
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
 #include "brogameagent/learn/batched_net.h"
 #include "brogameagent/learn/inference_server.h"
-#include "brogameagent/nn/gpu/runtime.h"
-#include "brogameagent/nn/gpu/tensor.h"
+#include <brotensor/runtime.h>
+#include <brotensor/tensor.h>
+#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <stdexcept>
@@ -36,19 +37,19 @@ EvalResult DirectBackend::evaluate(const std::vector<float>& obs) {
     nn::Tensor logits = nn::Tensor::vec(net_->num_actions());
     float v = 0.0f;
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (net_->device() == nn::Device::GPU) {
         // Use the batched-1 GPU forward to avoid the single-sample overhead
         // path's caches. Stage as a (1, in_dim) host buffer.
         nn::Tensor host_X(1, net_->in_dim());
         for (int i = 0; i < net_->in_dim(); ++i) host_X.data[i] = obs[i];
-        nn::gpu::GpuTensor X_BD, logits_BD, values_B1;
-        nn::gpu::upload(host_X, X_BD);
+        brotensor::GpuTensor X_BD, logits_BD, values_B1;
+        nn::upload_to(host_X, X_BD);
         net_->forward_batched(X_BD, logits_BD, values_B1);
         nn::Tensor host_logits, host_values;
-        nn::gpu::download(logits_BD, host_logits);
-        nn::gpu::download(values_B1, host_values);
-        nn::gpu::cuda_sync();
+        nn::download_to(logits_BD, host_logits);
+        nn::download_to(values_B1, host_values);
+        brotensor::cuda_sync();
         r.logits.assign(net_->num_actions(), 0.0f);
         for (int j = 0; j < net_->num_actions(); ++j)
             r.logits[j] = host_logits.data[j];
@@ -64,7 +65,7 @@ EvalResult DirectBackend::evaluate(const std::vector<float>& obs) {
     return r;
 }
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
 // ─── DirectBatchedNetBackend ──────────────────────────────────────────────
 
 DirectBatchedNetBackend::DirectBatchedNetBackend(BatchedNet* net) : net_(net) {
@@ -83,13 +84,13 @@ EvalResult DirectBatchedNetBackend::evaluate(const std::vector<float>& obs) {
     }
     nn::Tensor host_X(1, D);
     for (int i = 0; i < D; ++i) host_X.data[i] = obs[i];
-    nn::gpu::GpuTensor X_BD, logits_BD, values_B1;
-    nn::gpu::upload(host_X, X_BD);
+    brotensor::GpuTensor X_BD, logits_BD, values_B1;
+    nn::upload_to(host_X, X_BD);
     net_->forward_batched(X_BD, logits_BD, values_B1);
     nn::Tensor host_logits, host_values;
-    nn::gpu::download(logits_BD, host_logits);
-    nn::gpu::download(values_B1, host_values);
-    nn::gpu::cuda_sync();
+    nn::download_to(logits_BD, host_logits);
+    nn::download_to(values_B1, host_values);
+    brotensor::cuda_sync();
     EvalResult r;
     r.logits.assign(L, 0.0f);
     for (int j = 0; j < L; ++j) r.logits[j] = host_logits.data[j];

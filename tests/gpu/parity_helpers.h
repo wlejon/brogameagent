@@ -5,10 +5,11 @@
 // Header-only — each test executable includes this and gets its own copy of
 // the inline helpers. Keeps the build wiring trivial (no extra .cpp).
 
-#include <brogameagent/nn/gpu/runtime.h>
-#include <brogameagent/nn/gpu/tensor.h>
-#include <brogameagent/nn/gpu/device_buffer.h>
+#include <brotensor/runtime.h>
+#include <brotensor/tensor.h>
+#include <brotensor/device_buffer.h>
 #include <brogameagent/nn/tensor.h>
+#include <brogameagent/nn/gpu_glue.h>
 
 #include <cmath>
 #include <cstdint>
@@ -21,10 +22,10 @@
 namespace bga_parity {
 
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
-using brogameagent::nn::gpu::cuda_sync;
-using brogameagent::nn::gpu::download;
-using brogameagent::nn::gpu::upload;
+using brotensor::GpuTensor;
+using brotensor::cuda_sync;
+using brogameagent::nn::download_to;
+using brogameagent::nn::upload_to;
 
 // ─── Test registry ─────────────────────────────────────────────────────────
 
@@ -110,14 +111,14 @@ inline void compare_tensors(const Tensor& cpu, const Tensor& gpu,
 
 inline Tensor download_to_host(const GpuTensor& g) {
     Tensor h;
-    download(g, h);
+    download_to(g, h);
     cuda_sync();
     return h;
 }
 
 // ─── Backend-neutral mask / index buffer helpers ──────────────────────────
 
-using brogameagent::nn::gpu::DeviceBuffer;
+using brotensor::DeviceBuffer;
 
 // Upload a host float mask vector to a device buffer. If `mask` is null,
 // returns an empty buffer whose device_ptr() is null — matches the "no mask"
@@ -150,7 +151,7 @@ inline int run_all(const char* banner) {
     for (size_t i = 0; i < std::strlen(banner); ++i) std::putchar('=');
     std::putchar('\n');
 
-    brogameagent::nn::gpu::cuda_init();
+    brotensor::cuda_init();
 
     int passed = 0;
     int total = static_cast<int>(registry().size());

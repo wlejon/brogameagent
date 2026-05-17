@@ -46,8 +46,8 @@ void run_dispatch(int n, uint64_t seed) {
     // GPU path: migrate, then run via the GpuTensor overloads.
     gpu_ln.to(Device::GPU);
     BGA_CHECK(gpu_ln.device() == Device::GPU);
-    brogameagent::nn::gpu::GpuTensor gx, gy, gdY, gdX;
-    upload(x, gx); upload(dY, gdY);
+    brotensor::GpuTensor gx, gy, gdY, gdX;
+    upload_to(x, gx); upload_to(dY, gdY);
     gy.resize(n, 1); gdX.resize(n, 1);
     gpu_ln.zero_grad();
     gpu_ln.forward(gx, gy);

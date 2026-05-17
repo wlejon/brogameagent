@@ -9,7 +9,7 @@ using namespace bga_parity;
 using brogameagent::nn::Device;
 using brogameagent::nn::MultiHeadAttention;
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace {
 
@@ -43,7 +43,7 @@ void run_dispatch(int K, int D, int H, uint64_t seed) {
     gpu_a.to(Device::GPU);
     BGA_CHECK(gpu_a.device() == Device::GPU);
     GpuTensor gX, gO, gdO, gdX;
-    upload(X, gX); upload(dO, gdO);
+    upload_to(X, gX); upload_to(dO, gdO);
     gO.resize(K, D); gdX.resize(K, D);
     gpu_a.zero_grad();
     gpu_a.forward(gX, nullptr, gO);

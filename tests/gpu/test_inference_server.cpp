@@ -16,7 +16,7 @@ using namespace bga_parity;
 using brogameagent::nn::Tensor;
 using brogameagent::nn::Device;
 using brogameagent::nn::PolicyValueNet;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 using brogameagent::learn::BatchedInferenceServer;
 
 namespace {
@@ -48,7 +48,7 @@ BatchedInferenceServer::EvalResult direct_forward(PolicyValueNet& net,
     Tensor x(in_dim, 1);
     for (int i = 0; i < in_dim; ++i) x.data[i] = obs[i];
     GpuTensor gx, glogits;
-    upload(x, gx);
+    upload_to(x, gx);
     net.forward(gx, glogits);
     Tensor h_logits = download_to_host(glogits);
     Tensor h_value  = download_to_host(net.value_gpu());

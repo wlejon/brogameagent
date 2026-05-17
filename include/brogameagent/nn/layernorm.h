@@ -4,8 +4,8 @@
 #include "device.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_GPU
-#include "gpu/tensor.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/tensor.h>
 #endif
 
 #include <cstdint>
@@ -19,7 +19,7 @@ namespace brogameagent::nn {
 //
 // GPU dispatch: device_ tracks where parameters live. `to(Device)` migrates
 // host↔device. The CPU forward/backward overloads are unchanged. The GPU
-// overloads call ::brogameagent::nn::gpu::layernorm_*_gpu.
+// overloads call ::brotensor::layernorm_*_gpu.
 
 class LayerNorm : public ICircuit {
 public:
@@ -42,10 +42,10 @@ public:
     void forward(const Tensor& x, Tensor& y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // GPU code path. Parameters must already be on Device::GPU (call to()).
-    void forward(const gpu::GpuTensor& x, gpu::GpuTensor& y);
-    void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+    void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y);
+    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
 #endif
 
     int dim() const { return gamma_.size(); }
@@ -96,16 +96,16 @@ private:
     float rstd_ = 0.0f;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // GPU mirrors. Allocated lazily on first to(GPU); updated by to() in
     // either direction. Forward/backward also create xhat_g_ as needed.
-    gpu::GpuTensor gamma_g_, beta_g_;
-    gpu::GpuTensor dGamma_g_, dBeta_g_;
-    gpu::GpuTensor vGamma_g_, vBeta_g_;
+    brotensor::GpuTensor gamma_g_, beta_g_;
+    brotensor::GpuTensor dGamma_g_, dBeta_g_;
+    brotensor::GpuTensor vGamma_g_, vBeta_g_;
     // Adam GPU mirrors.
-    gpu::GpuTensor mGamma_g_, mBeta_g_;
-    gpu::GpuTensor vAGamma_g_, vABeta_g_;
-    gpu::GpuTensor xhat_g_;
+    brotensor::GpuTensor mGamma_g_, mBeta_g_;
+    brotensor::GpuTensor vAGamma_g_, vABeta_g_;
+    brotensor::GpuTensor xhat_g_;
 #endif
 };
 

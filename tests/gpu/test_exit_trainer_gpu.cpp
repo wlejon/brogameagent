@@ -13,7 +13,7 @@
 #include <brogameagent/learn/generic_replay_buffer.h>
 #include <brogameagent/learn/generic_trainer.h>
 #include <brogameagent/nn/device.h>
-#include <brogameagent/nn/gpu/runtime.h>
+#include <brotensor/runtime.h>
 #include <brogameagent/nn/policy_value_net.h>
 
 #include <cmath>
@@ -45,7 +45,7 @@ void push(GenericReplayBuffer& buf,
 }  // namespace
 
 int main() {
-    brogameagent::nn::gpu::cuda_init();
+    brotensor::cuda_init();
 
     // Two-head net (head sizes 3, 4). Small trunk so the test is fast.
     PolicyValueNet net;

@@ -20,16 +20,14 @@ if(MSVC)
     endif()
 endif()
 
-# --- Optional GPU backends (mutually exclusive) ---
+# --- Optional GPU dispatch (CUDA or Metal via brotensor sibling) ---
 #
-# Two backends share the same nn::gpu:: namespace and op signatures. Pick one:
-#   BROGAMEAGENT_WITH_CUDA  — NVIDIA, any OS (existing).
-#   BROGAMEAGENT_WITH_METAL — Apple Silicon / Intel Mac via Metal + MPSGraph.
-#
-# Consumer code keys off the umbrella BGA_HAS_GPU define; backend-specific
-# code keys off BGA_HAS_CUDA / BGA_HAS_METAL.
-option(BROGAMEAGENT_WITH_CUDA  "Build GPU backend (CUDA)"  OFF)
-option(BROGAMEAGENT_WITH_METAL "Build GPU backend (Metal)" OFF)
+# brogameagent dispatches GPU work to brotensor (sibling repo / submodule).
+# Selecting one of these options pulls in brotensor with the matching backend
+# and sets the BROTENSOR_HAS_CUDA / _METAL / _GPU defines on us transitively.
+# The two are mutually exclusive at brotensor's level.
+option(BROGAMEAGENT_WITH_CUDA  "Dispatch GPU work via brotensor (CUDA)"  OFF)
+option(BROGAMEAGENT_WITH_METAL "Dispatch GPU work via brotensor (Metal)" OFF)
 if(BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL)
     message(FATAL_ERROR
         "BROGAMEAGENT_WITH_CUDA and BROGAMEAGENT_WITH_METAL are mutually exclusive.")
@@ -47,28 +45,27 @@ if(NOT TARGET bromath)
         message(FATAL_ERROR "bromath not found at ${BROMATH_DIR}")
     endif()
 endif()
-if(BROGAMEAGENT_WITH_CUDA)
-    # Default to "native" (auto-detect compiling host's GPU; CMake 3.24+).
-    # Override at configure time with -DCMAKE_CUDA_ARCHITECTURES=89 (or a list)
-    # to cross-build for non-host targets. Set BEFORE enable_language(CUDA) so
-    # the language detection probes use the right arch and don't backfill sm_52.
-    if(NOT CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES native)
+
+# --- brotensor (GPU tensor + ops, sibling repo) ---
+# Only loaded when a GPU backend is requested. Same double-add guard as
+# bromath. brotensor owns the language enables (CUDA / OBJCXX) and the
+# BROTENSOR_HAS_* defines.
+if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
+    if(BROGAMEAGENT_WITH_CUDA)
+        set(BROTENSOR_WITH_CUDA  ON  CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
+    elseif(BROGAMEAGENT_WITH_METAL)
+        set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_METAL ON  CACHE BOOL "" FORCE)
     endif()
-    enable_language(CUDA)
-    set(CMAKE_CUDA_STANDARD 17)
-    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-    find_package(CUDAToolkit REQUIRED)
-    # Propagate static-CRT choice to nvcc-driven host compilation on MSVC.
-    if(MSVC AND DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
-        set(CMAKE_CUDA_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
+    if(NOT TARGET brotensor)
+        set(BROTENSOR_DIR "${CMAKE_SOURCE_DIR}/../brotensor" CACHE PATH "brotensor sibling")
+        if(EXISTS "${BROTENSOR_DIR}/CMakeLists.txt")
+            add_subdirectory("${BROTENSOR_DIR}" "${CMAKE_BINARY_DIR}/brotensor" EXCLUDE_FROM_ALL)
+        else()
+            message(FATAL_ERROR "brotensor not found at ${BROTENSOR_DIR}")
+        endif()
     endif()
-endif()
-if(BROGAMEAGENT_WITH_METAL)
-    if(NOT APPLE)
-        message(FATAL_ERROR "BROGAMEAGENT_WITH_METAL requires Apple platform.")
-    endif()
-    enable_language(OBJCXX)
 endif()
 
 # --- brogameagent library ---
@@ -149,85 +146,13 @@ else()
     target_compile_options(brogameagent PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-Wextra>)
 endif()
 
-# --- GPU backend sources (gated; default OFF) ---
-if(BROGAMEAGENT_WITH_CUDA)
-    target_sources(brogameagent PRIVATE
-        src/nn/gpu/runtime.cu
-        src/nn/gpu/tensor.cu
-        src/nn/gpu/gemm.cu
-        src/nn/gpu/elementwise.cu
-        src/nn/gpu/softmax.cu
-        src/nn/gpu/layernorm.cu
-        src/nn/gpu/attention.cu
-        src/nn/gpu/optim.cu
-        src/nn/gpu/adam.cu
-        src/nn/gpu/reduce.cu
-        src/nn/gpu/loss.cu
-        src/nn/gpu/embedding.cu
-        src/nn/gpu/concat.cu
-        src/nn/gpu/mha.cu
-        src/nn/gpu/batched_ops.cu
-        src/learn/inference_server.cpp
-    )
-    target_link_libraries(brogameagent PUBLIC CUDA::cudart)
-    target_compile_definitions(brogameagent PUBLIC BGA_HAS_CUDA=1 BGA_HAS_GPU=1)
-    set_target_properties(brogameagent PROPERTIES
-        CUDA_STANDARD 17
-        CUDA_STANDARD_REQUIRED ON
-        CUDA_SEPARABLE_COMPILATION OFF
-    )
-endif()
-
-if(BROGAMEAGENT_WITH_METAL)
-    target_sources(brogameagent PRIVATE
-        src/nn/metal/runtime.mm
-        src/nn/metal/tensor.mm
-        src/nn/metal/device_buffer.mm
-        src/nn/metal/kernels.mm
-        src/nn/metal/gemm.mm
-        src/nn/metal/elementwise.mm
-        src/nn/metal/softmax.mm
-        src/nn/metal/layernorm.mm
-        src/nn/metal/attention.mm
-        src/nn/metal/mha.mm
-        src/nn/metal/optim.mm
-        src/nn/metal/adam.mm
-        src/nn/metal/reduce.mm
-        src/nn/metal/loss.mm
-        src/nn/metal/embedding.mm
-        src/nn/metal/concat.mm
-        src/nn/metal/batched_ops.mm
-        src/learn/inference_server.cpp
-    )
-    set_source_files_properties(
-        src/nn/metal/runtime.mm
-        src/nn/metal/tensor.mm
-        src/nn/metal/device_buffer.mm
-        src/nn/metal/kernels.mm
-        src/nn/metal/gemm.mm
-        src/nn/metal/elementwise.mm
-        src/nn/metal/softmax.mm
-        src/nn/metal/layernorm.mm
-        src/nn/metal/attention.mm
-        src/nn/metal/mha.mm
-        src/nn/metal/optim.mm
-        src/nn/metal/adam.mm
-        src/nn/metal/reduce.mm
-        src/nn/metal/loss.mm
-        src/nn/metal/embedding.mm
-        src/nn/metal/concat.mm
-        src/nn/metal/batched_ops.mm
-        PROPERTIES
-            COMPILE_FLAGS "-fobjc-arc"
-            LANGUAGE OBJCXX
-    )
-    target_link_libraries(brogameagent PUBLIC
-        "-framework Foundation"
-        "-framework Metal"
-        "-framework MetalPerformanceShaders"
-        "-framework MetalPerformanceShadersGraph"
-    )
-    target_compile_definitions(brogameagent PUBLIC BGA_HAS_METAL=1 BGA_HAS_GPU=1)
+# --- GPU dispatch glue (gated; default OFF) ---
+# When a GPU backend is selected we link brotensor (which owns the kernels +
+# defines + language enables) and compile the inference_server adapter that
+# bridges brogameagent's MCTS to a batched GPU inference path.
+if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
+    target_sources(brogameagent PRIVATE src/learn/inference_server.cpp)
+    target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:brotensor::brotensor>)
 endif()
 
 # --- Install / export ---

@@ -1,8 +1,9 @@
 #include "brogameagent/nn/decoder.h"
 
-#ifdef BGA_HAS_GPU
-#include "brogameagent/nn/gpu/ops.h"
-#include "brogameagent/nn/gpu/runtime.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/ops.h>
+#include <brotensor/runtime.h>
+#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -42,7 +43,7 @@ int DeepSetsDecoder::num_params() const {
 }
 
 void DeepSetsDecoder::zero_grad() {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         self_dW1_g_.zero(); self_db1_g_.zero();
         self_dW2_g_.zero(); self_db2_g_.zero();
@@ -59,20 +60,20 @@ void DeepSetsDecoder::zero_grad() {
 }
 
 void DeepSetsDecoder::sgd_step(float lr, float momentum) {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::sgd_step_gpu(self_W1_g_, self_dW1_g_, self_vW1_g_, lr, momentum);
-        gpu::sgd_step_gpu(self_b1_g_, self_db1_g_, self_vb1_g_, lr, momentum);
-        gpu::sgd_step_gpu(self_W2_g_, self_dW2_g_, self_vW2_g_, lr, momentum);
-        gpu::sgd_step_gpu(self_b2_g_, self_db2_g_, self_vb2_g_, lr, momentum);
-        gpu::sgd_step_gpu(enemy_W1_g_, enemy_dW1_g_, enemy_vW1_g_, lr, momentum);
-        gpu::sgd_step_gpu(enemy_b1_g_, enemy_db1_g_, enemy_vb1_g_, lr, momentum);
-        gpu::sgd_step_gpu(enemy_W2_g_, enemy_dW2_g_, enemy_vW2_g_, lr, momentum);
-        gpu::sgd_step_gpu(enemy_b2_g_, enemy_db2_g_, enemy_vb2_g_, lr, momentum);
-        gpu::sgd_step_gpu(ally_W1_g_, ally_dW1_g_, ally_vW1_g_, lr, momentum);
-        gpu::sgd_step_gpu(ally_b1_g_, ally_db1_g_, ally_vb1_g_, lr, momentum);
-        gpu::sgd_step_gpu(ally_W2_g_, ally_dW2_g_, ally_vW2_g_, lr, momentum);
-        gpu::sgd_step_gpu(ally_b2_g_, ally_db2_g_, ally_vb2_g_, lr, momentum);
+        brotensor::sgd_step_gpu(self_W1_g_, self_dW1_g_, self_vW1_g_, lr, momentum);
+        brotensor::sgd_step_gpu(self_b1_g_, self_db1_g_, self_vb1_g_, lr, momentum);
+        brotensor::sgd_step_gpu(self_W2_g_, self_dW2_g_, self_vW2_g_, lr, momentum);
+        brotensor::sgd_step_gpu(self_b2_g_, self_db2_g_, self_vb2_g_, lr, momentum);
+        brotensor::sgd_step_gpu(enemy_W1_g_, enemy_dW1_g_, enemy_vW1_g_, lr, momentum);
+        brotensor::sgd_step_gpu(enemy_b1_g_, enemy_db1_g_, enemy_vb1_g_, lr, momentum);
+        brotensor::sgd_step_gpu(enemy_W2_g_, enemy_dW2_g_, enemy_vW2_g_, lr, momentum);
+        brotensor::sgd_step_gpu(enemy_b2_g_, enemy_db2_g_, enemy_vb2_g_, lr, momentum);
+        brotensor::sgd_step_gpu(ally_W1_g_, ally_dW1_g_, ally_vW1_g_, lr, momentum);
+        brotensor::sgd_step_gpu(ally_b1_g_, ally_db1_g_, ally_vb1_g_, lr, momentum);
+        brotensor::sgd_step_gpu(ally_W2_g_, ally_dW2_g_, ally_vW2_g_, lr, momentum);
+        brotensor::sgd_step_gpu(ally_b2_g_, ally_db2_g_, ally_vb2_g_, lr, momentum);
         return;
     }
 #endif
@@ -89,16 +90,16 @@ void DeepSetsDecoder::adam_step(float lr, float b1, float b2, float eps, int ste
 }
 
 void DeepSetsDecoder::save_to(std::vector<uint8_t>& out) const {
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
         auto* self = const_cast<DeepSetsDecoder*>(this);
-        gpu::download(self_W1_g_, self->self_fc1_.W()); gpu::download(self_b1_g_, self->self_fc1_.b());
-        gpu::download(self_W2_g_, self->self_fc2_.W()); gpu::download(self_b2_g_, self->self_fc2_.b());
-        gpu::download(enemy_W1_g_, self->enemy_fc1_.W()); gpu::download(enemy_b1_g_, self->enemy_fc1_.b());
-        gpu::download(enemy_W2_g_, self->enemy_fc2_.W()); gpu::download(enemy_b2_g_, self->enemy_fc2_.b());
-        gpu::download(ally_W1_g_, self->ally_fc1_.W()); gpu::download(ally_b1_g_, self->ally_fc1_.b());
-        gpu::download(ally_W2_g_, self->ally_fc2_.W()); gpu::download(ally_b2_g_, self->ally_fc2_.b());
-        gpu::cuda_sync();
+        download_to(self_W1_g_, self->self_fc1_.W()); download_to(self_b1_g_, self->self_fc1_.b());
+        download_to(self_W2_g_, self->self_fc2_.W()); download_to(self_b2_g_, self->self_fc2_.b());
+        download_to(enemy_W1_g_, self->enemy_fc1_.W()); download_to(enemy_b1_g_, self->enemy_fc1_.b());
+        download_to(enemy_W2_g_, self->enemy_fc2_.W()); download_to(enemy_b2_g_, self->enemy_fc2_.b());
+        download_to(ally_W1_g_, self->ally_fc1_.W()); download_to(ally_b1_g_, self->ally_fc1_.b());
+        download_to(ally_W2_g_, self->ally_fc2_.W()); download_to(ally_b2_g_, self->ally_fc2_.b());
+        brotensor::cuda_sync();
     }
 #endif
     self_fc1_.save_to(out); self_fc2_.save_to(out);
@@ -110,19 +111,19 @@ void DeepSetsDecoder::load_from(const uint8_t* data, size_t& offset, size_t size
     self_fc1_.load_from(data, offset, size);  self_fc2_.load_from(data, offset, size);
     enemy_fc1_.load_from(data, offset, size); enemy_fc2_.load_from(data, offset, size);
     ally_fc1_.load_from(data, offset, size);  ally_fc2_.load_from(data, offset, size);
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     if (device_ == Device::GPU) {
-        gpu::upload(self_fc1_.W(), self_W1_g_); gpu::upload(self_fc1_.b(), self_b1_g_);
-        gpu::upload(self_fc2_.W(), self_W2_g_); gpu::upload(self_fc2_.b(), self_b2_g_);
-        gpu::upload(enemy_fc1_.W(), enemy_W1_g_); gpu::upload(enemy_fc1_.b(), enemy_b1_g_);
-        gpu::upload(enemy_fc2_.W(), enemy_W2_g_); gpu::upload(enemy_fc2_.b(), enemy_b2_g_);
-        gpu::upload(ally_fc1_.W(), ally_W1_g_); gpu::upload(ally_fc1_.b(), ally_b1_g_);
-        gpu::upload(ally_fc2_.W(), ally_W2_g_); gpu::upload(ally_fc2_.b(), ally_b2_g_);
+        upload_to(self_fc1_.W(), self_W1_g_); upload_to(self_fc1_.b(), self_b1_g_);
+        upload_to(self_fc2_.W(), self_W2_g_); upload_to(self_fc2_.b(), self_b2_g_);
+        upload_to(enemy_fc1_.W(), enemy_W1_g_); upload_to(enemy_fc1_.b(), enemy_b1_g_);
+        upload_to(enemy_fc2_.W(), enemy_W2_g_); upload_to(enemy_fc2_.b(), enemy_b2_g_);
+        upload_to(ally_fc1_.W(), ally_W1_g_); upload_to(ally_fc1_.b(), ally_b1_g_);
+        upload_to(ally_fc2_.W(), ally_W2_g_); upload_to(ally_fc2_.b(), ally_b2_g_);
     }
 #endif
 }
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
 void DeepSetsDecoder::to(Device d) {
     if (d == device_) return;
     device_require_cuda("DeepSetsDecoder");
@@ -133,12 +134,12 @@ void DeepSetsDecoder::to(Device d) {
         const int Ef = observation::ENEMY_FEATURES;
         const int Af = observation::ALLY_FEATURES;
 
-        gpu::upload(self_fc1_.W(), self_W1_g_); gpu::upload(self_fc1_.b(), self_b1_g_);
-        gpu::upload(self_fc2_.W(), self_W2_g_); gpu::upload(self_fc2_.b(), self_b2_g_);
-        gpu::upload(enemy_fc1_.W(), enemy_W1_g_); gpu::upload(enemy_fc1_.b(), enemy_b1_g_);
-        gpu::upload(enemy_fc2_.W(), enemy_W2_g_); gpu::upload(enemy_fc2_.b(), enemy_b2_g_);
-        gpu::upload(ally_fc1_.W(), ally_W1_g_); gpu::upload(ally_fc1_.b(), ally_b1_g_);
-        gpu::upload(ally_fc2_.W(), ally_W2_g_); gpu::upload(ally_fc2_.b(), ally_b2_g_);
+        upload_to(self_fc1_.W(), self_W1_g_); upload_to(self_fc1_.b(), self_b1_g_);
+        upload_to(self_fc2_.W(), self_W2_g_); upload_to(self_fc2_.b(), self_b2_g_);
+        upload_to(enemy_fc1_.W(), enemy_W1_g_); upload_to(enemy_fc1_.b(), enemy_b1_g_);
+        upload_to(enemy_fc2_.W(), enemy_W2_g_); upload_to(enemy_fc2_.b(), enemy_b2_g_);
+        upload_to(ally_fc1_.W(), ally_W1_g_); upload_to(ally_fc1_.b(), ally_b1_g_);
+        upload_to(ally_fc2_.W(), ally_W2_g_); upload_to(ally_fc2_.b(), ally_b2_g_);
 
         self_dW1_g_.resize(H, E);  self_dW1_g_.zero(); self_db1_g_.resize(H, 1); self_db1_g_.zero();
         self_dW2_g_.resize(Sf, H); self_dW2_g_.zero(); self_db2_g_.resize(Sf, 1); self_db2_g_.zero();
@@ -164,13 +165,13 @@ void DeepSetsDecoder::to(Device d) {
 
         device_ = Device::GPU;
     } else {
-        gpu::download(self_W1_g_, self_fc1_.W()); gpu::download(self_b1_g_, self_fc1_.b());
-        gpu::download(self_W2_g_, self_fc2_.W()); gpu::download(self_b2_g_, self_fc2_.b());
-        gpu::download(enemy_W1_g_, enemy_fc1_.W()); gpu::download(enemy_b1_g_, enemy_fc1_.b());
-        gpu::download(enemy_W2_g_, enemy_fc2_.W()); gpu::download(enemy_b2_g_, enemy_fc2_.b());
-        gpu::download(ally_W1_g_, ally_fc1_.W()); gpu::download(ally_b1_g_, ally_fc1_.b());
-        gpu::download(ally_W2_g_, ally_fc2_.W()); gpu::download(ally_b2_g_, ally_fc2_.b());
-        gpu::cuda_sync();
+        download_to(self_W1_g_, self_fc1_.W()); download_to(self_b1_g_, self_fc1_.b());
+        download_to(self_W2_g_, self_fc2_.W()); download_to(self_b2_g_, self_fc2_.b());
+        download_to(enemy_W1_g_, enemy_fc1_.W()); download_to(enemy_b1_g_, enemy_fc1_.b());
+        download_to(enemy_W2_g_, enemy_fc2_.W()); download_to(enemy_b2_g_, enemy_fc2_.b());
+        download_to(ally_W1_g_, ally_fc1_.W()); download_to(ally_b1_g_, ally_fc1_.b());
+        download_to(ally_W2_g_, ally_fc2_.W()); download_to(ally_b2_g_, ally_fc2_.b());
+        brotensor::cuda_sync();
         device_ = Device::CPU;
     }
 }
@@ -272,11 +273,11 @@ void DeepSetsDecoder::backward(const Tensor& dY, Tensor& dX) {
     }
 }
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
 
 // GPU forward: split x → 3 embed views, run self/enemy/ally MLPs, write
 // reconstruction directly into row-views of y.
-void DeepSetsDecoder::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
+void DeepSetsDecoder::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y) {
     assert(device_ == Device::GPU);
     assert(x.size() == in_dim());
     if (y.rows != out_dim() || y.cols != 1) y.resize(out_dim(), 1);
@@ -286,52 +287,52 @@ void DeepSetsDecoder::forward(const gpu::GpuTensor& x, gpu::GpuTensor& y) {
     // Cache x for backward (we'll view the three sub-vectors out of it).
     x_g_cache_ = x.clone();
 
-    gpu::GpuTensor self_in_view = gpu::GpuTensor::view(
+    brotensor::GpuTensor self_in_view = brotensor::GpuTensor::view(
         x_g_cache_.data + 0 * E, E, 1);
-    gpu::GpuTensor pooled_e_view = gpu::GpuTensor::view(
+    brotensor::GpuTensor pooled_e_view = brotensor::GpuTensor::view(
         x_g_cache_.data + 1 * E, E, 1);
-    gpu::GpuTensor pooled_a_view = gpu::GpuTensor::view(
+    brotensor::GpuTensor pooled_a_view = brotensor::GpuTensor::view(
         x_g_cache_.data + 2 * E, E, 1);
 
     // ── Self stream ──
-    gpu::linear_forward_gpu(self_W1_g_, self_b1_g_, self_in_view, self_h_raw_g_);
-    gpu::relu_forward_gpu(self_h_raw_g_, self_h_g_);
-    gpu::GpuTensor y_self_view = gpu::GpuTensor::view(
+    brotensor::linear_forward_gpu(self_W1_g_, self_b1_g_, self_in_view, self_h_raw_g_);
+    brotensor::relu_forward_gpu(self_h_raw_g_, self_h_g_);
+    brotensor::GpuTensor y_self_view = brotensor::GpuTensor::view(
         y.data, observation::SELF_FEATURES, 1);
-    gpu::linear_forward_gpu(self_W2_g_, self_b2_g_, self_h_g_, y_self_view);
+    brotensor::linear_forward_gpu(self_W2_g_, self_b2_g_, self_h_g_, y_self_view);
 
     // ── Enemy stream (broadcast pooled_e) ──
     const int off_e = observation::SELF_FEATURES;
     for (int k = 0; k < observation::K_ENEMIES; ++k) {
-        gpu::GpuTensor h_raw_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_raw_row = brotensor::GpuTensor::view(
             e_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
-        gpu::GpuTensor h_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
             e_h_g_.data + static_cast<size_t>(k) * H, H, 1);
-        gpu::linear_forward_gpu(enemy_W1_g_, enemy_b1_g_, pooled_e_view, h_raw_row);
-        gpu::relu_forward_gpu(h_raw_row, h_row);
+        brotensor::linear_forward_gpu(enemy_W1_g_, enemy_b1_g_, pooled_e_view, h_raw_row);
+        brotensor::relu_forward_gpu(h_raw_row, h_row);
         const int base = off_e + k * observation::ENEMY_FEATURES;
-        gpu::GpuTensor y_slot_view = gpu::GpuTensor::view(
+        brotensor::GpuTensor y_slot_view = brotensor::GpuTensor::view(
             y.data + base, observation::ENEMY_FEATURES, 1);
-        gpu::linear_forward_gpu(enemy_W2_g_, enemy_b2_g_, h_row, y_slot_view);
+        brotensor::linear_forward_gpu(enemy_W2_g_, enemy_b2_g_, h_row, y_slot_view);
     }
 
     // ── Ally stream (broadcast pooled_a) ──
     const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
     for (int k = 0; k < observation::K_ALLIES; ++k) {
-        gpu::GpuTensor h_raw_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_raw_row = brotensor::GpuTensor::view(
             a_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
-        gpu::GpuTensor h_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
             a_h_g_.data + static_cast<size_t>(k) * H, H, 1);
-        gpu::linear_forward_gpu(ally_W1_g_, ally_b1_g_, pooled_a_view, h_raw_row);
-        gpu::relu_forward_gpu(h_raw_row, h_row);
+        brotensor::linear_forward_gpu(ally_W1_g_, ally_b1_g_, pooled_a_view, h_raw_row);
+        brotensor::relu_forward_gpu(h_raw_row, h_row);
         const int base = off_a + k * observation::ALLY_FEATURES;
-        gpu::GpuTensor y_slot_view = gpu::GpuTensor::view(
+        brotensor::GpuTensor y_slot_view = brotensor::GpuTensor::view(
             y.data + base, observation::ALLY_FEATURES, 1);
-        gpu::linear_forward_gpu(ally_W2_g_, ally_b2_g_, h_row, y_slot_view);
+        brotensor::linear_forward_gpu(ally_W2_g_, ally_b2_g_, h_row, y_slot_view);
     }
 }
 
-void DeepSetsDecoder::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
+void DeepSetsDecoder::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
     assert(device_ == Device::GPU);
     assert(dY.size() == out_dim());
     if (dX.rows != in_dim() || dX.cols != 1) dX.resize(in_dim(), 1);
@@ -340,68 +341,68 @@ void DeepSetsDecoder::backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX) {
     const int H = cfg_.hidden;
 
     // dX views over the three embed segments.
-    gpu::GpuTensor dX_self_view  = gpu::GpuTensor::view(dX.data + 0 * E, E, 1);
-    gpu::GpuTensor dX_pooled_e   = gpu::GpuTensor::view(dX.data + 1 * E, E, 1);
-    gpu::GpuTensor dX_pooled_a   = gpu::GpuTensor::view(dX.data + 2 * E, E, 1);
+    brotensor::GpuTensor dX_self_view  = brotensor::GpuTensor::view(dX.data + 0 * E, E, 1);
+    brotensor::GpuTensor dX_pooled_e   = brotensor::GpuTensor::view(dX.data + 1 * E, E, 1);
+    brotensor::GpuTensor dX_pooled_a   = brotensor::GpuTensor::view(dX.data + 2 * E, E, 1);
 
     // ── Self stream ──
-    gpu::GpuTensor dY_self_view = gpu::GpuTensor::view(
+    brotensor::GpuTensor dY_self_view = brotensor::GpuTensor::view(
         const_cast<float*>(dY.data), observation::SELF_FEATURES, 1);
-    gpu::GpuTensor dSelfH(H, 1);
-    gpu::linear_backward_gpu(self_W2_g_, self_h_g_, dY_self_view,
+    brotensor::GpuTensor dSelfH(H, 1);
+    brotensor::linear_backward_gpu(self_W2_g_, self_h_g_, dY_self_view,
                              dSelfH, self_dW2_g_, self_db2_g_);
-    gpu::GpuTensor dSelfHraw(H, 1);
-    gpu::relu_backward_gpu(self_h_raw_g_, dSelfH, dSelfHraw);
+    brotensor::GpuTensor dSelfHraw(H, 1);
+    brotensor::relu_backward_gpu(self_h_raw_g_, dSelfH, dSelfHraw);
     // Cached self_in is the first E of x_g_cache_.
-    gpu::GpuTensor self_in_view = gpu::GpuTensor::view(
+    brotensor::GpuTensor self_in_view = brotensor::GpuTensor::view(
         x_g_cache_.data + 0 * E, E, 1);
     // linear_backward overwrites dX — write into dX_self_view directly.
-    gpu::linear_backward_gpu(self_W1_g_, self_in_view, dSelfHraw,
+    brotensor::linear_backward_gpu(self_W1_g_, self_in_view, dSelfHraw,
                              dX_self_view, self_dW1_g_, self_db1_g_);
 
     // ── Enemy stream — accumulate into dX_pooled_e ──
-    gpu::GpuTensor pooled_e_view = gpu::GpuTensor::view(
+    brotensor::GpuTensor pooled_e_view = brotensor::GpuTensor::view(
         x_g_cache_.data + 1 * E, E, 1);
-    gpu::GpuTensor dEnc_tmp(E, 1);  // per-slot scratch
+    brotensor::GpuTensor dEnc_tmp(E, 1);  // per-slot scratch
     const int off_e = observation::SELF_FEATURES;
     for (int k = 0; k < observation::K_ENEMIES; ++k) {
-        gpu::GpuTensor h_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
             e_h_g_.data + static_cast<size_t>(k) * H, H, 1);
-        gpu::GpuTensor h_raw_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_raw_row = brotensor::GpuTensor::view(
             e_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
         const int base = off_e + k * observation::ENEMY_FEATURES;
-        gpu::GpuTensor dY_slot_view = gpu::GpuTensor::view(
+        brotensor::GpuTensor dY_slot_view = brotensor::GpuTensor::view(
             const_cast<float*>(dY.data) + base, observation::ENEMY_FEATURES, 1);
-        gpu::GpuTensor dHk(H, 1);
-        gpu::linear_backward_gpu(enemy_W2_g_, h_row, dY_slot_view,
+        brotensor::GpuTensor dHk(H, 1);
+        brotensor::linear_backward_gpu(enemy_W2_g_, h_row, dY_slot_view,
                                  dHk, enemy_dW2_g_, enemy_db2_g_);
-        gpu::GpuTensor dHk_raw(H, 1);
-        gpu::relu_backward_gpu(h_raw_row, dHk, dHk_raw);
-        gpu::linear_backward_gpu(enemy_W1_g_, pooled_e_view, dHk_raw,
+        brotensor::GpuTensor dHk_raw(H, 1);
+        brotensor::relu_backward_gpu(h_raw_row, dHk, dHk_raw);
+        brotensor::linear_backward_gpu(enemy_W1_g_, pooled_e_view, dHk_raw,
                                  dEnc_tmp, enemy_dW1_g_, enemy_db1_g_);
-        gpu::add_inplace_gpu(dX_pooled_e, dEnc_tmp);
+        brotensor::add_inplace_gpu(dX_pooled_e, dEnc_tmp);
     }
 
     // ── Ally stream — accumulate into dX_pooled_a ──
-    gpu::GpuTensor pooled_a_view = gpu::GpuTensor::view(
+    brotensor::GpuTensor pooled_a_view = brotensor::GpuTensor::view(
         x_g_cache_.data + 2 * E, E, 1);
     const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
     for (int k = 0; k < observation::K_ALLIES; ++k) {
-        gpu::GpuTensor h_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
             a_h_g_.data + static_cast<size_t>(k) * H, H, 1);
-        gpu::GpuTensor h_raw_row = gpu::GpuTensor::view(
+        brotensor::GpuTensor h_raw_row = brotensor::GpuTensor::view(
             a_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
         const int base = off_a + k * observation::ALLY_FEATURES;
-        gpu::GpuTensor dY_slot_view = gpu::GpuTensor::view(
+        brotensor::GpuTensor dY_slot_view = brotensor::GpuTensor::view(
             const_cast<float*>(dY.data) + base, observation::ALLY_FEATURES, 1);
-        gpu::GpuTensor dHk(H, 1);
-        gpu::linear_backward_gpu(ally_W2_g_, h_row, dY_slot_view,
+        brotensor::GpuTensor dHk(H, 1);
+        brotensor::linear_backward_gpu(ally_W2_g_, h_row, dY_slot_view,
                                  dHk, ally_dW2_g_, ally_db2_g_);
-        gpu::GpuTensor dHk_raw(H, 1);
-        gpu::relu_backward_gpu(h_raw_row, dHk, dHk_raw);
-        gpu::linear_backward_gpu(ally_W1_g_, pooled_a_view, dHk_raw,
+        brotensor::GpuTensor dHk_raw(H, 1);
+        brotensor::relu_backward_gpu(h_raw_row, dHk, dHk_raw);
+        brotensor::linear_backward_gpu(ally_W1_g_, pooled_a_view, dHk_raw,
                                  dEnc_tmp, ally_dW1_g_, ally_db1_g_);
-        gpu::add_inplace_gpu(dX_pooled_a, dEnc_tmp);
+        brotensor::add_inplace_gpu(dX_pooled_a, dEnc_tmp);
     }
 }
 #endif

@@ -5,8 +5,8 @@
 #include "tensor.h"
 #include "brogameagent/observation.h"
 
-#ifdef BGA_HAS_GPU
-#include "gpu/tensor.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/tensor.h>
 #endif
 
 #include <cstdint>
@@ -59,9 +59,9 @@ public:
     void forward(const Tensor& x, Tensor& y);
     void backward(const Tensor& dY, Tensor& dX);
 
-#ifdef BGA_HAS_GPU
-    void forward(const gpu::GpuTensor& x, gpu::GpuTensor& y);
-    void backward(const gpu::GpuTensor& dY, gpu::GpuTensor& dX);
+#ifdef BROTENSOR_HAS_GPU
+    void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y);
+    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
 #endif
 
     Device device() const { return device_; }
@@ -96,32 +96,32 @@ private:
     Tensor self_in_, pooled_e_, pooled_a_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_GPU
-    gpu::GpuTensor self_W1_g_, self_b1_g_, self_W2_g_, self_b2_g_;
-    gpu::GpuTensor self_dW1_g_, self_db1_g_, self_dW2_g_, self_db2_g_;
-    gpu::GpuTensor self_vW1_g_, self_vb1_g_, self_vW2_g_, self_vb2_g_;
+#ifdef BROTENSOR_HAS_GPU
+    brotensor::GpuTensor self_W1_g_, self_b1_g_, self_W2_g_, self_b2_g_;
+    brotensor::GpuTensor self_dW1_g_, self_db1_g_, self_dW2_g_, self_db2_g_;
+    brotensor::GpuTensor self_vW1_g_, self_vb1_g_, self_vW2_g_, self_vb2_g_;
 
-    gpu::GpuTensor enemy_W1_g_, enemy_b1_g_, enemy_W2_g_, enemy_b2_g_;
-    gpu::GpuTensor enemy_dW1_g_, enemy_db1_g_, enemy_dW2_g_, enemy_db2_g_;
-    gpu::GpuTensor enemy_vW1_g_, enemy_vb1_g_, enemy_vW2_g_, enemy_vb2_g_;
+    brotensor::GpuTensor enemy_W1_g_, enemy_b1_g_, enemy_W2_g_, enemy_b2_g_;
+    brotensor::GpuTensor enemy_dW1_g_, enemy_db1_g_, enemy_dW2_g_, enemy_db2_g_;
+    brotensor::GpuTensor enemy_vW1_g_, enemy_vb1_g_, enemy_vW2_g_, enemy_vb2_g_;
 
-    gpu::GpuTensor ally_W1_g_, ally_b1_g_, ally_W2_g_, ally_b2_g_;
-    gpu::GpuTensor ally_dW1_g_, ally_db1_g_, ally_dW2_g_, ally_db2_g_;
-    gpu::GpuTensor ally_vW1_g_, ally_vb1_g_, ally_vW2_g_, ally_vb2_g_;
+    brotensor::GpuTensor ally_W1_g_, ally_b1_g_, ally_W2_g_, ally_b2_g_;
+    brotensor::GpuTensor ally_dW1_g_, ally_db1_g_, ally_dW2_g_, ally_db2_g_;
+    brotensor::GpuTensor ally_vW1_g_, ally_vb1_g_, ally_vW2_g_, ally_vb2_g_;
 
     // Cached input split (views into x_g_cache_).
-    gpu::GpuTensor x_g_cache_;        // (3*embed_dim, 1) — clone of forward x
+    brotensor::GpuTensor x_g_cache_;        // (3*embed_dim, 1) — clone of forward x
 
     // Self stream caches.
-    gpu::GpuTensor self_h_raw_g_;     // (hidden, 1)
-    gpu::GpuTensor self_h_g_;         // (hidden, 1)
+    brotensor::GpuTensor self_h_raw_g_;     // (hidden, 1)
+    brotensor::GpuTensor self_h_g_;         // (hidden, 1)
 
     // Per-slot caches (broadcast input is the same pooled vec for every slot).
-    gpu::GpuTensor e_h_raw_g_;        // (K_ENEMIES, hidden)
-    gpu::GpuTensor e_h_g_;            // (K_ENEMIES, hidden)
+    brotensor::GpuTensor e_h_raw_g_;        // (K_ENEMIES, hidden)
+    brotensor::GpuTensor e_h_g_;            // (K_ENEMIES, hidden)
 
-    gpu::GpuTensor a_h_raw_g_;        // (K_ALLIES, hidden)
-    gpu::GpuTensor a_h_g_;            // (K_ALLIES, hidden)
+    brotensor::GpuTensor a_h_raw_g_;        // (K_ALLIES, hidden)
+    brotensor::GpuTensor a_h_g_;            // (K_ALLIES, hidden)
 #endif
 };
 

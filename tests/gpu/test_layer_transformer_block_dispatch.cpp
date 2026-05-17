@@ -10,7 +10,7 @@ using brogameagent::nn::Device;
 using brogameagent::nn::TransformerBlock;
 using brogameagent::nn::NormPlacement;
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace {
 
@@ -50,7 +50,7 @@ void run_dispatch(int K, int D, int H, int Df, NormPlacement np, uint64_t seed) 
     gpu_b.to(Device::GPU);
     BGA_CHECK(gpu_b.device() == Device::GPU);
     GpuTensor gX, gY, gdY, gdX;
-    upload(X, gX); upload(dY, gdY);
+    upload_to(X, gX); upload_to(dY, gdY);
     gY.resize(K, D); gdX.resize(K, D);
     gpu_b.zero_grad();
     gpu_b.forward(gX, nullptr, gY);

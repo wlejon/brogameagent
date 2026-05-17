@@ -4,8 +4,8 @@
 #include "device.h"
 #include "tensor.h"
 
-#ifdef BGA_HAS_GPU
-#include "gpu/tensor.h"
+#ifdef BROTENSOR_HAS_GPU
+#include <brotensor/tensor.h>
 #endif
 
 #include <cstdint>
@@ -69,20 +69,20 @@ public:
     void forward(const Tensor& X, const float* mask, Tensor& O);
     void backward(const Tensor& dO, Tensor& dX);
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
     // GPU code path. mask_dev (length K) is an optional device pointer.
-    void forward(const gpu::GpuTensor& X, const float* mask_dev,
-                 gpu::GpuTensor& O);
-    void backward(const gpu::GpuTensor& dO, gpu::GpuTensor& dX);
+    void forward(const brotensor::GpuTensor& X, const float* mask_dev,
+                 brotensor::GpuTensor& O);
+    void backward(const brotensor::GpuTensor& dO, brotensor::GpuTensor& dX);
 
     // Inference-only batched forward. Input is (B*K, D); per-batch
     // attention is independent (softmax over K tokens within each batch).
     // Loops B times calling the existing single-sample GPU forward against
     // GpuTensor row-views — internal caches get clobbered each iteration
     // (acceptable; no backward is run). mask_R_dev is (B*K,) or null.
-    void forward_inference_batched(const gpu::GpuTensor& X_RD,
+    void forward_inference_batched(const brotensor::GpuTensor& X_RD,
                                     const float* mask_R_dev,
-                                    gpu::GpuTensor& Y_RD,
+                                    brotensor::GpuTensor& Y_RD,
                                     int B, int K);
 #endif
 
@@ -147,21 +147,21 @@ private:
     std::vector<uint8_t> mask_cache_;
 
     Device device_ = Device::CPU;
-#ifdef BGA_HAS_GPU
-    gpu::GpuTensor Wq_g_, Wk_g_, Wv_g_, Wo_g_;
-    gpu::GpuTensor dWq_g_, dWk_g_, dWv_g_, dWo_g_;
-    gpu::GpuTensor vWq_g_, vWk_g_, vWv_g_, vWo_g_;
-    gpu::GpuTensor mWq_g_, mWk_g_, mWv_g_, mWo_g_;
-    gpu::GpuTensor vAWq_g_, vAWk_g_, vAWv_g_, vAWo_g_;
+#ifdef BROTENSOR_HAS_GPU
+    brotensor::GpuTensor Wq_g_, Wk_g_, Wv_g_, Wo_g_;
+    brotensor::GpuTensor dWq_g_, dWk_g_, dWv_g_, dWo_g_;
+    brotensor::GpuTensor vWq_g_, vWk_g_, vWv_g_, vWo_g_;
+    brotensor::GpuTensor mWq_g_, mWk_g_, mWv_g_, mWo_g_;
+    brotensor::GpuTensor vAWq_g_, vAWk_g_, vAWv_g_, vAWo_g_;
     // Forward caches (flat layout matching the GPU op contract):
     //   Qh_g_, Kh_g_, Vh_g_: (h * K, dh)
     //   Attnh_g_:            (h * K, K)
     //   Yconcat_g_:          (K, D)
     //   X_cache_g_:          (K, D)
-    gpu::GpuTensor X_cache_g_;
-    gpu::GpuTensor Qh_g_, Kh_g_, Vh_g_;
-    gpu::GpuTensor Attnh_g_;
-    gpu::GpuTensor Yconcat_g_;
+    brotensor::GpuTensor X_cache_g_;
+    brotensor::GpuTensor Qh_g_, Kh_g_, Vh_g_;
+    brotensor::GpuTensor Attnh_g_;
+    brotensor::GpuTensor Yconcat_g_;
     // Mask pointer used by the most recent GPU forward; cached for backward.
     // Non-owning — caller manages lifetime.
     const float* last_mask_dev_ = nullptr;

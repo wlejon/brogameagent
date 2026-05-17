@@ -2,13 +2,13 @@
 
 #include "parity_helpers.h"
 
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/ops.h>
 #include <brogameagent/nn/layernorm.h>
 
 using namespace bga_parity;
 using brogameagent::nn::LayerNorm;
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace {
 
@@ -45,18 +45,18 @@ void run_layernorm(int n, uint64_t seed) {
 
     // GPU.
     GpuTensor gx, ggamma, gbeta, gy, gxhat, gdY, gdX, gdGamma, gdBeta;
-    upload(x, gx);
-    upload(gamma, ggamma);
-    upload(beta, gbeta);
-    upload(dY, gdY);
+    upload_to(x, gx);
+    upload_to(gamma, ggamma);
+    upload_to(beta, gbeta);
+    upload_to(dY, gdY);
     gy.resize(n, 1); gxhat.resize(n, 1); gdX.resize(n, 1);
-    upload(dGamma_init, gdGamma);
-    upload(dBeta_init,  gdBeta);
+    upload_to(dGamma_init, gdGamma);
+    upload_to(dBeta_init,  gdBeta);
     float mean_out = 0.0f, rstd_out = 0.0f;
-    brogameagent::nn::gpu::layernorm_forward_gpu(
+    brotensor::layernorm_forward_gpu(
         gx, ggamma, gbeta, gy, gxhat, mean_out, rstd_out, 1e-5f);
     Tensor y_gpu = download_to_host(gy);
-    brogameagent::nn::gpu::layernorm_backward_gpu(
+    brotensor::layernorm_backward_gpu(
         gdY, gxhat, ggamma, rstd_out, gdX, gdGamma, gdBeta);
 
     compare_tensors(y_cpu, y_gpu, "layernorm.y");

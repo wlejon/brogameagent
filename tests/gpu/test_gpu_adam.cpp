@@ -3,13 +3,13 @@
 #include "parity_helpers.h"
 
 #include <brogameagent/nn/circuits.h>
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/ops.h>
 #include <brogameagent/nn/tensor.h>
 
 using namespace bga_parity;
 using brogameagent::nn::Tensor;
 using brogameagent::nn::adam_step_cpu;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace {
 
@@ -27,16 +27,16 @@ void run_adam(int n, uint64_t seed, float lr, float beta1, float beta2,
     Tensor v_cpu = v;
 
     GpuTensor gparam, ggrad, gm, gv;
-    upload(param, gparam);
-    upload(grad, ggrad);
-    upload(m, gm);
-    upload(v, gv);
+    upload_to(param, gparam);
+    upload_to(grad, ggrad);
+    upload_to(m, gm);
+    upload_to(v, gv);
 
     // Run K steps with the same gradient each step (sufficient to surface
     // any bias-correction or moment-update mismatch).
     for (int s = 1; s <= n_steps; ++s) {
         adam_step_cpu(param_cpu, grad, m_cpu, v_cpu, lr, beta1, beta2, eps, s);
-        brogameagent::nn::gpu::adam_step_gpu(gparam, ggrad, gm, gv,
+        brotensor::adam_step_gpu(gparam, ggrad, gm, gv,
                                              lr, beta1, beta2, eps, s);
     }
 

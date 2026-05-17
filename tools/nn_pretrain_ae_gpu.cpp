@@ -17,9 +17,10 @@
 #include "brogameagent/learn/search_trace.h"
 #include "brogameagent/mcts.h"
 #include "brogameagent/nn/autoencoder.h"
-#include "brogameagent/nn/gpu/ops.h"
-#include "brogameagent/nn/gpu/runtime.h"
-#include "brogameagent/nn/gpu/tensor.h"
+#include <brotensor/ops.h>
+#include <brotensor/runtime.h>
+#include <brotensor/tensor.h>
+#include <brogameagent/nn/gpu_glue.h>
 #include "brogameagent/nn/tensor.h"
 #include "brogameagent/observation.h"
 #include "brogameagent/world.h"
@@ -187,7 +188,7 @@ int main(int argc, char** argv) {
     Args a;
     if (!parse(argc, argv, a)) return 2;
 
-    nn::gpu::cuda_init();
+    brotensor::cuda_init();
 
     // ─── Gather observations ───────────────────────────────────────────────
     std::printf("phase\tstep\tdetail\n");
@@ -223,10 +224,10 @@ int main(int argc, char** argv) {
     std::printf("net\tparams\t%d\tdevice=GPU\n", ae.num_params());
 
     nn::Tensor x_host = nn::Tensor::vec(observation::TOTAL);
-    nn::gpu::GpuTensor x_g(observation::TOTAL, 1);
-    nn::gpu::GpuTensor x_hat_g(observation::TOTAL, 1);
-    nn::gpu::GpuTensor target_g(observation::TOTAL, 1);
-    nn::gpu::GpuTensor dXh_g(observation::TOTAL, 1);
+    brotensor::GpuTensor x_g(observation::TOTAL, 1);
+    brotensor::GpuTensor x_hat_g(observation::TOTAL, 1);
+    brotensor::GpuTensor target_g(observation::TOTAL, 1);
+    brotensor::GpuTensor dXh_g(observation::TOTAL, 1);
 
     // ─── Train ─────────────────────────────────────────────────────────────
     std::printf("train\tepoch\tloss\n");
@@ -239,15 +240,15 @@ int main(int argc, char** argv) {
 
         for (int idx : indices) {
             to_tensor(all[idx], x_host);
-            nn::gpu::upload(x_host, x_g);
+            nn::upload_to(x_host, x_g);
             // target = x (autoencoder reconstruction). Reuse upload to a
             // separate buffer so the backward kernel can read both.
-            nn::gpu::upload(x_host, target_g);
+            nn::upload_to(x_host, target_g);
 
             ae.zero_grad();
             ae.forward(x_g, x_hat_g);
-            const float loss = nn::gpu::mse_vec_forward_gpu(x_hat_g, target_g);
-            nn::gpu::mse_vec_backward_gpu(x_hat_g, target_g, dXh_g);
+            const float loss = brotensor::mse_vec_forward_gpu(x_hat_g, target_g);
+            brotensor::mse_vec_backward_gpu(x_hat_g, target_g, dXh_g);
             ae.backward(dXh_g);
             ae.sgd_step(a.lr, a.momentum);
 
@@ -262,7 +263,7 @@ int main(int argc, char** argv) {
             ? static_cast<float>(ep_loss_sum / ep_samples) : 0.0f;
         std::printf("epoch\t%d\tloss=%.6f\n", ep + 1, train_loss);
     }
-    nn::gpu::cuda_sync();
+    brotensor::cuda_sync();
     auto tt1 = std::chrono::steady_clock::now();
     long train_ms = std::chrono::duration_cast<std::chrono::milliseconds>(tt1-tt0).count();
     std::printf("train\tdone\ttrain_ms=%ld\n", train_ms);

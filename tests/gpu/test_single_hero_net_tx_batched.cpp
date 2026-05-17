@@ -4,7 +4,7 @@
 #include "parity_helpers.h"
 
 #include <brogameagent/nn/net_tx.h>
-#include <brogameagent/nn/gpu/runtime.h>
+#include <brotensor/runtime.h>
 #include <brogameagent/observation.h>
 
 #include <chrono>
@@ -15,7 +15,7 @@ using namespace bga_parity;
 using brogameagent::nn::Tensor;
 using brogameagent::nn::Device;
 using brogameagent::nn::SingleHeroNetTX;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace obs = brogameagent::observation;
 
@@ -74,7 +74,7 @@ void run_tx_batched(int B, uint64_t seed) {
         for (int j = 0; j < obs::TOTAL; ++j)
             xb.data[j] = X_BD.data[static_cast<size_t>(b) * obs::TOTAL + j];
         GpuTensor gxb;
-        upload(xb, gxb);
+        upload_to(xb, gxb);
         GpuTensor glogits;
         net.forward(gxb, glogits);
         Tensor h_logits = download_to_host(glogits);
@@ -86,7 +86,7 @@ void run_tx_batched(int B, uint64_t seed) {
 
     // Batched.
     GpuTensor gX_BD, glogits_BD, gvalues_B1;
-    upload(X_BD, gX_BD);
+    upload_to(X_BD, gX_BD);
     net.forward_batched(gX_BD, glogits_BD, gvalues_B1);
     Tensor logits_batched = download_to_host(glogits_BD);
     Tensor values_batched = download_to_host(gvalues_B1);
@@ -125,13 +125,13 @@ BGA_PARITY_TEST(tx_batched_speedup_smoke) {
     SplitMix64 rng(0xBE7C7Bull ^ 0xFEEDull);
     Tensor X_BD = make_batch_inputs(B, rng);
     GpuTensor gX_BD;
-    upload(X_BD, gX_BD);
+    upload_to(X_BD, gX_BD);
 
     // Warmup.
     {
         GpuTensor lg, vg;
         for (int i = 0; i < 4; ++i) net.forward_batched(gX_BD, lg, vg);
-        brogameagent::nn::gpu::cuda_sync();
+        brotensor::cuda_sync();
     }
 
     // Time batched.
@@ -139,7 +139,7 @@ BGA_PARITY_TEST(tx_batched_speedup_smoke) {
     {
         GpuTensor lg, vg;
         for (int i = 0; i < N_iters; ++i) net.forward_batched(gX_BD, lg, vg);
-        brogameagent::nn::gpu::cuda_sync();
+        brotensor::cuda_sync();
     }
     auto t1 = std::chrono::steady_clock::now();
     const double batched_ms =
@@ -153,12 +153,12 @@ BGA_PARITY_TEST(tx_batched_speedup_smoke) {
             for (int j = 0; j < obs::TOTAL; ++j)
                 xb.data[j] = X_BD.data[static_cast<size_t>(b) * obs::TOTAL + j];
             GpuTensor gxb;
-            upload(xb, gxb);
+            upload_to(xb, gxb);
             GpuTensor glogits;
             net.forward(gxb, glogits);
         }
     }
-    brogameagent::nn::gpu::cuda_sync();
+    brotensor::cuda_sync();
     auto t3 = std::chrono::steady_clock::now();
     const double serial_ms =
         std::chrono::duration<double, std::milli>(t3 - t2).count();

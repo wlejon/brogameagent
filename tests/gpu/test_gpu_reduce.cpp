@@ -2,14 +2,14 @@
 
 #include "parity_helpers.h"
 
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/ops.h>
 #include <brogameagent/nn/tensor.h>
 
 #include <vector>
 
 using namespace bga_parity;
 using brogameagent::nn::Tensor;
-using brogameagent::nn::gpu::GpuTensor;
+using brotensor::GpuTensor;
 
 namespace {
 
@@ -59,8 +59,8 @@ void run_pool(int K, int D, uint64_t seed, const std::vector<float>& mask) {
     masked_mean_pool_backward_cpu(dY, mask, dX_cpu);
 
     GpuTensor gX, gdY, gy, gdX;
-    upload(X, gX);
-    upload(dY, gdY);
+    upload_to(X, gX);
+    upload_to(dY, gdY);
 
     auto d_mask_buf = upload_mask(&mask);
     float* d_mask = d_mask_buf.device_ptr();
@@ -68,10 +68,10 @@ void run_pool(int K, int D, uint64_t seed, const std::vector<float>& mask) {
     // Pre-fill dX with garbage to confirm overwrite semantics.
     Tensor dX_garbage(K, D);
     fill_random(dX_garbage, rng);
-    upload(dX_garbage, gdX);
+    upload_to(dX_garbage, gdX);
 
-    brogameagent::nn::gpu::masked_mean_pool_forward_gpu(gX, d_mask, gy);
-    brogameagent::nn::gpu::masked_mean_pool_backward_gpu(gdY, d_mask, K, gdX);
+    brotensor::masked_mean_pool_forward_gpu(gX, d_mask, gy);
+    brotensor::masked_mean_pool_backward_gpu(gdY, d_mask, K, gdX);
 
     Tensor y_gpu = download_to_host(gy);
     Tensor dX_gpu = download_to_host(gdX);
