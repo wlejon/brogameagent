@@ -3,8 +3,11 @@
 A C++20 combat simulation and planner library for MOBA-style 1v1 (and
 NvN) fights. Built for algorithmic, rollout-based AI — MCTS variants over
 a snapshot-restorable sim, plus hand-crafted NN circuits for ExIt-style
-self-improvement. Zero external dependencies (no Python, no libtorch, no
-ONNX — every circuit is authored in plain C++).
+self-improvement. No Python, no libtorch, no ONNX — every circuit is
+authored in plain C++. Sibling repos `bromath` (header-only math) and
+`brotensor` (tensor + ops, CPU always-on / CUDA / Metal) supply the
+low-level primitives; both vendor in as `add_subdirectory`, no system
+deps.
 
 ## Intent
 
@@ -29,14 +32,21 @@ Layered on top of that substrate:
 ## Building
 
 ```sh
+# CPU default — brotensor links in CPU-only.
 cmake -S . -B build
 cmake --build build --config Release
+
+# Opt in to GPU dispatch via brotensor (mutually exclusive):
+cmake -S . -B build -DBROGAMEAGENT_WITH_CUDA=ON
+cmake -S . -B build -DBROGAMEAGENT_WITH_METAL=ON
 ```
 
 Produces the static lib, tests, `replay_query.exe`, `mcts_bench.exe`,
 the NN CLIs (`nn_check.exe`, `nn_train_value.exe`, `nn_exit.exe`), and
 the examples under `examples/` (see `examples/README.md` for the guided
-tour from "hello world" to layered multi-agent search).
+tour from "hello world" to layered multi-agent search). The GPU options
+additionally enable the batched `inference_server` adapter and the
+`nn_pretrain_ae_gpu` / `nn_exit_gpu` tools.
 
 ### Running tests
 
@@ -215,14 +225,19 @@ like ordinary C++ and single-steps cleanly in a debugger.
 
 ### Circuits and loss primitives (`include/brogameagent/nn/`)
 
-- `Tensor` — rank-1/2 owned float buffer, row-major, no broadcasting.
-- `linear_forward` / `linear_backward` — GEMV + bias with hand-written
-  backward.
+The tensor type (`brotensor::Tensor`) and the underlying scalar ops
+(`linear_forward_cpu` / `linear_backward_cpu`, `softmax_forward_cpu` /
+`softmax_xent_cpu`, activations, `xavier_init_cpu`, …) live in the
+sibling `brotensor` library — see `<brotensor/tensor.h>` and
+`<brotensor/ops_cpu.h>`. Layers below own the higher-level circuit
+structure (autograd-free, parameter mirrors, serialization) and dispatch
+to brotensor for the per-op math; when `BROGAMEAGENT_WITH_CUDA` or
+`BROGAMEAGENT_WITH_METAL` is on, parameter-bearing layers also hold
+device mirrors and route through brotensor's GPU surface via
+`Device::to(GPU)`.
+
 - `Linear`, `Relu`, `Tanh` — circuits with SGD+momentum velocity state
   and per-tensor serialization.
-- `softmax_forward` / `softmax_xent` — numerically-stable softmax with
-  optional mask, fused softmax-xent whose gradient collapses to
-  `(p − target)`.
 - `DeepSetsEncoder` — per-stream MLP over self / enemy-slots / ally-slots,
   mean-pool over valid slots, concat. Invalid slots contribute zero
   gradient.
