@@ -3,10 +3,10 @@
 #include "parity_helpers.h"
 
 #include <brotensor/ops.h>
-#include <brogameagent/nn/ops.h>
+#include <brotensor/ops_cpu.h>
 
 using namespace bga_parity;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 static void run_linear_forward(int in_dim, int out_dim, uint64_t seed) {
@@ -17,10 +17,10 @@ static void run_linear_forward(int in_dim, int out_dim, uint64_t seed) {
     fill_random(x, rng);
 
     Tensor y_cpu(out_dim, 1);
-    brogameagent::nn::linear_forward(W, b, x, y_cpu);
+    brotensor::linear_forward_cpu(W, b, x, y_cpu);
 
     GpuTensor gW, gb, gx, gy;
-    upload_to(W, gW); upload_to(b, gb); upload_to(x, gx);
+    brotensor::upload(W, gW); brotensor::upload(b, gb); brotensor::upload(x, gx);
     gy.resize(out_dim, 1);
     brotensor::linear_forward_gpu(gW, gb, gx, gy);
     Tensor y_gpu = download_to_host(gy);
@@ -48,14 +48,14 @@ static void run_linear_backward(int in_dim, int out_dim, uint64_t seed) {
     Tensor dX_cpu(in_dim, 1);
     Tensor dW_cpu = dW_init;
     Tensor dB_cpu = dB_init;
-    brogameagent::nn::linear_backward(W, x, dY, dX_cpu, dW_cpu, dB_cpu);
+    brotensor::linear_backward_cpu(W, x, dY, dX_cpu, dW_cpu, dB_cpu);
 
     // GPU path with the same starting accumulators.
     GpuTensor gW, gx, gdY, gdX, gdW, gdB;
-    upload_to(W, gW); upload_to(x, gx); upload_to(dY, gdY);
+    brotensor::upload(W, gW); brotensor::upload(x, gx); brotensor::upload(dY, gdY);
     gdX.resize(in_dim, 1);
-    upload_to(dW_init, gdW);
-    upload_to(dB_init, gdB);
+    brotensor::upload(dW_init, gdW);
+    brotensor::upload(dB_init, gdB);
     brotensor::linear_backward_gpu(gW, gx, gdY, gdX, gdW, gdB);
 
     Tensor dX_gpu = download_to_host(gdX);

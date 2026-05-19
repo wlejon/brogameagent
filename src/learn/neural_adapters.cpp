@@ -25,11 +25,11 @@ float NeuralEvaluator::evaluate(const World& world, int heroId) const {
     if (!hero) return 0.0f;
     if (!hero->unit().alive()) return -1.0f;
 
-    nn::Tensor obs = nn::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor obs = brotensor::Tensor::vec(observation::TOTAL);
     observation::build(*hero, world, obs.ptr());
 
     float v = 0.0f;
-    nn::Tensor logits = nn::Tensor::vec(net_->policy_logits());
+    brotensor::Tensor logits = brotensor::Tensor::vec(net_->policy_logits());
     // SingleHeroNet is not thread-safe due to activation caches; callers use
     // one evaluator per thread if parallel. const_cast is safe w.r.t. the
     // library's contract — evaluate() is logically const but the net's
@@ -58,11 +58,11 @@ std::vector<float> NeuralPrior::score(
     if (actions.empty()) return out;
 
     // One forward pass.
-    nn::Tensor obs = nn::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor obs = brotensor::Tensor::vec(observation::TOTAL);
     observation::build(self, world, obs.ptr());
 
     float v_unused = 0.0f;
-    nn::Tensor logits = nn::Tensor::vec(net_->policy_logits());
+    brotensor::Tensor logits = brotensor::Tensor::vec(net_->policy_logits());
     const_cast<nn::SingleHeroNet&>(*net_).forward(obs, v_unused, logits);
 
     // Optional temperature scaling on logits.
@@ -81,7 +81,7 @@ std::vector<float> NeuralPrior::score(
     for (int i = 0; i < action_mask::N_ABILITY_SLOTS; ++i)
         ability_mask[i] = mask_buf[action_mask::N_ENEMY_SLOTS + i];
 
-    nn::Tensor probs = nn::Tensor::vec(net_->policy_logits());
+    brotensor::Tensor probs = brotensor::Tensor::vec(net_->policy_logits());
     nn::factored_softmax(logits, probs, attack_mask, ability_mask);
 
     const int N_MOVE = nn::FactoredPolicyHead::N_MOVE;

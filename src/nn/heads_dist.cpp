@@ -14,21 +14,21 @@ void DistributionalValueHead::init(int embed_dim, int hidden, int K, uint64_t& r
     logits_.resize(K, 1);
 }
 
-void DistributionalValueHead::forward(const Tensor& embed, Tensor& probs, float& value) {
+void DistributionalValueHead::forward(const brotensor::Tensor& embed, brotensor::Tensor& probs, float& value) {
     assert(probs.size() == K_);
     fc1_.forward(embed, h_raw_);
-    relu_forward(h_raw_, h_act_);
+    brotensor::relu_forward_cpu(h_raw_, h_act_);
     fc2_.forward(h_act_, logits_);
-    softmax_forward(logits_, probs, nullptr);
+    brotensor::softmax_forward_cpu(logits_, probs, nullptr);
     float v = 0.0f;
     for (int i = 0; i < K_; ++i) v += probs[i] * support(i);
     value = v;
 }
 
-float DistributionalValueHead::xent_backward(const Tensor& probs, const Tensor& p_target, Tensor& dEmbed) {
+float DistributionalValueHead::xent_backward(const brotensor::Tensor& probs, const brotensor::Tensor& p_target, brotensor::Tensor& dEmbed) {
     assert(probs.size() == K_ && p_target.size() == K_);
     float loss = 0.0f;
-    Tensor dLogits = Tensor::vec(K_);
+    brotensor::Tensor dLogits = brotensor::Tensor::vec(K_);
     for (int i = 0; i < K_; ++i) {
         if (p_target[i] > 0.0f) {
             const float p = probs[i] > 1e-12f ? probs[i] : 1e-12f;
@@ -36,15 +36,15 @@ float DistributionalValueHead::xent_backward(const Tensor& probs, const Tensor& 
         }
         dLogits[i] = probs[i] - p_target[i];
     }
-    Tensor dHact = Tensor::vec(h_act_.size());
+    brotensor::Tensor dHact = brotensor::Tensor::vec(h_act_.size());
     fc2_.backward(dLogits, dHact);
-    Tensor dHraw = Tensor::vec(h_raw_.size());
-    relu_backward(h_raw_, dHact, dHraw);
+    brotensor::Tensor dHraw = brotensor::Tensor::vec(h_raw_.size());
+    brotensor::relu_backward_cpu(h_raw_, dHact, dHraw);
     fc1_.backward(dHraw, dEmbed);
     return loss;
 }
 
-void DistributionalValueHead::project_target(float z, Tensor& out) const {
+void DistributionalValueHead::project_target(float z, brotensor::Tensor& out) const {
     assert(out.size() == K_);
     out.zero();
     // Clamp to [-1, 1].

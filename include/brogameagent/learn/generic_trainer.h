@@ -1,7 +1,7 @@
 #pragma once
 
 #include "generic_replay_buffer.h"
-#include "brogameagent/nn/device.h"
+#include <brotensor/device.h>
 #include "brogameagent/nn/net.h"             // WeightsHandle
 #include "brogameagent/nn/policy_value_net.h"
 #include "brogameagent/nn/net_tx.h"
@@ -38,7 +38,7 @@ struct GenericTrainerConfig {
     // tensors and runs forward, loss, backward, and the optimizer step on
     // device. Loss formulation matches CPU exactly (per-head softmax-xent
     // mean-reduced; value MSE).
-    nn::Device device = nn::Device::CPU;
+    brotensor::Device device = brotensor::Device::CPU;
 };
 
 struct GenericTrainStep {
@@ -74,8 +74,8 @@ public:
     virtual std::vector<uint8_t> save() const = 0;
 
     // CPU forward/backward. Mirrors the single-sample API both nets share.
-    virtual void forward(const nn::Tensor& x, float& value, nn::Tensor& logits) = 0;
-    virtual void backward(float dValue, const nn::Tensor& dLogits) = 0;
+    virtual void forward(const brotensor::Tensor& x, float& value, brotensor::Tensor& logits) = 0;
+    virtual void backward(float dValue, const brotensor::Tensor& dLogits) = 0;
 
 #ifdef BROTENSOR_HAS_GPU
     // GPU batched-train forward/backward. PolicyValueNet implements these

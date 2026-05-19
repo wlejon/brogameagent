@@ -1,8 +1,8 @@
 #pragma once
 
-#include "device.h"
-#include "ops.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/ops_cpu.h>
+#include <brotensor/tensor.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/tensor.h>
@@ -49,17 +49,17 @@ public:
 
     void init(int in_dim, int out_dim, uint64_t& rng_state);
 
-    void forward(const Tensor& x, Tensor& y);
-    void backward(const Tensor& dY, Tensor& dX);
+    void forward(const brotensor::Tensor& x, brotensor::Tensor& y);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
     // Explicit-input overload: accumulate dW/db using `x_input` instead of the
     // internal x_cache_ stashed by forward(). Mirrors the GPU API where the
     // forward input is passed explicitly to backward. Used by callers that
     // share a single Linear across multiple forward/backward pairs (e.g. the
     // per-slot streams in DeepSetsEncoder).
-    void backward(const Tensor& x_input, const Tensor& dY, Tensor& dX);
+    void backward(const brotensor::Tensor& x_input, const brotensor::Tensor& dY, brotensor::Tensor& dX);
 
 #ifdef BROTENSOR_HAS_GPU
-    // GPU code path. Parameters must already be on Device::GPU (call to()).
+    // GPU code path. Parameters must already be on brotensor::Device::GPU (call to()).
     // Caller must keep `x` alive until backward() (the layer caches a view).
     void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y);
     void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
@@ -75,8 +75,8 @@ public:
     int in_dim() const  { return W_.cols; }
     int out_dim() const { return W_.rows; }
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "Linear"; }
     int  num_params() const override { return W_.size() + b_.size(); }
@@ -89,14 +89,14 @@ public:
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
 
     // Inspect for tests / CLI.
-    Tensor&       W()       { return W_; }
-    const Tensor& W() const { return W_; }
-    Tensor&       b()       { return b_; }
-    const Tensor& b() const { return b_; }
-    Tensor&       dW()       { return dW_; }
-    const Tensor& dW() const { return dW_; }
-    Tensor&       dB()       { return dB_; }
-    const Tensor& dB() const { return dB_; }
+    brotensor::Tensor&       W()       { return W_; }
+    const brotensor::Tensor& W() const { return W_; }
+    brotensor::Tensor&       b()       { return b_; }
+    const brotensor::Tensor& b() const { return b_; }
+    brotensor::Tensor&       dW()       { return dW_; }
+    const brotensor::Tensor& dW() const { return dW_; }
+    brotensor::Tensor&       dB()       { return dB_; }
+    const brotensor::Tensor& dB() const { return dB_; }
 
 #ifdef BROTENSOR_HAS_GPU
     brotensor::GpuTensor&       W_g()       { return W_g_; }
@@ -106,15 +106,15 @@ public:
 #endif
 
 private:
-    Tensor W_, b_;
-    Tensor dW_, dB_;
-    Tensor vW_, vB_;   // SGD momentum velocities
+    brotensor::Tensor W_, b_;
+    brotensor::Tensor dW_, dB_;
+    brotensor::Tensor vW_, vB_;   // SGD momentum velocities
     // Adam moment buffers (m: first moment, v_a: second moment).
-    Tensor mW_, mB_;
-    Tensor vAW_, vAB_;
-    Tensor x_cache_;   // input stashed at forward, used by backward
+    brotensor::Tensor mW_, mB_;
+    brotensor::Tensor vAW_, vAB_;
+    brotensor::Tensor x_cache_;   // input stashed at forward, used by backward
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     // GPU mirrors. Allocated lazily on to(GPU). x_cache_g_ is a non-owning
     // view of the caller-provided x in forward(GpuTensor); backward consumes
@@ -133,12 +133,12 @@ private:
 
 class Relu : public ICircuit {
 public:
-    void forward(const Tensor& x, Tensor& y) {
+    void forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
         x_cache_ = x;
-        relu_forward(x, y);
+        brotensor::relu_forward_cpu(x, y);
     }
-    void backward(const Tensor& dY, Tensor& dX) {
-        relu_backward(x_cache_, dY, dX);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
+        brotensor::relu_backward_cpu(x_cache_, dY, dX);
     }
     const char* name() const override { return "ReLU"; }
     int  num_params() const override { return 0; }
@@ -148,17 +148,17 @@ public:
     void save_to(std::vector<uint8_t>&) const override {}
     void load_from(const uint8_t*, size_t&, size_t) override {}
 private:
-    Tensor x_cache_;
+    brotensor::Tensor x_cache_;
 };
 
 class Tanh : public ICircuit {
 public:
-    void forward(const Tensor& x, Tensor& y) {
-        tanh_forward(x, y);
+    void forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
+        brotensor::tanh_forward_cpu(x, y);
         y_cache_ = y;
     }
-    void backward(const Tensor& dY, Tensor& dX) {
-        tanh_backward(y_cache_, dY, dX);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
+        brotensor::tanh_backward_cpu(y_cache_, dY, dX);
     }
     const char* name() const override { return "Tanh"; }
     int  num_params() const override { return 0; }
@@ -168,17 +168,17 @@ public:
     void save_to(std::vector<uint8_t>&) const override {}
     void load_from(const uint8_t*, size_t&, size_t) override {}
 private:
-    Tensor y_cache_;
+    brotensor::Tensor y_cache_;
 };
 
 class Sigmoid : public ICircuit {
 public:
-    void forward(const Tensor& x, Tensor& y) {
-        sigmoid_forward(x, y);
+    void forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
+        brotensor::sigmoid_forward_cpu(x, y);
         y_cache_ = y;
     }
-    void backward(const Tensor& dY, Tensor& dX) {
-        sigmoid_backward(y_cache_, dY, dX);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
+        brotensor::sigmoid_backward_cpu(y_cache_, dY, dX);
     }
     const char* name() const override { return "Sigmoid"; }
     int  num_params() const override { return 0; }
@@ -188,13 +188,13 @@ public:
     void save_to(std::vector<uint8_t>&) const override {}
     void load_from(const uint8_t*, size_t&, size_t) override {}
 private:
-    Tensor y_cache_;
+    brotensor::Tensor y_cache_;
 };
 
 // ─── Serialization helpers (tensor-level) ─────────────────────────────────
 
-void tensor_write(const Tensor& t, std::vector<uint8_t>& out);
-void tensor_read(Tensor& t, const uint8_t* data, size_t& offset, size_t size);
+void tensor_write(const brotensor::Tensor& t, std::vector<uint8_t>& out);
+void tensor_read(brotensor::Tensor& t, const uint8_t* data, size_t& offset, size_t size);
 
 // ─── Optimizer helpers ────────────────────────────────────────────────────
 //
@@ -207,7 +207,7 @@ void tensor_read(Tensor& t, const uint8_t* data, size_t& offset, size_t size);
 //   param -= lr * m_hat / (sqrt(v_hat) + eps)
 // `step` is a 1-based step counter (the trainer increments it before calling).
 // All four tensors must have identical shape.
-void adam_step_cpu(Tensor& param, const Tensor& grad, Tensor& m, Tensor& v,
+void adam_step_cpu(brotensor::Tensor& param, const brotensor::Tensor& grad, brotensor::Tensor& m, brotensor::Tensor& v,
                    float lr, float beta1, float beta2, float eps, int step);
 
 } // namespace brogameagent::nn

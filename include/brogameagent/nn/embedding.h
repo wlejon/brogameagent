@@ -1,7 +1,7 @@
 #pragma once
 
 #include "circuits.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 
 #include <cstdint>
 
@@ -19,8 +19,8 @@ public:
 
     void init(int vocab, int dim, uint64_t& rng_state);
 
-    void forward(int idx, Tensor& out);
-    void backward(int idx, const Tensor& dY);
+    void forward(int idx, brotensor::Tensor& out);
+    void backward(int idx, const brotensor::Tensor& dY);
 
     int vocab() const { return W_.rows; }
     int dim()   const { return W_.cols; }
@@ -33,16 +33,16 @@ public:
     void save_to(std::vector<uint8_t>& out) const override;
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
 
-    Tensor&       W()       { return W_; }
-    const Tensor& W() const { return W_; }
-    Tensor&       dW()       { return dW_; }
+    brotensor::Tensor&       W()       { return W_; }
+    const brotensor::Tensor& W() const { return W_; }
+    brotensor::Tensor&       dW()       { return dW_; }
 
 private:
-    Tensor W_;
-    Tensor dW_;
-    Tensor vW_;
-    Tensor mW_;
-    Tensor vAW_;
+    brotensor::Tensor W_;
+    brotensor::Tensor dW_;
+    brotensor::Tensor vW_;
+    brotensor::Tensor mW_;
+    brotensor::Tensor vAW_;
 };
 
 } // namespace brogameagent::nn

@@ -14,9 +14,9 @@
 #include "brogameagent/nn/encoder.h"
 #include "brogameagent/nn/heads.h"
 #include "brogameagent/nn/net.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 #include "brogameagent/nn/policy_value_net.h"
-#include "brogameagent/nn/tensor.h"
+#include <brotensor/tensor.h>
 #include "brogameagent/nn/layernorm.h"
 #include "brogameagent/nn/embedding.h"
 #include "brogameagent/nn/attention.h"
@@ -36,6 +36,7 @@
 #include <vector>
 
 using namespace brogameagent::nn;
+using brotensor::Tensor;
 
 static int g_fail = 0;
 static int g_pass = 0;
@@ -211,10 +212,10 @@ static void test_softmax_xent() {
     auto loss_fn = [&]() {
         Tensor p = Tensor::vec(n);
         Tensor dz = Tensor::vec(n);
-        return softmax_xent(logits, target, p, dz, nullptr);
+        return brotensor::softmax_xent_cpu(logits, target, p, dz, nullptr);
     };
 
-    softmax_xent(logits, target, probs, dLogits, nullptr);
+    brotensor::softmax_xent_cpu(logits, target, probs, dLogits, nullptr);
 
     std::vector<float> num;
     numerical_grad(logits.ptr(), n, loss_fn, num);
@@ -293,7 +294,7 @@ static void test_full_net() {
         Tensor lg = Tensor::vec(net.policy_logits());
         net.forward(x, v, lg);
         float dv = 0;
-        return mse_scalar(v, v_target, dv);
+        return brotensor::mse_scalar_cpu(v, v_target, dv);
     };
 
     // Simple param grad check: perturb a single linear weight and compare.
@@ -303,7 +304,7 @@ static void test_full_net() {
     Tensor logits = Tensor::vec(net.policy_logits());
     net.forward(x, v, logits);
     float dv = 0;
-    mse_scalar(v, v_target, dv);
+    brotensor::mse_scalar_cpu(v, v_target, dv);
     Tensor dLog = Tensor::vec(net.policy_logits());
     dLog.zero(); // policy is not part of this loss
     net.backward(dv, dLog);
@@ -362,10 +363,10 @@ static void test_policy_value_net() {
         Tensor lg = Tensor::vec(cfg.num_actions);
         net.forward(x, v, lg);
         float dv = 0.0f;
-        const float lv = mse_scalar(v, v_target, dv);
+        const float lv = brotensor::mse_scalar_cpu(v, v_target, dv);
         Tensor pr = Tensor::vec(cfg.num_actions);
         Tensor dL = Tensor::vec(cfg.num_actions);
-        const float lp = softmax_xent(lg, tgt, pr, dL, nullptr);
+        const float lp = brotensor::softmax_xent_cpu(lg, tgt, pr, dL, nullptr);
         return lv + lp;
     };
 
@@ -406,10 +407,10 @@ static void test_policy_value_net() {
         Tensor lg = Tensor::vec(cfg.num_actions);
         net.forward(x, v, lg);
         float dv = 0.0f;
-        mse_scalar(v, v_target, dv);
+        brotensor::mse_scalar_cpu(v, v_target, dv);
         Tensor pr = Tensor::vec(cfg.num_actions);
         Tensor dL = Tensor::vec(cfg.num_actions);
-        softmax_xent(lg, tgt, pr, dL, nullptr);
+        brotensor::softmax_xent_cpu(lg, tgt, pr, dL, nullptr);
         net.backward(dv, dL);
         net.sgd_step(0.05f, 0.9f);
     }

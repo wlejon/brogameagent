@@ -8,8 +8,8 @@
 #include <vector>
 
 using namespace bga_parity;
-using brogameagent::nn::Tensor;
-using brogameagent::nn::Device;
+using brotensor::Tensor;
+using brotensor::Device;
 using brogameagent::nn::PolicyValueNet;
 using brotensor::GpuTensor;
 
@@ -39,7 +39,7 @@ static void run_pvn_batched(int B, uint64_t seed) {
         for (int j = 0; j < cfg.in_dim; ++j)
             xb.data[j] = X_BD.data[static_cast<size_t>(b) * cfg.in_dim + j];
         GpuTensor gxb;
-        upload_to(xb, gxb);
+        brotensor::upload(xb, gxb);
         GpuTensor glogits;
         net.forward(gxb, glogits);
         Tensor h_logits = download_to_host(glogits);
@@ -52,7 +52,7 @@ static void run_pvn_batched(int B, uint64_t seed) {
 
     // ── Batched. ───────────────────────────────────────────────────────────
     GpuTensor gX_BD, glogits_BD, gvalues_B1;
-    upload_to(X_BD, gX_BD);
+    brotensor::upload(X_BD, gX_BD);
     net.forward_batched(gX_BD, glogits_BD, gvalues_B1);
     Tensor logits_batched = download_to_host(glogits_BD);
     Tensor values_batched = download_to_host(gvalues_B1);

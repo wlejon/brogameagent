@@ -3,7 +3,7 @@
 #include "attention.h"
 #include "circuits.h"
 #include "layernorm.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 #include "brogameagent/observation.h"
 
 #include <cstdint>
@@ -33,8 +33,8 @@ public:
 
     int out_dim() const { return 3 * cfg_.embed_dim; }
 
-    void forward(const Tensor& x, Tensor& y);
-    void backward(const Tensor& dY, Tensor& dX);
+    void forward(const brotensor::Tensor& x, brotensor::Tensor& y);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
 
     const char* name() const override { return "SetTransformerEncoder"; }
     int  num_params() const override;
@@ -49,17 +49,17 @@ private:
 
     // Self stream (identical to DeepSetsEncoder's self path).
     Linear self_fc1_, self_fc2_;
-    Tensor self_h_, self_z_;   // post-relu hidden, post-fc2 embed
+    brotensor::Tensor self_h_, self_z_;   // post-relu hidden, post-fc2 embed
 
     // Enemy stream.
     Linear enemy_proj_;                        // ENEMY_FEATURES -> embed_dim
     ScaledDotProductAttention enemy_attn_;     // (K_ENEMIES, embed_dim)
     std::vector<LayerNorm> enemy_ln_;          // one per slot (shared semantics, separate params)
     // Caches.
-    Tensor enemy_proj_raw_;   // (K, D) pre-relu
-    Tensor enemy_proj_act_;   // (K, D) post-relu (attn input)
-    Tensor enemy_attn_out_;   // (K, D) attn output
-    Tensor enemy_ln_out_;     // (K, D) after per-row LN
+    brotensor::Tensor enemy_proj_raw_;   // (K, D) pre-relu
+    brotensor::Tensor enemy_proj_act_;   // (K, D) post-relu (attn input)
+    brotensor::Tensor enemy_attn_out_;   // (K, D) attn output
+    brotensor::Tensor enemy_ln_out_;     // (K, D) after per-row LN
     std::vector<uint8_t> e_valid_;
     int e_n_valid_ = 0;
 
@@ -67,14 +67,14 @@ private:
     Linear ally_proj_;
     ScaledDotProductAttention ally_attn_;
     std::vector<LayerNorm> ally_ln_;
-    Tensor ally_proj_raw_;
-    Tensor ally_proj_act_;
-    Tensor ally_attn_out_;
-    Tensor ally_ln_out_;
+    brotensor::Tensor ally_proj_raw_;
+    brotensor::Tensor ally_proj_act_;
+    brotensor::Tensor ally_attn_out_;
+    brotensor::Tensor ally_ln_out_;
     std::vector<uint8_t> a_valid_;
     int a_n_valid_ = 0;
 
-    Tensor x_cache_;
+    brotensor::Tensor x_cache_;
 };
 
 } // namespace brogameagent::nn

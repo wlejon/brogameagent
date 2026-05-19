@@ -25,7 +25,7 @@
 #include <vector>
 
 using namespace bga_parity;
-using brogameagent::nn::Device;
+using brotensor::Device;
 using brogameagent::nn::PolicyValueNet;
 using brogameagent::learn::DirectBackend;
 using brogameagent::learn::ServerBackend;

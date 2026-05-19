@@ -1,8 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/tensor.h>
 #include "brogameagent/observation.h"
 
 #ifdef BROTENSOR_HAS_GPU
@@ -38,7 +38,7 @@ namespace brogameagent::nn {
 // forward/backward — see decoder.cpp.
 //
 // GPU dispatch mirrors DeepSetsEncoder: device_ field, GpuTensor mirrors,
-// to(Device) migration, GPU forward/backward overloads using linear_*_gpu /
+// to(brotensor::Device) migration, GPU forward/backward overloads using linear_*_gpu /
 // relu_*_gpu / split_rows_gpu.
 
 class DeepSetsDecoder : public ICircuit {
@@ -56,16 +56,16 @@ public:
     int out_dim() const { return observation::TOTAL; }
 
     // x: size 3*embed_dim. y: size observation::TOTAL.
-    void forward(const Tensor& x, Tensor& y);
-    void backward(const Tensor& dY, Tensor& dX);
+    void forward(const brotensor::Tensor& x, brotensor::Tensor& y);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
 
 #ifdef BROTENSOR_HAS_GPU
     void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y);
     void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "DeepSetsDecoder"; }
     int  num_params() const override;
@@ -82,20 +82,20 @@ private:
 
     // Self stream.
     Linear self_fc1_, self_fc2_;
-    Tensor self_h_raw_, self_h_;   // post-fc1, post-relu
+    brotensor::Tensor self_h_raw_, self_h_;   // post-fc1, post-relu
 
     // Enemy stream (shared across slots; per-slot caches).
     Linear enemy_fc1_, enemy_fc2_;
-    std::vector<Tensor> e_h_raw_, e_h_;  // per-slot hidden caches
+    std::vector<brotensor::Tensor> e_h_raw_, e_h_;  // per-slot hidden caches
 
     // Ally stream.
     Linear ally_fc1_, ally_fc2_;
-    std::vector<Tensor> a_h_raw_, a_h_;
+    std::vector<brotensor::Tensor> a_h_raw_, a_h_;
 
     // Cached split of input for backward.
-    Tensor self_in_, pooled_e_, pooled_a_;
+    brotensor::Tensor self_in_, pooled_e_, pooled_a_;
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     brotensor::GpuTensor self_W1_g_, self_b1_g_, self_W2_g_, self_b2_g_;
     brotensor::GpuTensor self_dW1_g_, self_db1_g_, self_dW2_g_, self_db2_g_;

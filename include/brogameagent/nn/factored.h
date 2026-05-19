@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tensor.h"
+#include <brotensor/tensor.h>
 
 #include <vector>
 
@@ -57,11 +57,11 @@ void factored_to_flat(const float* logits,
                       float* flat_prior,
                       const float* head_masks = nullptr);
 
-// Tensor-shaped wrapper for the common case (full PolicyValueNet output).
-void factored_to_flat(const Tensor& logits,
+// brotensor::Tensor-shaped wrapper for the common case (full PolicyValueNet output).
+void factored_to_flat(const brotensor::Tensor& logits,
                       const std::vector<int>& head_sizes,
                       const std::vector<int>& head_offsets,
-                      Tensor& flat_prior,
+                      brotensor::Tensor& flat_prior,
                       const float* head_masks = nullptr);
 
 } // namespace brogameagent::nn

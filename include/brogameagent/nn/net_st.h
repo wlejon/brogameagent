@@ -2,7 +2,7 @@
 
 #include "heads.h"
 #include "set_transformer.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 
 #include <cstdint>
 #include <vector>
@@ -27,8 +27,8 @@ public:
     void init(const Config& cfg);
     const Config& config() const { return cfg_; }
 
-    void forward(const Tensor& x, float& value, Tensor& logits);
-    void backward(float dValue, const Tensor& dLogits);
+    void forward(const brotensor::Tensor& x, float& value, brotensor::Tensor& logits);
+    void backward(float dValue, const brotensor::Tensor& dLogits);
 
     void zero_grad();
     void sgd_step(float lr, float momentum);
@@ -50,9 +50,9 @@ private:
     ValueHead value_head_;
     FactoredPolicyHead head_;
 
-    Tensor enc_out_;
-    Tensor trunk_raw_, trunk_act_out_;
-    Tensor logits_scratch_;
+    brotensor::Tensor enc_out_;
+    brotensor::Tensor trunk_raw_, trunk_act_out_;
+    brotensor::Tensor logits_scratch_;
 };
 
 } // namespace brogameagent::nn

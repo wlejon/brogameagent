@@ -1,8 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/tensor.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/tensor.h>
@@ -17,7 +17,7 @@ namespace brogameagent::nn {
 // Per-vector normalization: y = gamma * (x - mean) / sqrt(var + eps) + beta.
 // Learnable gamma, beta of size N. Single-sample only (vector in, vector out).
 //
-// GPU dispatch: device_ tracks where parameters live. `to(Device)` migrates
+// GPU dispatch: device_ tracks where parameters live. `to(brotensor::Device)` migrates
 // host↔device. The CPU forward/backward overloads are unchanged. The GPU
 // overloads call ::brotensor::layernorm_*_gpu.
 
@@ -27,7 +27,7 @@ public:
     LayerNorm(int n, float eps = 1e-5f) { init(n, eps); }
 
     // Copy semantics: copy the host-side state only. The destination always
-    // starts on Device::CPU (no GPU mirrors copied) — callers must to(GPU)
+    // starts on brotensor::Device::CPU (no GPU mirrors copied) — callers must to(GPU)
     // again if they want a device-resident copy. This preserves the move-only
     // GpuTensor invariant while keeping LayerNorm usable in std::vector and
     // assignable inside composite layers.
@@ -39,19 +39,19 @@ public:
     void init(int n, float eps = 1e-5f);
 
     // CPU code path — literally unchanged from pre-retrofit behavior.
-    void forward(const Tensor& x, Tensor& y);
-    void backward(const Tensor& dY, Tensor& dX);
+    void forward(const brotensor::Tensor& x, brotensor::Tensor& y);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
 
 #ifdef BROTENSOR_HAS_GPU
-    // GPU code path. Parameters must already be on Device::GPU (call to()).
+    // GPU code path. Parameters must already be on brotensor::Device::GPU (call to()).
     void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y);
     void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
 #endif
 
     int dim() const { return gamma_.size(); }
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "LayerNorm"; }
     int  num_params() const override { return gamma_.size() + beta_.size(); }
@@ -61,12 +61,12 @@ public:
     void save_to(std::vector<uint8_t>& out) const override;
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
 
-    Tensor&       gamma()       { return gamma_; }
-    const Tensor& gamma() const { return gamma_; }
-    Tensor&       beta()        { return beta_; }
-    const Tensor& beta()  const { return beta_; }
-    Tensor&       dGamma()       { return dGamma_; }
-    Tensor&       dBeta()        { return dBeta_; }
+    brotensor::Tensor&       gamma()       { return gamma_; }
+    const brotensor::Tensor& gamma() const { return gamma_; }
+    brotensor::Tensor&       beta()        { return beta_; }
+    const brotensor::Tensor& beta()  const { return beta_; }
+    brotensor::Tensor&       dGamma()       { return dGamma_; }
+    brotensor::Tensor&       dBeta()        { return dBeta_; }
 
 private:
     void copy_host_(const LayerNorm& o) {
@@ -79,23 +79,23 @@ private:
         xhat_ = o.xhat_;
         mean_ = o.mean_;
         rstd_ = o.rstd_;
-        device_ = Device::CPU;
+        device_ = brotensor::Device::CPU;
         // GPU mirrors deliberately left default-constructed (empty).
     }
 
-    Tensor gamma_, beta_;
-    Tensor dGamma_, dBeta_;
-    Tensor vGamma_, vBeta_;
+    brotensor::Tensor gamma_, beta_;
+    brotensor::Tensor dGamma_, dBeta_;
+    brotensor::Tensor vGamma_, vBeta_;
     // Adam moment buffers.
-    Tensor mGamma_, mBeta_;
-    Tensor vAGamma_, vABeta_;
+    brotensor::Tensor mGamma_, mBeta_;
+    brotensor::Tensor vAGamma_, vABeta_;
     float eps_ = 1e-5f;
     // Caches for backward.
-    Tensor xhat_;     // normalized x
+    brotensor::Tensor xhat_;     // normalized x
     float mean_ = 0.0f;
     float rstd_ = 0.0f;
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     // GPU mirrors. Allocated lazily on first to(GPU); updated by to() in
     // either direction. Forward/backward also create xhat_g_ as needed.

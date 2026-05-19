@@ -18,13 +18,13 @@ void EnsembleNet::init(int N, SingleHeroNet::Config base) {
     }
 }
 
-void EnsembleNet::forward_mean(const Tensor& x, float& value_mean, float& value_std, Tensor& logits_mean) {
+void EnsembleNet::forward_mean(const brotensor::Tensor& x, float& value_mean, float& value_std, brotensor::Tensor& logits_mean) {
     const int N = num_members();
     assert(N > 0);
     assert(logits_mean.size() == members_[0].policy_logits());
     logits_mean.zero();
     std::vector<float> vals(N, 0.0f);
-    Tensor lg = Tensor::vec(members_[0].policy_logits());
+    brotensor::Tensor lg = brotensor::Tensor::vec(members_[0].policy_logits());
     for (int i = 0; i < N; ++i) {
         members_[i].forward(x, vals[i], lg);
         for (int j = 0; j < lg.size(); ++j) logits_mean[j] += lg[j];

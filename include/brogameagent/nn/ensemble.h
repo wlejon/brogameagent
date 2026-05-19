@@ -1,7 +1,7 @@
 #pragma once
 
 #include "net.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 
 #include <cstdint>
 #include <string>
@@ -26,9 +26,9 @@ public:
     const SingleHeroNet& member(int i) const { return members_[i]; }
 
     // Runs all members; value_mean, value_std across members, logits_mean elementwise.
-    void forward_mean(const Tensor& x, float& value_mean, float& value_std, Tensor& logits_mean);
+    void forward_mean(const brotensor::Tensor& x, float& value_mean, float& value_std, brotensor::Tensor& logits_mean);
 
-    void forward_one(int i, const Tensor& x, float& value, Tensor& logits) {
+    void forward_one(int i, const brotensor::Tensor& x, float& value, brotensor::Tensor& logits) {
         members_[i].forward(x, value, logits);
     }
 

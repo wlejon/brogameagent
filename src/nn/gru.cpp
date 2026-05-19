@@ -1,12 +1,12 @@
 #include "brogameagent/nn/gru.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 
 #include <cassert>
 #include <cmath>
 
 namespace brogameagent::nn {
 
-static inline void mat_vec(const Tensor& W, const Tensor& x, Tensor& y) {
+static inline void mat_vec(const brotensor::Tensor& W, const brotensor::Tensor& x, brotensor::Tensor& y) {
     const int out = W.rows, in = W.cols;
     assert(x.size() == in && y.size() == out);
     for (int i = 0; i < out; ++i) {
@@ -22,8 +22,8 @@ void GRUCell::init(int in_dim, int hidden, uint64_t& rng_state) {
     W_ir_.resize(H, I); W_iz_.resize(H, I); W_in_.resize(H, I);
     W_hr_.resize(H, H); W_hz_.resize(H, H); W_hn_.resize(H, H);
     b_r_.resize(H, 1); b_z_.resize(H, 1); b_in_.resize(H, 1); b_hn_.resize(H, 1);
-    xavier_init(W_ir_, rng_state); xavier_init(W_iz_, rng_state); xavier_init(W_in_, rng_state);
-    xavier_init(W_hr_, rng_state); xavier_init(W_hz_, rng_state); xavier_init(W_hn_, rng_state);
+    brotensor::xavier_init_cpu(W_ir_, rng_state); brotensor::xavier_init_cpu(W_iz_, rng_state); brotensor::xavier_init_cpu(W_in_, rng_state);
+    brotensor::xavier_init_cpu(W_hr_, rng_state); brotensor::xavier_init_cpu(W_hz_, rng_state); brotensor::xavier_init_cpu(W_hn_, rng_state);
 
     dW_ir_.resize(H, I); dW_iz_.resize(H, I); dW_in_.resize(H, I);
     dW_hr_.resize(H, H); dW_hz_.resize(H, H); dW_hn_.resize(H, H);
@@ -58,44 +58,44 @@ int GRUCell::num_params() const {
          + b_r_.size() + b_z_.size() + b_in_.size() + b_hn_.size();
 }
 
-void GRUCell::forward(const Tensor& x, const Tensor& h_prev, Tensor& h) {
+void GRUCell::forward(const brotensor::Tensor& x, const brotensor::Tensor& h_prev, brotensor::Tensor& h) {
     const int H = hidden();
     assert(h.size() == H);
     x_cache_ = x;
     h_prev_cache_ = h_prev;
 
-    Tensor tmp_i(H, 1), tmp_h(H, 1);
+    brotensor::Tensor tmp_i(H, 1), tmp_h(H, 1);
 
     // r
     mat_vec(W_ir_, x, tmp_i);
     mat_vec(W_hr_, h_prev, tmp_h);
     for (int i = 0; i < H; ++i) r_[i] = tmp_i[i] + tmp_h[i] + b_r_[i];
-    sigmoid_forward(r_, r_);
+    brotensor::sigmoid_forward_cpu(r_, r_);
 
     // z
     mat_vec(W_iz_, x, tmp_i);
     mat_vec(W_hz_, h_prev, tmp_h);
     for (int i = 0; i < H; ++i) z_[i] = tmp_i[i] + tmp_h[i] + b_z_[i];
-    sigmoid_forward(z_, z_);
+    brotensor::sigmoid_forward_cpu(z_, z_);
 
     // n: tanh( W_in x + b_in + r * (W_hn h_prev + b_hn) )
     mat_vec(W_in_, x, tmp_i);
     mat_vec(W_hn_, h_prev, tmp_h);
     for (int i = 0; i < H; ++i) hn_pre_[i] = tmp_h[i] + b_hn_[i];
     for (int i = 0; i < H; ++i) n_[i] = tmp_i[i] + b_in_[i] + r_[i] * hn_pre_[i];
-    tanh_forward(n_, n_);
+    brotensor::tanh_forward_cpu(n_, n_);
 
     // h = (1 - z) * n + z * h_prev
     for (int i = 0; i < H; ++i) h[i] = (1.0f - z_[i]) * n_[i] + z_[i] * h_prev[i];
 }
 
-void GRUCell::backward(const Tensor& dH, Tensor& dX, Tensor& dH_prev) {
+void GRUCell::backward(const brotensor::Tensor& dH, brotensor::Tensor& dX, brotensor::Tensor& dH_prev) {
     const int H = hidden(), I = in_dim();
     assert(dH.size() == H);
 
     // h = (1 - z) * n + z * h_prev
-    Tensor dz(H, 1), dn(H, 1);
-    Tensor dh_prev_direct(H, 1);
+    brotensor::Tensor dz(H, 1), dn(H, 1);
+    brotensor::Tensor dh_prev_direct(H, 1);
     for (int i = 0; i < H; ++i) {
         dn[i] = dH[i] * (1.0f - z_[i]);
         dz[i] = dH[i] * (h_prev_cache_[i] - n_[i]);
@@ -103,23 +103,23 @@ void GRUCell::backward(const Tensor& dH, Tensor& dX, Tensor& dH_prev) {
     }
 
     // n = tanh(n_pre) where n_pre = W_in x + b_in + r * hn_pre
-    Tensor dn_pre(H, 1);
-    tanh_backward(n_, dn, dn_pre);
+    brotensor::Tensor dn_pre(H, 1);
+    brotensor::tanh_backward_cpu(n_, dn, dn_pre);
 
     // Contribution paths from n_pre:
     //   d(W_in x + b_in) = dn_pre
     //   d r = dn_pre * hn_pre
     //   d hn_pre = dn_pre * r   (hn_pre = W_hn h_prev + b_hn)
-    Tensor dr(H, 1), d_hn_pre(H, 1);
+    brotensor::Tensor dr(H, 1), d_hn_pre(H, 1);
     for (int i = 0; i < H; ++i) {
         dr[i]       = dn_pre[i] * hn_pre_[i];
         d_hn_pre[i] = dn_pre[i] * r_[i];
     }
 
     // Sigmoid backprop for r and z (r_ and z_ are post-sigmoid).
-    Tensor dr_pre(H, 1), dz_pre(H, 1);
-    sigmoid_backward(r_, dr, dr_pre);
-    sigmoid_backward(z_, dz, dz_pre);
+    brotensor::Tensor dr_pre(H, 1), dz_pre(H, 1);
+    brotensor::sigmoid_backward_cpu(r_, dr, dr_pre);
+    brotensor::sigmoid_backward_cpu(z_, dz, dz_pre);
 
     // Now we have grads on the pre-activation "inputs" for r, z, n:
     //   r_pre = W_ir x + W_hr h_prev + b_r     -> dr_pre
@@ -170,7 +170,7 @@ void GRUCell::zero_grad() {
     db_r_.zero(); db_z_.zero(); db_in_.zero(); db_hn_.zero();
 }
 
-static void sgd_one(Tensor& W, Tensor& vW, const Tensor& dW, float lr, float m) {
+static void sgd_one(brotensor::Tensor& W, brotensor::Tensor& vW, const brotensor::Tensor& dW, float lr, float m) {
     const int n = W.size();
     float* w = W.ptr(); float* v = vW.ptr(); const float* g = dW.ptr();
     for (int i = 0; i < n; ++i) {

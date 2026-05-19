@@ -1,8 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/tensor.h>
 #include "brogameagent/observation.h"
 
 #ifdef BROTENSOR_HAS_GPU
@@ -35,7 +35,7 @@ namespace brogameagent::nn {
 // is distributed from the pool, scaled by 1/n_valid, and invalid slots
 // receive zero gradient.
 //
-// GPU dispatch: device_ tracks where parameters live. `to(Device)` migrates
+// GPU dispatch: device_ tracks where parameters live. `to(brotensor::Device)` migrates
 // host↔device. CPU forward/backward are unchanged. GPU overloads call
 // linear_*_gpu / relu_*_gpu / masked_mean_pool_*_gpu / concat_rows_gpu.
 
@@ -53,16 +53,16 @@ public:
     int out_dim() const { return 3 * cfg_.embed_dim; }
 
     // x: size observation::TOTAL. y: size out_dim().
-    void forward(const Tensor& x, Tensor& y);
-    void backward(const Tensor& dY, Tensor& dX);
+    void forward(const brotensor::Tensor& x, brotensor::Tensor& y);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
 
 #ifdef BROTENSOR_HAS_GPU
     void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y);
     void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "DeepSetsEncoder"; }
     int  num_params() const override;
@@ -80,7 +80,7 @@ private:
     // Self stream: SELF_FEATURES -> hidden -> embed
     Linear self_fc1_, self_fc2_;
     Relu   self_act_;
-    Tensor self_h_, self_z_;     // hidden after fc1+relu, embed after fc2
+    brotensor::Tensor self_h_, self_z_;     // hidden after fc1+relu, embed after fc2
 
     // Enemy stream: ENEMY_FEATURES -> hidden -> embed (applied per slot)
     Linear enemy_fc1_, enemy_fc2_;
@@ -88,17 +88,17 @@ private:
     Linear ally_fc1_, ally_fc2_;
 
     // Per-slot caches. Sized by init().
-    std::vector<Tensor> e_h_, e_z_;
-    std::vector<Tensor> a_h_, a_z_;
+    std::vector<brotensor::Tensor> e_h_, e_z_;
+    std::vector<brotensor::Tensor> a_h_, a_z_;
     std::vector<uint8_t> e_valid_, a_valid_;
     int e_n_valid_ = 0, a_n_valid_ = 0;
 
-    Tensor x_cache_;  // copy of input for backward shape
+    brotensor::Tensor x_cache_;  // copy of input for backward shape
 
     // scratch for per-slot backward (input grad for an entire slot row)
-    Tensor slot_grad_in_;
+    brotensor::Tensor slot_grad_in_;
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     // ── GPU mirrors ────────────────────────────────────────────────────────
     // Per-Linear weights/grads/velocities.

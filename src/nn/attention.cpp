@@ -1,10 +1,9 @@
 #include "brogameagent/nn/attention.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
-#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -14,7 +13,7 @@
 namespace brogameagent::nn {
 
 // Y = X @ W^T  where X:(N,D_in), W:(D_out,D_in), Y:(N,D_out)
-static void matmul_xwT(const Tensor& X, const Tensor& W, Tensor& Y) {
+static void matmul_xwT(const brotensor::Tensor& X, const brotensor::Tensor& W, brotensor::Tensor& Y) {
     const int N = X.rows, D_in = X.cols, D_out = W.rows;
     assert(W.cols == D_in);
     assert(Y.rows == N && Y.cols == D_out);
@@ -39,10 +38,10 @@ void ScaledDotProductAttention::init(int n_slots, int dim, uint64_t& rng_state, 
     vAWq_.resize(d_, d_); vAWk_.resize(d_, d_); vAWv_.resize(d_, d_); vAWo_.resize(d_, d_);
     mWq_.zero(); mWk_.zero(); mWv_.zero(); mWo_.zero();
     vAWq_.zero(); vAWk_.zero(); vAWv_.zero(); vAWo_.zero();
-    xavier_init(Wq_, rng_state);
-    xavier_init(Wk_, rng_state);
-    xavier_init(Wv_, rng_state);
-    xavier_init(Wo_, rng_state);
+    brotensor::xavier_init_cpu(Wq_, rng_state);
+    brotensor::xavier_init_cpu(Wk_, rng_state);
+    brotensor::xavier_init_cpu(Wv_, rng_state);
+    brotensor::xavier_init_cpu(Wo_, rng_state);
 
     X_cache_.resize(n_, d_);
     Q_.resize(n_, d_); K_.resize(n_, d_); V_.resize(n_, d_);
@@ -51,7 +50,7 @@ void ScaledDotProductAttention::init(int n_slots, int dim, uint64_t& rng_state, 
     mask_cache_.assign(n_, 1);
 }
 
-void ScaledDotProductAttention::forward(const Tensor& X, const float* mask, Tensor& O) {
+void ScaledDotProductAttention::forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& O) {
     assert(X.rows == n_ && X.cols == d_);
     assert(O.rows == n_ && O.cols == d_);
     X_cache_ = X;
@@ -65,7 +64,7 @@ void ScaledDotProductAttention::forward(const Tensor& X, const float* mask, Tens
 
     // scores(i,j) = Q_i . K_j / sqrt(D)
     const float inv_sqrtd = 1.0f / std::sqrt(static_cast<float>(d_));
-    Tensor scores(n_, n_);
+    brotensor::Tensor scores(n_, n_);
     for (int i = 0; i < n_; ++i) {
         for (int j = 0; j < n_; ++j) {
             float s = 0.0f;
@@ -76,7 +75,7 @@ void ScaledDotProductAttention::forward(const Tensor& X, const float* mask, Tens
 
     // Row-softmax with column mask (invalid keys excluded). Invalid rows get
     // all-zero attention and zero outputs.
-    Tensor row_logits(n_, 1), row_probs(n_, 1);
+    brotensor::Tensor row_logits(n_, 1), row_probs(n_, 1);
     std::vector<float> col_mask(n_);
     for (int j = 0; j < n_; ++j) col_mask[j] = mask_cache_[j] ? 1.0f : 0.0f;
     for (int i = 0; i < n_; ++i) {
@@ -85,7 +84,7 @@ void ScaledDotProductAttention::forward(const Tensor& X, const float* mask, Tens
             continue;
         }
         for (int j = 0; j < n_; ++j) row_logits[j] = scores(i, j);
-        softmax_forward(row_logits, row_probs, col_mask.data());
+        brotensor::softmax_forward_cpu(row_logits, row_probs, col_mask.data());
         for (int j = 0; j < n_; ++j) Attn_(i, j) = row_probs[j];
     }
 
@@ -112,14 +111,14 @@ void ScaledDotProductAttention::forward(const Tensor& X, const float* mask, Tens
     }
 }
 
-void ScaledDotProductAttention::backward(const Tensor& dO, Tensor& dX) {
+void ScaledDotProductAttention::backward(const brotensor::Tensor& dO, brotensor::Tensor& dX) {
     assert(dO.rows == n_ && dO.cols == d_);
     assert(dX.rows == n_ && dX.cols == d_);
     const float inv_sqrtd = 1.0f / std::sqrt(static_cast<float>(d_));
 
     // Zero dO on invalid rows (they had zero output).
     // dO_masked is effectively dO with invalid rows set to 0.
-    Tensor dY(n_, d_);   // grad wrt Y (before Wo)
+    brotensor::Tensor dY(n_, d_);   // grad wrt Y (before Wo)
     dY.zero();
     for (int i = 0; i < n_; ++i) {
         if (!mask_cache_[i]) continue;
@@ -137,8 +136,8 @@ void ScaledDotProductAttention::backward(const Tensor& dO, Tensor& dX) {
     // Y = Attn @ V
     // dAttn(i,j) = sum_k dY(i,k) * V(j,k)
     // dV(j,k)   = sum_i Attn(i,j) * dY(i,k)
-    Tensor dAttn(n_, n_); dAttn.zero();
-    Tensor dV(n_, d_); dV.zero();
+    brotensor::Tensor dAttn(n_, n_); dAttn.zero();
+    brotensor::Tensor dV(n_, d_); dV.zero();
     for (int i = 0; i < n_; ++i) {
         for (int j = 0; j < n_; ++j) {
             float s = 0.0f;
@@ -155,12 +154,12 @@ void ScaledDotProductAttention::backward(const Tensor& dO, Tensor& dX) {
     }
 
     // dScores: row-wise softmax backward.
-    Tensor dScores(n_, n_); dScores.zero();
-    Tensor row_p(n_, 1), row_dp(n_, 1), row_dz(n_, 1);
+    brotensor::Tensor dScores(n_, n_); dScores.zero();
+    brotensor::Tensor row_p(n_, 1), row_dp(n_, 1), row_dz(n_, 1);
     for (int i = 0; i < n_; ++i) {
         if (!mask_cache_[i]) continue;
         for (int j = 0; j < n_; ++j) { row_p[j] = Attn_(i, j); row_dp[j] = dAttn(i, j); }
-        softmax_backward(row_p, row_dp, row_dz);
+        brotensor::softmax_backward_cpu(row_p, row_dp, row_dz);
         for (int j = 0; j < n_; ++j) {
             if (!mask_cache_[j]) { dScores(i, j) = 0.0f; continue; }
             dScores(i, j) = row_dz[j] * inv_sqrtd;
@@ -170,8 +169,8 @@ void ScaledDotProductAttention::backward(const Tensor& dO, Tensor& dX) {
     // scores(i,j) = Q_i . K_j
     // dQ(i,k) = sum_j dScores(i,j) * K(j,k)
     // dK(j,k) = sum_i dScores(i,j) * Q(i,k)
-    Tensor dQ(n_, d_); dQ.zero();
-    Tensor dK(n_, d_); dK.zero();
+    brotensor::Tensor dQ(n_, d_); dQ.zero();
+    brotensor::Tensor dK(n_, d_); dK.zero();
     for (int i = 0; i < n_; ++i) {
         for (int k = 0; k < d_; ++k) {
             float s = 0.0f;
@@ -208,7 +207,7 @@ void ScaledDotProductAttention::backward(const Tensor& dO, Tensor& dX) {
 void ScaledDotProductAttention::forward(const brotensor::GpuTensor& X,
                                         const float* mask_dev,
                                         brotensor::GpuTensor& O) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     last_mask_dev_ = mask_dev;
     // Ensure cache mirrors are sized.
     if (X_cache_g_.rows != n_ || X_cache_g_.cols != d_) X_cache_g_.resize(n_, d_);
@@ -230,7 +229,7 @@ void ScaledDotProductAttention::forward(const brotensor::GpuTensor& X,
 
 void ScaledDotProductAttention::backward(const brotensor::GpuTensor& dO,
                                          brotensor::GpuTensor& dX) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     brotensor::attention_backward_gpu(dO, X_cache_g_, Q_g_, K_g_, V_g_, Attn_g_, Y_g_,
                                 Wq_g_, Wk_g_, Wv_g_, Wo_g_,
                                 last_mask_dev_,
@@ -239,42 +238,42 @@ void ScaledDotProductAttention::backward(const brotensor::GpuTensor& dO,
 }
 #endif
 
-void ScaledDotProductAttention::to(Device d) {
+void ScaledDotProductAttention::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("ScaledDotProductAttention");
+    brotensor::device_require_gpu("ScaledDotProductAttention");
 #ifdef BROTENSOR_HAS_GPU
-    if (d == Device::GPU) {
-        upload_to(Wq_, Wq_g_); upload_to(Wk_, Wk_g_);
-        upload_to(Wv_, Wv_g_); upload_to(Wo_, Wo_g_);
-        upload_to(dWq_, dWq_g_); upload_to(dWk_, dWk_g_);
-        upload_to(dWv_, dWv_g_); upload_to(dWo_, dWo_g_);
-        upload_to(vWq_, vWq_g_); upload_to(vWk_, vWk_g_);
-        upload_to(vWv_, vWv_g_); upload_to(vWo_, vWo_g_);
-        upload_to(mWq_, mWq_g_); upload_to(mWk_, mWk_g_);
-        upload_to(mWv_, mWv_g_); upload_to(mWo_, mWo_g_);
-        upload_to(vAWq_, vAWq_g_); upload_to(vAWk_, vAWk_g_);
-        upload_to(vAWv_, vAWv_g_); upload_to(vAWo_, vAWo_g_);
-        device_ = Device::GPU;
+    if (d == brotensor::Device::GPU) {
+        brotensor::upload(Wq_, Wq_g_); brotensor::upload(Wk_, Wk_g_);
+        brotensor::upload(Wv_, Wv_g_); brotensor::upload(Wo_, Wo_g_);
+        brotensor::upload(dWq_, dWq_g_); brotensor::upload(dWk_, dWk_g_);
+        brotensor::upload(dWv_, dWv_g_); brotensor::upload(dWo_, dWo_g_);
+        brotensor::upload(vWq_, vWq_g_); brotensor::upload(vWk_, vWk_g_);
+        brotensor::upload(vWv_, vWv_g_); brotensor::upload(vWo_, vWo_g_);
+        brotensor::upload(mWq_, mWq_g_); brotensor::upload(mWk_, mWk_g_);
+        brotensor::upload(mWv_, mWv_g_); brotensor::upload(mWo_, mWo_g_);
+        brotensor::upload(vAWq_, vAWq_g_); brotensor::upload(vAWk_, vAWk_g_);
+        brotensor::upload(vAWv_, vAWv_g_); brotensor::upload(vAWo_, vAWo_g_);
+        device_ = brotensor::Device::GPU;
     } else {
-        download_to(Wq_g_, Wq_); download_to(Wk_g_, Wk_);
-        download_to(Wv_g_, Wv_); download_to(Wo_g_, Wo_);
-        download_to(dWq_g_, dWq_); download_to(dWk_g_, dWk_);
-        download_to(dWv_g_, dWv_); download_to(dWo_g_, dWo_);
-        download_to(vWq_g_, vWq_); download_to(vWk_g_, vWk_);
-        download_to(vWv_g_, vWv_); download_to(vWo_g_, vWo_);
-        download_to(mWq_g_, mWq_); download_to(mWk_g_, mWk_);
-        download_to(mWv_g_, mWv_); download_to(mWo_g_, mWo_);
-        download_to(vAWq_g_, vAWq_); download_to(vAWk_g_, vAWk_);
-        download_to(vAWv_g_, vAWv_); download_to(vAWo_g_, vAWo_);
+        brotensor::download(Wq_g_, Wq_); brotensor::download(Wk_g_, Wk_);
+        brotensor::download(Wv_g_, Wv_); brotensor::download(Wo_g_, Wo_);
+        brotensor::download(dWq_g_, dWq_); brotensor::download(dWk_g_, dWk_);
+        brotensor::download(dWv_g_, dWv_); brotensor::download(dWo_g_, dWo_);
+        brotensor::download(vWq_g_, vWq_); brotensor::download(vWk_g_, vWk_);
+        brotensor::download(vWv_g_, vWv_); brotensor::download(vWo_g_, vWo_);
+        brotensor::download(mWq_g_, mWq_); brotensor::download(mWk_g_, mWk_);
+        brotensor::download(mWv_g_, mWv_); brotensor::download(mWo_g_, mWo_);
+        brotensor::download(vAWq_g_, vAWq_); brotensor::download(vAWk_g_, vAWk_);
+        brotensor::download(vAWv_g_, vAWv_); brotensor::download(vAWo_g_, vAWo_);
         brotensor::cuda_sync();
-        device_ = Device::CPU;
+        device_ = brotensor::Device::CPU;
     }
 #endif
 }
 
 void ScaledDotProductAttention::zero_grad() {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         dWq_g_.zero(); dWk_g_.zero(); dWv_g_.zero(); dWo_g_.zero();
         return;
     }
@@ -282,7 +281,7 @@ void ScaledDotProductAttention::zero_grad() {
     dWq_.zero(); dWk_.zero(); dWv_.zero(); dWo_.zero();
 }
 
-static void sgd_mat(Tensor& W, Tensor& vW, const Tensor& dW, float lr, float momentum) {
+static void sgd_mat(brotensor::Tensor& W, brotensor::Tensor& vW, const brotensor::Tensor& dW, float lr, float momentum) {
     const int n = W.size();
     float* w = W.ptr(); float* v = vW.ptr(); const float* g = dW.ptr();
     for (int i = 0; i < n; ++i) {
@@ -293,7 +292,7 @@ static void sgd_mat(Tensor& W, Tensor& vW, const Tensor& dW, float lr, float mom
 
 void ScaledDotProductAttention::sgd_step(float lr, float momentum) {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         brotensor::sgd_step_gpu(Wq_g_, dWq_g_, vWq_g_, lr, momentum);
         brotensor::sgd_step_gpu(Wk_g_, dWk_g_, vWk_g_, lr, momentum);
         brotensor::sgd_step_gpu(Wv_g_, dWv_g_, vWv_g_, lr, momentum);
@@ -310,7 +309,7 @@ void ScaledDotProductAttention::sgd_step(float lr, float momentum) {
 void ScaledDotProductAttention::adam_step(float lr, float beta1, float beta2,
                                           float eps, int step) {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         brotensor::adam_step_gpu(Wq_g_, dWq_g_, mWq_g_, vAWq_g_, lr, beta1, beta2, eps, step);
         brotensor::adam_step_gpu(Wk_g_, dWk_g_, mWk_g_, vAWk_g_, lr, beta1, beta2, eps, step);
         brotensor::adam_step_gpu(Wv_g_, dWv_g_, mWv_g_, vAWv_g_, lr, beta1, beta2, eps, step);
@@ -326,10 +325,10 @@ void ScaledDotProductAttention::adam_step(float lr, float beta1, float beta2,
 
 void ScaledDotProductAttention::save_to(std::vector<uint8_t>& out) const {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         auto* self = const_cast<ScaledDotProductAttention*>(this);
-        download_to(Wq_g_, self->Wq_); download_to(Wk_g_, self->Wk_);
-        download_to(Wv_g_, self->Wv_); download_to(Wo_g_, self->Wo_);
+        brotensor::download(Wq_g_, self->Wq_); brotensor::download(Wk_g_, self->Wk_);
+        brotensor::download(Wv_g_, self->Wv_); brotensor::download(Wo_g_, self->Wo_);
         brotensor::cuda_sync();
     }
 #endif
@@ -352,17 +351,17 @@ void ScaledDotProductAttention::load_from(const uint8_t* data, size_t& offset, s
     mWq_.zero(); mWk_.zero(); mWv_.zero(); mWo_.zero();
     vAWq_.zero(); vAWk_.zero(); vAWv_.zero(); vAWo_.zero();
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
-        upload_to(Wq_, Wq_g_); upload_to(Wk_, Wk_g_);
-        upload_to(Wv_, Wv_g_); upload_to(Wo_, Wo_g_);
-        upload_to(dWq_, dWq_g_); upload_to(dWk_, dWk_g_);
-        upload_to(dWv_, dWv_g_); upload_to(dWo_, dWo_g_);
-        upload_to(vWq_, vWq_g_); upload_to(vWk_, vWk_g_);
-        upload_to(vWv_, vWv_g_); upload_to(vWo_, vWo_g_);
-        upload_to(mWq_, mWq_g_); upload_to(mWk_, mWk_g_);
-        upload_to(mWv_, mWv_g_); upload_to(mWo_, mWo_g_);
-        upload_to(vAWq_, vAWq_g_); upload_to(vAWk_, vAWk_g_);
-        upload_to(vAWv_, vAWv_g_); upload_to(vAWo_, vAWo_g_);
+    if (device_ == brotensor::Device::GPU) {
+        brotensor::upload(Wq_, Wq_g_); brotensor::upload(Wk_, Wk_g_);
+        brotensor::upload(Wv_, Wv_g_); brotensor::upload(Wo_, Wo_g_);
+        brotensor::upload(dWq_, dWq_g_); brotensor::upload(dWk_, dWk_g_);
+        brotensor::upload(dWv_, dWv_g_); brotensor::upload(dWo_, dWo_g_);
+        brotensor::upload(vWq_, vWq_g_); brotensor::upload(vWk_, vWk_g_);
+        brotensor::upload(vWv_, vWv_g_); brotensor::upload(vWo_, vWo_g_);
+        brotensor::upload(mWq_, mWq_g_); brotensor::upload(mWk_, mWk_g_);
+        brotensor::upload(mWv_, mWv_g_); brotensor::upload(mWo_, mWo_g_);
+        brotensor::upload(vAWq_, vAWq_g_); brotensor::upload(vAWk_, vAWk_g_);
+        brotensor::upload(vAWv_, vAWv_g_); brotensor::upload(vAWo_, vAWo_g_);
     }
 #endif
 }

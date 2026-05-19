@@ -1,7 +1,7 @@
 #pragma once
 
 #include "circuits.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 
 #include <cstdint>
 
@@ -25,14 +25,14 @@ public:
     float support(int i) const { return -1.0f + 2.0f * static_cast<float>(i) / static_cast<float>(K_ - 1); }
 
     // Forward: writes probs (size K) and expected scalar value.
-    void forward(const Tensor& embed, Tensor& probs, float& value);
+    void forward(const brotensor::Tensor& embed, brotensor::Tensor& probs, float& value);
 
     // Compute cross-entropy loss vs p_target, populate dLogits = probs - p_target,
     // run backward through the two linears producing dEmbed.
-    float xent_backward(const Tensor& probs, const Tensor& p_target, Tensor& dEmbed);
+    float xent_backward(const brotensor::Tensor& probs, const brotensor::Tensor& p_target, brotensor::Tensor& dEmbed);
 
     // Two-hot projection of scalar z in [-1,1] onto the K-bin support.
-    void project_target(float z, Tensor& out) const;
+    void project_target(float z, brotensor::Tensor& out) const;
 
     const char* name() const override { return "DistributionalValueHead"; }
     int  num_params() const override { return fc1_.num_params() + fc2_.num_params(); }
@@ -49,8 +49,8 @@ public:
 private:
     int K_ = 0;
     Linear fc1_, fc2_;
-    Tensor h_raw_, h_act_;
-    Tensor logits_;
+    brotensor::Tensor h_raw_, h_act_;
+    brotensor::Tensor logits_;
 };
 
 } // namespace brogameagent::nn

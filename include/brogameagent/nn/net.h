@@ -2,7 +2,7 @@
 
 #include "encoder.h"
 #include "heads.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 
 #include <atomic>
 #include <cstdint>
@@ -36,12 +36,12 @@ public:
 
     // Single-sample forward. `x` is an observation::TOTAL vector.
     // Writes scalar value and total_logits()-sized logits tensor.
-    void forward(const Tensor& x, float& value, Tensor& logits);
+    void forward(const brotensor::Tensor& x, float& value, brotensor::Tensor& logits);
 
     // Backward. dValue is scalar grad on the value output; dLogits is the
     // gradient on the logits tensor as produced by (probs - target). After
     // backward, sgd_step() applies the update.
-    void backward(float dValue, const Tensor& dLogits);
+    void backward(float dValue, const brotensor::Tensor& dLogits);
 
     void zero_grad();
     void sgd_step(float lr, float momentum);
@@ -70,9 +70,9 @@ private:
     ValueHead value_head_;
     FactoredPolicyHead head_;
 
-    Tensor enc_out_;
-    Tensor trunk_raw_, trunk_act_out_;
-    Tensor logits_scratch_;
+    brotensor::Tensor enc_out_;
+    brotensor::Tensor trunk_raw_, trunk_act_out_;
+    brotensor::Tensor logits_scratch_;
 };
 
 // ─── Weights hot-swap ─────────────────────────────────────────────────────

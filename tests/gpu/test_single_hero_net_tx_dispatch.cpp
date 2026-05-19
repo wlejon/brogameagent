@@ -12,10 +12,10 @@
 
 
 using namespace bga_parity;
-using brogameagent::nn::Device;
+using brotensor::Device;
 using brogameagent::nn::SingleHeroNetTX;
 using brogameagent::nn::NormPlacement;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 namespace obs = brogameagent::observation;
 
 namespace {
@@ -171,25 +171,25 @@ void run_gpu_native(uint64_t seed) {
 
     // Native GPU forward/backward: input is GpuTensor, output is GpuTensor.
     brotensor::GpuTensor x_g, logits_g;
-    upload_to(x, x_g);
+    brotensor::upload(x, x_g);
     logits_g.resize(gnet.policy_logits(), 1);
     gnet.zero_grad();
     gnet.forward(x_g, logits_g);
 
     // Read back results.
     Tensor l_gpu = Tensor::vec(gnet.policy_logits());
-    download_to(logits_g, l_gpu);
+    brotensor::download(logits_g, l_gpu);
     Tensor v_h(1, 1);
-    download_to(gnet.value_gpu(), v_h);
+    brotensor::download(gnet.value_gpu(), v_h);
     brotensor::cuda_sync();
     BGA_CHECK(std::fabs(v_cpu - v_h[0]) < 5e-3f);
     compare_tensors(l_cpu, l_gpu, "tx.gpu_native.logits", 1e-4f, 5e-3f);
 
     // Backward through GpuTensor API.
     brotensor::GpuTensor dLogits_g;
-    upload_to(dLogits, dLogits_g);
+    brotensor::upload(dLogits, dLogits_g);
     Tensor dv_h(1, 1); dv_h[0] = dValue;
-    upload_to(dv_h, gnet.dValue_gpu());
+    brotensor::upload(dv_h, gnet.dValue_gpu());
     gnet.backward(dLogits_g);
     brotensor::cuda_sync();
 

@@ -21,22 +21,22 @@ void ValueHead::init(int embed_dim, int hidden, uint64_t& rng_state) {
     out_raw_.resize(1, 1);
 }
 
-void ValueHead::forward(const Tensor& embed, float& value) {
+void ValueHead::forward(const brotensor::Tensor& embed, float& value) {
     fc1_.forward(embed, h_raw_);
-    relu_forward(h_raw_, h_act_);
+    brotensor::relu_forward_cpu(h_raw_, h_act_);
     fc2_.forward(h_act_, out_raw_);
     const float y = std::tanh(out_raw_[0]);
     y_cache_ = y;
     value = y;
 }
 
-void ValueHead::to(Device d) {
+void ValueHead::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("ValueHead");
+    brotensor::device_require_gpu("ValueHead");
 #ifdef BROTENSOR_HAS_GPU
     fc1_.to(d);
     fc2_.to(d);
-    if (d == Device::GPU) {
+    if (d == brotensor::Device::GPU) {
         h_raw_g_.resize(h_raw_.rows, 1);
         h_act_g_.resize(h_act_.rows, 1);
         pre_tanh_g_.resize(1, 1);
@@ -52,7 +52,7 @@ void ValueHead::to(Device d) {
 
 #ifdef BROTENSOR_HAS_GPU
 void ValueHead::forward(const brotensor::GpuTensor& embed) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     fc1_.forward(embed, h_raw_g_);
     brotensor::relu_forward_gpu(h_raw_g_, h_act_g_);
     fc2_.forward(h_act_g_, pre_tanh_g_);
@@ -60,7 +60,7 @@ void ValueHead::forward(const brotensor::GpuTensor& embed) {
 }
 
 void ValueHead::backward(brotensor::GpuTensor& dEmbed) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     brotensor::tanh_backward_gpu(post_tanh_g_, dValue_g_, dPre_g_);
     fc2_.backward(dPre_g_, dHact_g_);
     brotensor::relu_backward_gpu(h_raw_g_, dHact_g_, dHraw_g_);
@@ -68,15 +68,15 @@ void ValueHead::backward(brotensor::GpuTensor& dEmbed) {
 }
 #endif
 
-void ValueHead::backward(float dValue, Tensor& dEmbed) {
+void ValueHead::backward(float dValue, brotensor::Tensor& dEmbed) {
     // d/dx tanh(x) = 1 - tanh(x)^2
     const float d_out_raw = dValue * (1.0f - y_cache_ * y_cache_);
-    Tensor dOut = Tensor::vec(1);
+    brotensor::Tensor dOut = brotensor::Tensor::vec(1);
     dOut[0] = d_out_raw;
-    Tensor dHact = Tensor::vec(h_act_.size());
+    brotensor::Tensor dHact = brotensor::Tensor::vec(h_act_.size());
     fc2_.backward(dOut, dHact);
-    Tensor dHraw = Tensor::vec(h_raw_.size());
-    relu_backward(h_raw_, dHact, dHraw);
+    brotensor::Tensor dHraw = brotensor::Tensor::vec(h_raw_.size());
+    brotensor::relu_backward_cpu(h_raw_, dHact, dHraw);
     fc1_.backward(dHraw, dEmbed);
 }
 
@@ -88,12 +88,12 @@ void FactoredPolicyHead::init(int embed_dim, uint64_t& rng_state) {
     abil_.init(embed_dim, N_ABILITY, rng_state);
 }
 
-void FactoredPolicyHead::to(Device d) {
+void FactoredPolicyHead::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("FactoredPolicyHead");
+    brotensor::device_require_gpu("FactoredPolicyHead");
 #ifdef BROTENSOR_HAS_GPU
     move_.to(d); atk_.to(d); abil_.to(d);
-    if (d == Device::GPU) {
+    if (d == brotensor::Device::GPU) {
         lm_g_.resize(N_MOVE,    1);
         la_g_.resize(N_ATTACK,  1);
         lb_g_.resize(N_ABILITY, 1);
@@ -108,7 +108,7 @@ void FactoredPolicyHead::to(Device d) {
 
 #ifdef BROTENSOR_HAS_GPU
 void FactoredPolicyHead::forward(const brotensor::GpuTensor& embed, brotensor::GpuTensor& logits) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     move_.forward(embed, lm_g_);
     atk_.forward(embed,  la_g_);
     abil_.forward(embed, lb_g_);
@@ -117,7 +117,7 @@ void FactoredPolicyHead::forward(const brotensor::GpuTensor& embed, brotensor::G
 }
 
 void FactoredPolicyHead::backward(const brotensor::GpuTensor& dLogits, brotensor::GpuTensor& dEmbed) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     std::vector<brotensor::GpuTensor*> parts{&dLm_g_, &dLa_g_, &dLb_g_};
     brotensor::split_rows_gpu(dLogits, parts);
 
@@ -130,11 +130,11 @@ void FactoredPolicyHead::backward(const brotensor::GpuTensor& dLogits, brotensor
 }
 #endif
 
-void FactoredPolicyHead::forward(const Tensor& embed, Tensor& logits) {
+void FactoredPolicyHead::forward(const brotensor::Tensor& embed, brotensor::Tensor& logits) {
     assert(logits.size() == total_logits());
-    Tensor lm = Tensor::vec(N_MOVE);
-    Tensor la = Tensor::vec(N_ATTACK);
-    Tensor lb = Tensor::vec(N_ABILITY);
+    brotensor::Tensor lm = brotensor::Tensor::vec(N_MOVE);
+    brotensor::Tensor la = brotensor::Tensor::vec(N_ATTACK);
+    brotensor::Tensor lb = brotensor::Tensor::vec(N_ABILITY);
     move_.forward(embed, lm);
     atk_.forward(embed, la);
     abil_.forward(embed, lb);
@@ -143,18 +143,18 @@ void FactoredPolicyHead::forward(const Tensor& embed, Tensor& logits) {
     std::memcpy(logits.ptr() + N_MOVE + N_ATTACK, lb.ptr(), N_ABILITY * sizeof(float));
 }
 
-void FactoredPolicyHead::backward(const Tensor& dLogits, Tensor& dEmbed) {
+void FactoredPolicyHead::backward(const brotensor::Tensor& dLogits, brotensor::Tensor& dEmbed) {
     assert(dLogits.size() == total_logits());
     dEmbed.zero();
 
-    Tensor dLm = Tensor::vec(N_MOVE);
-    Tensor dLa = Tensor::vec(N_ATTACK);
-    Tensor dLb = Tensor::vec(N_ABILITY);
+    brotensor::Tensor dLm = brotensor::Tensor::vec(N_MOVE);
+    brotensor::Tensor dLa = brotensor::Tensor::vec(N_ATTACK);
+    brotensor::Tensor dLb = brotensor::Tensor::vec(N_ABILITY);
     std::memcpy(dLm.ptr(), dLogits.ptr() + 0,                 N_MOVE    * sizeof(float));
     std::memcpy(dLa.ptr(), dLogits.ptr() + N_MOVE,            N_ATTACK  * sizeof(float));
     std::memcpy(dLb.ptr(), dLogits.ptr() + N_MOVE + N_ATTACK, N_ABILITY * sizeof(float));
 
-    Tensor de = Tensor::vec(dEmbed.size());
+    brotensor::Tensor de = brotensor::Tensor::vec(dEmbed.size());
     move_.backward(dLm, de);
     for (int i = 0; i < de.size(); ++i) dEmbed[i] += de[i];
     atk_.backward(dLa, de);
@@ -179,7 +179,7 @@ static void softmax_slice(const float* logits, int n, float* probs, const float*
     for (int i = 0; i < n; ++i) probs[i] *= inv;
 }
 
-void factored_softmax(const Tensor& logits, Tensor& probs,
+void factored_softmax(const brotensor::Tensor& logits, brotensor::Tensor& probs,
                       const float* attack_mask, const float* ability_mask) {
     const int N_MOVE = FactoredPolicyHead::N_MOVE;
     const int N_ATK  = FactoredPolicyHead::N_ATTACK;
@@ -213,11 +213,11 @@ static float xent_slice(const float* logits, int n, const float* target,
     return loss;
 }
 
-float factored_xent(const Tensor& logits,
-                    const Tensor& move_target,
-                    const Tensor& attack_target,
-                    const Tensor& ability_target,
-                    Tensor& probs, Tensor& dLogits,
+float factored_xent(const brotensor::Tensor& logits,
+                    const brotensor::Tensor& move_target,
+                    const brotensor::Tensor& attack_target,
+                    const brotensor::Tensor& ability_target,
+                    brotensor::Tensor& probs, brotensor::Tensor& dLogits,
                     const float* attack_mask, const float* ability_mask) {
     const int N_MOVE = FactoredPolicyHead::N_MOVE;
     const int N_ATK  = FactoredPolicyHead::N_ATTACK;

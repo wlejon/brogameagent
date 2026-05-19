@@ -3,12 +3,12 @@
 #include "parity_helpers.h"
 
 #include <brotensor/ops.h>
-#include <brogameagent/nn/tensor.h>
+#include <brotensor/tensor.h>
 
 #include <vector>
 
 using namespace bga_parity;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 namespace {
@@ -59,8 +59,8 @@ void run_pool(int K, int D, uint64_t seed, const std::vector<float>& mask) {
     masked_mean_pool_backward_cpu(dY, mask, dX_cpu);
 
     GpuTensor gX, gdY, gy, gdX;
-    upload_to(X, gX);
-    upload_to(dY, gdY);
+    brotensor::upload(X, gX);
+    brotensor::upload(dY, gdY);
 
     auto d_mask_buf = upload_mask(&mask);
     float* d_mask = d_mask_buf.device_ptr();
@@ -68,7 +68,7 @@ void run_pool(int K, int D, uint64_t seed, const std::vector<float>& mask) {
     // Pre-fill dX with garbage to confirm overwrite semantics.
     Tensor dX_garbage(K, D);
     fill_random(dX_garbage, rng);
-    upload_to(dX_garbage, gdX);
+    brotensor::upload(dX_garbage, gdX);
 
     brotensor::masked_mean_pool_forward_gpu(gX, d_mask, gy);
     brotensor::masked_mean_pool_backward_gpu(gdY, d_mask, K, gdX);

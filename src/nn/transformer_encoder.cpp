@@ -26,7 +26,7 @@ void TransformerEncoder::init(const Config& cfg, uint64_t& rng_state) {
         blk->init(bcfg, rng_state);
         blocks_.push_back(std::move(blk));
     }
-    activations_.assign(cfg.n_layers + 1, Tensor());
+    activations_.assign(cfg.n_layers + 1, brotensor::Tensor());
     has_final_ln_ = (cfg.norm == NormPlacement::PreNorm);
     if (has_final_ln_) final_ln_.init(cfg.dim, cfg.ln_eps);
 }
@@ -38,7 +38,7 @@ int TransformerEncoder::num_params() const {
     return n;
 }
 
-void TransformerEncoder::forward(const Tensor& X, const float* mask, Tensor& Y) {
+void TransformerEncoder::forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& Y) {
     const int K = X.rows;
     const int D = X.cols;
     assert(D == cfg_.dim);
@@ -51,7 +51,7 @@ void TransformerEncoder::forward(const Tensor& X, const float* mask, Tensor& Y) 
         }
         blocks_[i]->forward(activations_[i], mask, activations_[i + 1]);
     }
-    const Tensor& last = activations_[cfg_.n_layers];
+    const brotensor::Tensor& last = activations_[cfg_.n_layers];
     if (has_final_ln_) {
         if (pre_final_ln_.rows != K || pre_final_ln_.cols != D) pre_final_ln_.resize(K, D);
         pre_final_ln_ = last;
@@ -63,19 +63,19 @@ void TransformerEncoder::forward(const Tensor& X, const float* mask, Tensor& Y) 
     }
 }
 
-void TransformerEncoder::backward(const Tensor& dY, Tensor& dX) {
+void TransformerEncoder::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
     const int K = dY.rows;
     const int D = dY.cols;
-    Tensor d_top(K, D);
+    brotensor::Tensor d_top(K, D);
     if (has_final_ln_) {
         final_ln_.backward(dY, d_top);
     } else {
         d_top = dY;
     }
 
-    Tensor d_cur = std::move(d_top);
+    brotensor::Tensor d_cur = std::move(d_top);
     for (int i = cfg_.n_layers - 1; i >= 0; --i) {
-        Tensor d_in(K, D);
+        brotensor::Tensor d_in(K, D);
         blocks_[i]->backward(d_cur, d_in);
         d_cur = std::move(d_in);
     }
@@ -86,7 +86,7 @@ void TransformerEncoder::backward(const Tensor& dY, Tensor& dX) {
 #ifdef BROTENSOR_HAS_GPU
 void TransformerEncoder::forward(const brotensor::GpuTensor& X, const float* mask_dev,
                                  brotensor::GpuTensor& Y) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int K = X.rows;
     const int D = X.cols;
     assert(D == cfg_.dim);
@@ -122,7 +122,7 @@ void TransformerEncoder::forward(const brotensor::GpuTensor& X, const float* mas
 }
 
 void TransformerEncoder::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int K = dY.rows;
     const int D = dY.cols;
     if (dX.rows != K || dX.cols != D) dX.resize(K, D);
@@ -146,7 +146,7 @@ void TransformerEncoder::backward(const brotensor::GpuTensor& dY, brotensor::Gpu
 void TransformerEncoder::forward_inference_batched(
         const brotensor::GpuTensor& X_RD, const float* mask_R_dev,
         brotensor::GpuTensor& Y_RD, int B, int K) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int D = cfg_.dim;
     const int R = B * K;
     if (Y_RD.rows != R || Y_RD.cols != D) Y_RD.resize(R, D);
@@ -175,9 +175,9 @@ void TransformerEncoder::forward_inference_batched(
 }
 #endif
 
-void TransformerEncoder::to(Device d) {
+void TransformerEncoder::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("TransformerEncoder");
+    brotensor::device_require_gpu("TransformerEncoder");
     for (auto& b : blocks_) b->to(d);
     if (has_final_ln_) final_ln_.to(d);
     device_ = d;

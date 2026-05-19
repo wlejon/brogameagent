@@ -46,25 +46,29 @@ if(NOT TARGET bromath)
     endif()
 endif()
 
-# --- brotensor (GPU tensor + ops, sibling repo) ---
-# Only loaded when a GPU backend is requested. Same double-add guard as
-# bromath. brotensor owns the language enables (CUDA / OBJCXX) and the
-# BROTENSOR_HAS_* defines.
-if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
-    if(BROGAMEAGENT_WITH_CUDA)
-        set(BROTENSOR_WITH_CUDA  ON  CACHE BOOL "" FORCE)
-        set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
-    elseif(BROGAMEAGENT_WITH_METAL)
-        set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
-        set(BROTENSOR_WITH_METAL ON  CACHE BOOL "" FORCE)
-    endif()
-    if(NOT TARGET brotensor)
-        set(BROTENSOR_DIR "${CMAKE_SOURCE_DIR}/../brotensor" CACHE PATH "brotensor sibling")
-        if(EXISTS "${BROTENSOR_DIR}/CMakeLists.txt")
-            add_subdirectory("${BROTENSOR_DIR}" "${CMAKE_BINARY_DIR}/brotensor" EXCLUDE_FROM_ALL)
-        else()
-            message(FATAL_ERROR "brotensor not found at ${BROTENSOR_DIR}")
-        endif()
+# --- brotensor (host + GPU tensor + ops, sibling repo) ---
+# brotensor is now a hard dependency — it owns the host Tensor type and CPU
+# ops as well as the optional CUDA/Metal kernels. Always added; the
+# BROTENSOR_WITH_CUDA / BROTENSOR_WITH_METAL cache vars are forwarded based on
+# the matching brogameagent option. When neither GPU backend is requested,
+# both are forced OFF so brotensor builds CPU-only. Double-add guard mirrors
+# bromath: first-loader wins when consumed as a sibling.
+if(BROGAMEAGENT_WITH_CUDA)
+    set(BROTENSOR_WITH_CUDA  ON  CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
+elseif(BROGAMEAGENT_WITH_METAL)
+    set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_METAL ON  CACHE BOOL "" FORCE)
+else()
+    set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
+endif()
+if(NOT TARGET brotensor)
+    set(BROTENSOR_DIR "${CMAKE_SOURCE_DIR}/../brotensor" CACHE PATH "brotensor sibling")
+    if(EXISTS "${BROTENSOR_DIR}/CMakeLists.txt")
+        add_subdirectory("${BROTENSOR_DIR}" "${CMAKE_BINARY_DIR}/brotensor" EXCLUDE_FROM_ALL)
+    else()
+        message(FATAL_ERROR "brotensor not found at ${BROTENSOR_DIR}")
     endif()
 endif()
 
@@ -92,7 +96,6 @@ add_library(brogameagent STATIC
     src/belief.cpp
     src/info_set_mcts.cpp
     # --- NN circuits ---
-    src/nn/ops.cpp
     src/nn/factored.cpp
     src/nn/circuits.cpp
     src/nn/encoder.cpp
@@ -139,6 +142,9 @@ target_compile_features(brogameagent PUBLIC cxx_std_20)
 # bromath is header-only INTERFACE; expose its include dirs without putting
 # the bromath target itself into our install-export set.
 target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:bromath::bromath>)
+# brotensor is a hard dependency (host Tensor + CPU ops live there); GPU
+# kernels are an additive feature of brotensor itself.
+target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:brotensor::brotensor>)
 
 if(MSVC)
     target_compile_options(brogameagent PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4>)
@@ -147,12 +153,11 @@ else()
 endif()
 
 # --- GPU dispatch glue (gated; default OFF) ---
-# When a GPU backend is selected we link brotensor (which owns the kernels +
-# defines + language enables) and compile the inference_server adapter that
-# bridges brogameagent's MCTS to a batched GPU inference path.
+# When a GPU backend is selected we compile the inference_server adapter that
+# bridges brogameagent's MCTS to a batched GPU inference path. brotensor
+# itself is linked unconditionally above.
 if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
     target_sources(brogameagent PRIVATE src/learn/inference_server.cpp)
-    target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:brotensor::brotensor>)
 endif()
 
 # --- Install / export ---

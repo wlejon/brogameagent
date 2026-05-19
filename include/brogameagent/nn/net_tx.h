@@ -1,10 +1,10 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
+#include <brotensor/device.h>
 #include "heads.h"
 #include "layernorm.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 #include "transformer_block.h"
 #include "transformer_encoder.h"
 #include "brogameagent/observation.h"
@@ -40,7 +40,7 @@ namespace brogameagent::nn {
 //        ── Linear(3D → trunk_hidden) ── ReLU                              │
 //        ── { ValueHead, FactoredPolicyHead }
 //
-// GPU dispatch: when to(Device::GPU) is called every Linear, the two
+// GPU dispatch: when to(brotensor::Device::GPU) is called every Linear, the two
 // TransformerEncoder stacks, and the heads migrate to device. The pipeline is
 // fully GPU-resident — no host↔device shuttling per forward/backward beyond
 // the unavoidable upload of `x` (CPU API entrypoint) and download of value /
@@ -81,11 +81,11 @@ public:
     const std::vector<int>& head_sizes()   const { return head_sizes_; }
     const std::vector<int>& head_offsets() const { return head_offsets_; }
 
-    void forward(const Tensor& x, float& value, Tensor& logits);
-    void backward(float dValue, const Tensor& dLogits);
+    void forward(const brotensor::Tensor& x, float& value, brotensor::Tensor& logits);
+    void backward(float dValue, const brotensor::Tensor& dLogits);
 
 #ifdef BROTENSOR_HAS_GPU
-    // GPU-native forward/backward. Net must be on Device::GPU.
+    // GPU-native forward/backward. Net must be on brotensor::Device::GPU.
     //   x:      (TOTAL, 1) device tensor — caller keeps alive until backward.
     //   logits: (policy_logits, 1) — overwritten.
     // Value is cached in value_gpu(). For backward, the caller writes
@@ -153,8 +153,8 @@ public:
 
     // GPU dispatch — migrates the two TransformerEncoder stacks. CPU pieces
     // stay on host.
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     // Inspection (tests).
     Linear& self_fc1()  { return self_fc1_; }
@@ -173,38 +173,38 @@ private:
     // Self stream.
     Linear self_fc1_, self_fc2_;
     Relu   self_act_;
-    Tensor self_h_raw_, self_h_act_, self_z_;
+    brotensor::Tensor self_h_raw_, self_h_act_, self_z_;
 
     // Enemy stream.
     Linear enemy_proj_;
     TransformerEncoder enemy_enc_;
-    Tensor enemy_in_;       // (K_ENEMIES, d_model) post per-slot proj
-    Tensor enemy_out_;      // (K_ENEMIES, d_model) post encoder
+    brotensor::Tensor enemy_in_;       // (K_ENEMIES, d_model) post per-slot proj
+    brotensor::Tensor enemy_out_;      // (K_ENEMIES, d_model) post encoder
     std::vector<float> e_mask_;
     std::vector<uint8_t> e_valid_;
     int e_n_valid_ = 0;
-    Tensor enemy_pooled_;   // (d_model)
+    brotensor::Tensor enemy_pooled_;   // (d_model)
 
     // Ally stream.
     Linear ally_proj_;
     TransformerEncoder ally_enc_;
-    Tensor ally_in_;
-    Tensor ally_out_;
+    brotensor::Tensor ally_in_;
+    brotensor::Tensor ally_out_;
     std::vector<float> a_mask_;
     std::vector<uint8_t> a_valid_;
     int a_n_valid_ = 0;
-    Tensor ally_pooled_;
+    brotensor::Tensor ally_pooled_;
 
     // Trunk + heads.
     Linear trunk_;
     Relu   trunk_act_;
-    Tensor concat_;          // (3 * d_model)
-    Tensor trunk_raw_, trunk_act_out_;
+    brotensor::Tensor concat_;          // (3 * d_model)
+    brotensor::Tensor trunk_raw_, trunk_act_out_;
     ValueHead value_head_;
     FactoredPolicyHead head_;
 
     // Caches.
-    Tensor x_cache_;
+    brotensor::Tensor x_cache_;
 
     // Resolved head shape (matches PolicyValueNet's contract):
     //   head_sizes_   = {N_MOVE, N_ATTACK, N_ABILITY} from FactoredPolicyHead.
@@ -213,7 +213,7 @@ private:
     std::vector<int> head_sizes_;
     std::vector<int> head_offsets_;
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     // GPU staging / activation buffers, allocated at to(GPU).
     // These are sized to fixed observation constants and reused.

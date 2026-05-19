@@ -13,9 +13,9 @@
 #include "brogameagent/grid/obs_window.h"
 #include "brogameagent/grid/bc_ingest.h"
 #include "brogameagent/learn/generic_replay_buffer.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 #include "brogameagent/nn/policy_value_net.h"
-#include "brogameagent/nn/tensor.h"
+#include <brotensor/tensor.h>
 
 #include <any>
 #include <cstdio>
@@ -106,17 +106,17 @@ struct NetEval {
                  std::vector<int>&         legal,
                  float&                    value,
                  std::vector<float>&       probs) {
-        nn::Tensor x = nn::Tensor::vec(net.in_dim());
+        brotensor::Tensor x = brotensor::Tensor::vec(net.in_dim());
         for (int i = 0; i < net.in_dim(); ++i)
             x[i] = (i < static_cast<int>(obs.size())) ? obs[static_cast<size_t>(i)] : 0.0f;
-        nn::Tensor logits = nn::Tensor::vec(net.num_actions());
+        brotensor::Tensor logits = brotensor::Tensor::vec(net.num_actions());
         net.forward(x, value, logits);
 
         std::vector<float> mask(static_cast<size_t>(net.num_actions()), 0.0f);
         for (int a : legal)
             if (a >= 0 && a < net.num_actions()) mask[static_cast<size_t>(a)] = 1.0f;
-        nn::Tensor probs_t = nn::Tensor::vec(net.num_actions());
-        nn::softmax_forward(logits, probs_t, mask.empty() ? nullptr : mask.data());
+        brotensor::Tensor probs_t = brotensor::Tensor::vec(net.num_actions());
+        brotensor::softmax_forward_cpu(logits, probs_t, mask.empty() ? nullptr : mask.data());
         probs.resize(static_cast<size_t>(net.num_actions()));
         for (int i = 0; i < net.num_actions(); ++i) probs[static_cast<size_t>(i)] = probs_t[i];
     }

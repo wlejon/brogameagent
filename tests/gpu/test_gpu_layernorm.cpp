@@ -7,7 +7,7 @@
 
 using namespace bga_parity;
 using brogameagent::nn::LayerNorm;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 namespace {
@@ -45,13 +45,13 @@ void run_layernorm(int n, uint64_t seed) {
 
     // GPU.
     GpuTensor gx, ggamma, gbeta, gy, gxhat, gdY, gdX, gdGamma, gdBeta;
-    upload_to(x, gx);
-    upload_to(gamma, ggamma);
-    upload_to(beta, gbeta);
-    upload_to(dY, gdY);
+    brotensor::upload(x, gx);
+    brotensor::upload(gamma, ggamma);
+    brotensor::upload(beta, gbeta);
+    brotensor::upload(dY, gdY);
     gy.resize(n, 1); gxhat.resize(n, 1); gdX.resize(n, 1);
-    upload_to(dGamma_init, gdGamma);
-    upload_to(dBeta_init,  gdBeta);
+    brotensor::upload(dGamma_init, gdGamma);
+    brotensor::upload(dBeta_init,  gdBeta);
     float mean_out = 0.0f, rstd_out = 0.0f;
     brotensor::layernorm_forward_gpu(
         gx, ggamma, gbeta, gy, gxhat, mean_out, rstd_out, 1e-5f);

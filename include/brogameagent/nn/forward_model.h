@@ -2,7 +2,7 @@
 
 #include "circuits.h"
 #include "heads.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 
 #include <cstdint>
 
@@ -31,11 +31,11 @@ public:
 
     // embed: size embed_dim. action: size ACTION_DIM (three one-hots
     // concatenated). pred_next: size embed_dim.
-    void forward(const Tensor& embed, const Tensor& action, Tensor& pred_next);
+    void forward(const brotensor::Tensor& embed, const brotensor::Tensor& action, brotensor::Tensor& pred_next);
     // Backward through the MLP. dPred is the gradient on the predicted
     // embedding (use spr_loss to build it from MSE); dEmbed receives the
     // input gradient, action gradient is discarded.
-    void backward(const Tensor& dPred, Tensor& dEmbed);
+    void backward(const brotensor::Tensor& dPred, brotensor::Tensor& dEmbed);
 
     const char* name() const override { return "ForwardModelHead"; }
     int  num_params() const override { return fc1_.num_params() + fc2_.num_params(); }
@@ -52,14 +52,14 @@ public:
 private:
     int embed_dim_ = 0;
     Linear fc1_, fc2_;
-    Tensor input_cat_;   // [embed || action]
-    Tensor h_raw_, h_act_;
+    brotensor::Tensor input_cat_;   // [embed || action]
+    brotensor::Tensor h_raw_, h_act_;
 };
 
 // Build action one-hot into `out` (size ACTION_DIM) from three class indices.
-void build_action_onehot(int move_idx, int attack_idx, int ability_idx, Tensor& out);
+void build_action_onehot(int move_idx, int attack_idx, int ability_idx, brotensor::Tensor& out);
 
 // 0.5 * ||pred - target||^2 (summed), dPred = pred - target. Returns loss.
-float spr_loss(const Tensor& pred, const Tensor& target, Tensor& dPred);
+float spr_loss(const brotensor::Tensor& pred, const brotensor::Tensor& target, brotensor::Tensor& dPred);
 
 } // namespace brogameagent::nn

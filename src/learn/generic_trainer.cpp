@@ -1,11 +1,10 @@
 #include "brogameagent/learn/generic_trainer.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
 #include <brotensor/device_buffer.h>
-#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -29,8 +28,8 @@ public:
     void zero_grad() override { n_->zero_grad(); }
     void sgd_step(float lr, float m) override { n_->sgd_step(lr, m); }
     std::vector<uint8_t> save() const override { return n_->save(); }
-    void forward(const nn::Tensor& x, float& v, nn::Tensor& l) override { n_->forward(x, v, l); }
-    void backward(float dV, const nn::Tensor& dL) override { n_->backward(dV, dL); }
+    void forward(const brotensor::Tensor& x, float& v, brotensor::Tensor& l) override { n_->forward(x, v, l); }
+    void backward(float dV, const brotensor::Tensor& dL) override { n_->backward(dV, dL); }
 #ifdef BROTENSOR_HAS_GPU
     void forward_batched_train(const brotensor::GpuTensor& X, brotensor::GpuTensor& L,
                                brotensor::GpuTensor& V) override {
@@ -55,8 +54,8 @@ public:
     void zero_grad() override { n_->zero_grad(); }
     void sgd_step(float lr, float m) override { n_->sgd_step(lr, m); }
     std::vector<uint8_t> save() const override { return n_->save(); }
-    void forward(const nn::Tensor& x, float& v, nn::Tensor& l) override { n_->forward(x, v, l); }
-    void backward(float dV, const nn::Tensor& dL) override { n_->backward(dV, dL); }
+    void forward(const brotensor::Tensor& x, float& v, brotensor::Tensor& l) override { n_->forward(x, v, l); }
+    void backward(float dV, const brotensor::Tensor& dL) override { n_->backward(dV, dL); }
 #ifdef BROTENSOR_HAS_GPU
     void forward_batched_train(const brotensor::GpuTensor& X, brotensor::GpuTensor& L,
                                brotensor::GpuTensor& V) override {
@@ -89,7 +88,7 @@ void GenericExItTrainer::set_net(nn::SingleHeroNetTX* net) {
 GenericTrainStep GenericExItTrainer::step() {
     if (!net_ || !buf_ || buf_->size() == 0) return {};
 #ifdef BROTENSOR_HAS_GPU
-    if (cfg_.device == nn::Device::GPU) {
+    if (cfg_.device == brotensor::Device::GPU) {
         return step_gpu_();
     }
 #endif
@@ -108,11 +107,11 @@ GenericTrainStep GenericExItTrainer::step_cpu_() {
 
     net_->zero_grad();
 
-    nn::Tensor obs    = nn::Tensor::vec(in_dim);
-    nn::Tensor logits = nn::Tensor::vec(n_act);
-    nn::Tensor probs  = nn::Tensor::vec(n_act);
-    nn::Tensor dLog   = nn::Tensor::vec(n_act);
-    nn::Tensor target = nn::Tensor::vec(n_act);
+    brotensor::Tensor obs    = brotensor::Tensor::vec(in_dim);
+    brotensor::Tensor logits = brotensor::Tensor::vec(n_act);
+    brotensor::Tensor probs  = brotensor::Tensor::vec(n_act);
+    brotensor::Tensor dLog   = brotensor::Tensor::vec(n_act);
+    brotensor::Tensor target = brotensor::Tensor::vec(n_act);
 
     float tot_lv = 0.0f, tot_lp = 0.0f;
 
@@ -129,7 +128,7 @@ GenericTrainStep GenericExItTrainer::step_cpu_() {
 
         // Value loss.
         float dv = 0.0f;
-        const float lv = nn::mse_scalar(v_pred, sit.value_target, dv);
+        const float lv = brotensor::mse_scalar_cpu(v_pred, sit.value_target, dv);
         tot_lv += lv;
 
         // Policy loss with optional mask. For multi-head nets, run an
@@ -148,7 +147,7 @@ GenericTrainStep GenericExItTrainer::step_cpu_() {
             const int off = offsets[h];
             const int len = offsets[h + 1] - off;
             const float* head_mask = mask_ptr ? mask_ptr + off : nullptr;
-            const float lh = nn::softmax_xent_segment(
+            const float lh = brotensor::softmax_xent_segment_cpu(
                 logits.ptr() + off, target.ptr() + off,
                 probs.ptr()  + off, dLog.ptr()   + off,
                 len, head_mask);
@@ -238,10 +237,10 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
     // shape-mismatched situation contributes zeros (target = uniform, mask
     // = 1s, value = 0) so we always have exactly B rows. CPU path skips
     // such samples; we accept a small parity deviation in that edge case.
-    nn::Tensor X_h = nn::Tensor::mat(B, in_dim);
-    nn::Tensor T_h = nn::Tensor::mat(B, n_act);
-    nn::Tensor M_h = nn::Tensor::mat(B, n_act);
-    nn::Tensor V_h = nn::Tensor::mat(B, 1);
+    brotensor::Tensor X_h = brotensor::Tensor::mat(B, in_dim);
+    brotensor::Tensor T_h = brotensor::Tensor::mat(B, n_act);
+    brotensor::Tensor M_h = brotensor::Tensor::mat(B, n_act);
+    brotensor::Tensor V_h = brotensor::Tensor::mat(B, 1);
 
     bool any_mask = false;
     int valid = 0;
@@ -268,12 +267,12 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
     }
     if (valid == 0) return s;
 
-    nn::upload_to(X_h, X_BD_g_);
-    nn::upload_to(T_h, T_BL_g_);
-    nn::upload_to(V_h, V_B1_g_);
+    brotensor::upload(X_h, X_BD_g_);
+    brotensor::upload(T_h, T_BL_g_);
+    brotensor::upload(V_h, V_B1_g_);
     const float* mask_dev = nullptr;
     if (any_mask) {
-        nn::upload_to(M_h, M_BL_g_);
+        brotensor::upload(M_h, M_BL_g_);
         mask_dev = M_BL_g_.data;
     }
 
@@ -307,9 +306,9 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
     net_->sgd_step(cfg_.lr, cfg_.momentum);
 
     // Single sync + downloads of the two per-sample loss vectors.
-    nn::Tensor lv_h, lp_h;
-    nn::download_to(lv_per_sample_g_, lv_h);
-    nn::download_to(lp_per_sample_g_, lp_h);
+    brotensor::Tensor lv_h, lp_h;
+    brotensor::download(lv_per_sample_g_, lv_h);
+    brotensor::download(lp_per_sample_g_, lp_h);
     brotensor::cuda_sync();
 
     float tot_lv = 0.0f, tot_lp = 0.0f;

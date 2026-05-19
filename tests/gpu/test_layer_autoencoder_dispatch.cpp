@@ -12,7 +12,7 @@
 #include <brogameagent/nn/decoder.h>
 #include <brogameagent/nn/encoder.h>
 #include <brotensor/ops.h>
-#include <brogameagent/nn/tensor.h>
+#include <brotensor/tensor.h>
 #include <brogameagent/observation.h>
 
 #include <cmath>
@@ -23,8 +23,8 @@ using namespace bga_parity;
 using brogameagent::nn::DeepSetsAutoencoder;
 using brogameagent::nn::DeepSetsDecoder;
 using brogameagent::nn::DeepSetsEncoder;
-using brogameagent::nn::Device;
-using brogameagent::nn::Tensor;
+using brotensor::Device;
+using brotensor::Tensor;
 namespace obs = brogameagent::observation;
 
 namespace {
@@ -79,7 +79,7 @@ void run_encoder_parity(uint64_t seed,
     gpu_enc.to(Device::GPU);
     BGA_CHECK(gpu_enc.device() == Device::GPU);
     brotensor::GpuTensor gx, gy, gdY, gdX;
-    upload_to(x, gx); upload_to(dY, gdY);
+    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
     gy.resize(cpu.out_dim(), 1); gdX.resize(obs::TOTAL, 1);
     gpu_enc.zero_grad();
     gpu_enc.forward(gx, gy);
@@ -148,7 +148,7 @@ void run_decoder_parity(uint64_t seed) {
 
     gpu_dec.to(Device::GPU);
     brotensor::GpuTensor gx, gy, gdY, gdX;
-    upload_to(x, gx); upload_to(dY, gdY);
+    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
     gy.resize(obs::TOTAL, 1); gdX.resize(cpu.in_dim(), 1);
     gpu_dec.zero_grad();
     gpu_dec.forward(gx, gy);
@@ -213,7 +213,7 @@ void run_autoencoder_parity(uint64_t seed) {
     gpu_ae.to(Device::GPU);
     BGA_CHECK(gpu_ae.device() == Device::GPU);
     brotensor::GpuTensor gx, gxhat, gdXh;
-    upload_to(x, gx); upload_to(dXh, gdXh);
+    brotensor::upload(x, gx); brotensor::upload(dXh, gdXh);
     gxhat.resize(obs::TOTAL, 1);
     gpu_ae.zero_grad();
     gpu_ae.forward(gx, gxhat);
@@ -255,8 +255,8 @@ void run_gpu_smoke_training() {
                         {1, 1, 0, 0});
 
     brotensor::GpuTensor gx, target_g, gxhat, gdXh;
-    upload_to(x, gx);
-    upload_to(x, target_g);
+    brotensor::upload(x, gx);
+    brotensor::upload(x, target_g);
     gxhat.resize(obs::TOTAL, 1);
     gdXh.resize(obs::TOTAL, 1);
 

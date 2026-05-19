@@ -11,13 +11,13 @@
 // the per-Linear plumbing wires through correctly.
 
 #include <brogameagent/nn/circuits.h>
-#include <brogameagent/nn/tensor.h>
+#include <brotensor/tensor.h>
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brogameagent::nn::Linear;
 using brogameagent::nn::adam_step_cpu;
 

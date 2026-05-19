@@ -4,9 +4,8 @@
 
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-#include <brogameagent/nn/gpu_glue.h>
 #include "brogameagent/nn/policy_value_net.h"
-#include "brogameagent/nn/tensor.h"
+#include <brotensor/tensor.h>
 
 #include <chrono>
 #include <stdexcept>
@@ -14,7 +13,7 @@
 
 namespace brogameagent::learn {
 
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 
 BatchedInferenceServer::BatchedInferenceServer(BatchedNet* net, Config cfg)
     : net_(net),
@@ -30,7 +29,7 @@ BatchedInferenceServer::BatchedInferenceServer(BatchedNet* net, Config cfg)
 namespace {
 brogameagent::nn::PolicyValueNet* check_pvn_gpu_(
     brogameagent::nn::PolicyValueNet* net) {
-    if (net && net->device() != brogameagent::nn::Device::GPU) {
+    if (net && net->device() != brotensor::Device::GPU) {
         throw std::runtime_error(
             "BatchedInferenceServer: net must be on Device::GPU");
     }
@@ -153,10 +152,10 @@ void BatchedInferenceServer::worker_loop_() {
         }
 
         try {
-            upload_to(host_X, X_BD);
+            brotensor::upload(host_X, X_BD);
             net_->forward_batched(X_BD, logits_BD, values_B1);
-            download_to(logits_BD, host_logits);
-            download_to(values_B1, host_values);
+            brotensor::download(logits_BD, host_logits);
+            brotensor::download(values_B1, host_values);
             brotensor::cuda_sync();
 
             for (int b = 0; b < B; ++b) {

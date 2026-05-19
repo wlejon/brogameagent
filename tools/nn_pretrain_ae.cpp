@@ -23,7 +23,7 @@
 #include "brogameagent/mcts.h"
 #include "brogameagent/nn/autoencoder.h"
 #include "brogameagent/nn/net.h"
-#include "brogameagent/nn/tensor.h"
+#include <brotensor/tensor.h>
 #include "brogameagent/observation.h"
 #include "brogameagent/world.h"
 
@@ -186,7 +186,7 @@ int gen_episode(const Args& a, int ep_idx, learn::ReplayBuffer& buf) {
 }
 
 // Convert Situation.obs (std::array) into a Tensor of size observation::TOTAL.
-void to_tensor(const learn::Situation& sit, nn::Tensor& out) {
+void to_tensor(const learn::Situation& sit, brotensor::Tensor& out) {
     if (out.size() != observation::TOTAL) out.resize(observation::TOTAL, 1);
     for (int i = 0; i < observation::TOTAL; ++i) out[i] = sit.obs[i];
 }
@@ -235,16 +235,16 @@ int main(int argc, char** argv) {
     ae.init(cfg);
     std::printf("net\tparams\t%d\n", ae.num_params());
 
-    nn::Tensor x     = nn::Tensor::vec(observation::TOTAL);
-    nn::Tensor x_hat = nn::Tensor::vec(observation::TOTAL);
-    nn::Tensor dXh   = nn::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor x     = brotensor::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor x_hat = brotensor::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor dXh   = brotensor::Tensor::vec(observation::TOTAL);
 
     auto eval_loss = [&](const std::vector<int>& idxs) {
         double sum = 0.0;
         for (int i : idxs) {
             to_tensor(all[i], x);
             ae.forward(x, x_hat);
-            sum += reconstruction_loss(x, x_hat, dXh);
+            sum += brogameagent::nn::reconstruction_loss(x, x_hat, dXh);
         }
         return idxs.empty() ? 0.0f : static_cast<float>(sum / idxs.size());
     };
@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
             for (size_t i = bstart; i < bend; ++i) {
                 to_tensor(all[train[i]], x);
                 ae.forward(x, x_hat);
-                batch_loss += reconstruction_loss(x, x_hat, dXh);
+                batch_loss += brogameagent::nn::reconstruction_loss(x, x_hat, dXh);
                 ae.backward(dXh);
             }
             // Scale grads by 1/batch for mean-loss SGD.
@@ -335,8 +335,8 @@ int main(int argc, char** argv) {
         ae2.decoder().load_from(dec_blob.data(), off, dec_blob.size());
     }
     to_tensor(all[train.empty() ? val[0] : train[0]], x);
-    nn::Tensor x_hat_a = nn::Tensor::vec(observation::TOTAL);
-    nn::Tensor x_hat_b = nn::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor x_hat_a = brotensor::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor x_hat_b = brotensor::Tensor::vec(observation::TOTAL);
     ae.forward(x, x_hat_a);
     ae2.forward(x, x_hat_b);
     float max_err = 0.0f;

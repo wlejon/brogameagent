@@ -3,13 +3,13 @@
 #include "parity_helpers.h"
 
 #include <brotensor/ops.h>
-#include <brogameagent/nn/tensor.h>
+#include <brotensor/tensor.h>
 
 #include <cstdint>
 #include <vector>
 
 using namespace bga_parity;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 namespace {
@@ -40,9 +40,9 @@ void run_embedding(int V, int D, const std::vector<int32_t>& idx,
 
     // GPU.
     GpuTensor gtable, gdOut, gout, gdTable;
-    upload_to(table, gtable);
-    upload_to(dOut, gdOut);
-    upload_to(dTable_init, gdTable);
+    brotensor::upload(table, gtable);
+    brotensor::upload(dOut, gdOut);
+    brotensor::upload(dTable_init, gdTable);
 
     auto d_idx_buf = upload_indices(idx);
     int32_t* d_idx = d_idx_buf.device_ptr();

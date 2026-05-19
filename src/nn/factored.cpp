@@ -1,5 +1,5 @@
 #include "brogameagent/nn/factored.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 
 #include <cassert>
 #include <cmath>
@@ -65,7 +65,7 @@ void factored_to_flat(const float* logits,
         // softmax_xent_segment is overkill (it also computes loss/grad),
         // but it's the existing stable softmax with mask we already trust.
         // The dummy target/grad buffers are written and discarded.
-        softmax_xent_segment(logits + off, zero_target.data() + off,
+        brotensor::softmax_xent_segment_cpu(logits + off, zero_target.data() + off,
                              probs.data() + off, dummy_d.data() + off,
                              len, mask);
     }
@@ -84,10 +84,10 @@ void factored_to_flat(const float* logits,
     }
 }
 
-void factored_to_flat(const Tensor& logits,
+void factored_to_flat(const brotensor::Tensor& logits,
                       const std::vector<int>& head_sizes,
                       const std::vector<int>& head_offsets,
-                      Tensor& flat_prior,
+                      brotensor::Tensor& flat_prior,
                       const float* head_masks) {
     assert(logits.size() == head_offsets.back());
     assert(flat_prior.size() == flat_action_count(head_sizes));

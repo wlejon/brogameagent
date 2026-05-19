@@ -1,8 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/tensor.h>
 #include "transformer_block.h"
 
 #ifdef BROTENSOR_HAS_GPU
@@ -26,7 +26,7 @@ namespace brogameagent::nn {
 // Serialization: writes block count (int32) + each block's serialization,
 // then the optional final-LN serialization (only for pre-norm).
 //
-// GPU dispatch: composite layer. `to(Device)` recurses to all blocks and
+// GPU dispatch: composite layer. `to(brotensor::Device)` recurses to all blocks and
 // the final RowLN. The CPU code path is unchanged.
 
 class TransformerEncoder : public ICircuit {
@@ -50,8 +50,8 @@ public:
     int n_layers()  const { return cfg_.n_layers; }
 
     // X: (K, D); Y: (K, D); resized if mis-shaped.
-    void forward(const Tensor& X, const float* mask, Tensor& Y);
-    void backward(const Tensor& dY, Tensor& dX);
+    void forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& Y);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
 
 #ifdef BROTENSOR_HAS_GPU
     void forward(const brotensor::GpuTensor& X, const float* mask_dev,
@@ -68,8 +68,8 @@ public:
                                     int B, int K);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "TransformerEncoder"; }
     int  num_params() const override;
@@ -86,15 +86,15 @@ private:
     std::vector<std::unique_ptr<TransformerBlock>> blocks_;
     // Activations between blocks; activations_[0] = X copy,
     // activations_[i+1] = output of block i. Used for backward chaining.
-    std::vector<Tensor> activations_;
+    std::vector<brotensor::Tensor> activations_;
 
     // Optional final LN (pre-norm only).
     TransformerBlock::RowLN final_ln_;
     bool has_final_ln_ = false;
     // Cached pre-final-LN value for backward when has_final_ln_ is true.
-    Tensor pre_final_ln_;
+    brotensor::Tensor pre_final_ln_;
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     // Inter-block activations on device.
     std::vector<brotensor::GpuTensor> activations_g_;

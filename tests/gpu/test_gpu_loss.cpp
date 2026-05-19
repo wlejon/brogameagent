@@ -3,13 +3,13 @@
 #include "parity_helpers.h"
 
 #include <brotensor/ops.h>
-#include <brogameagent/nn/ops.h>
+#include <brotensor/ops_cpu.h>
 
 #include <cmath>
 #include <vector>
 
 using namespace bga_parity;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 namespace {
@@ -31,8 +31,8 @@ void run_mse(int n, uint64_t seed) {
     loss_cpu /= static_cast<float>(n);
 
     GpuTensor gpred, gtarget, gdPred;
-    upload_to(pred, gpred);
-    upload_to(target, gtarget);
+    brotensor::upload(pred, gpred);
+    brotensor::upload(target, gtarget);
 
     const float loss_gpu = brotensor::mse_vec_forward_gpu(gpred, gtarget);
     brotensor::mse_vec_backward_gpu(gpred, gtarget, gdPred);
@@ -61,14 +61,14 @@ void run_xent(int n, uint64_t seed, const std::vector<float>* mask) {
     }
 
     Tensor probs_cpu(n, 1), dLogits_cpu(n, 1);
-    const float loss_cpu = brogameagent::nn::softmax_xent_segment(
+    const float loss_cpu = brotensor::softmax_xent_segment_cpu(
         logits.data.data(), target.data.data(),
         probs_cpu.data.data(), dLogits_cpu.data.data(),
         n, mask ? mask->data() : nullptr);
 
     GpuTensor glogits, gtarget, gprobs, gdLogits;
-    upload_to(logits, glogits);
-    upload_to(target, gtarget);
+    brotensor::upload(logits, glogits);
+    brotensor::upload(target, gtarget);
 
     auto d_mask_buf = upload_mask(mask);
     float* d_mask = d_mask_buf.device_ptr();

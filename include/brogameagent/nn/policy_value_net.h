@@ -1,8 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/tensor.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/tensor.h>
@@ -71,11 +71,11 @@ public:
     const Config& config() const { return cfg_; }
 
     // Forward + backward. logits.size() must equal num_actions.
-    void forward(const Tensor& x, float& value, Tensor& logits);
-    void backward(float dValue, const Tensor& dLogits);
+    void forward(const brotensor::Tensor& x, float& value, brotensor::Tensor& logits);
+    void backward(float dValue, const brotensor::Tensor& dLogits);
 
 #ifdef BROTENSOR_HAS_GPU
-    // GPU code path. Parameters must already be on Device::GPU (call to()).
+    // GPU code path. Parameters must already be on brotensor::Device::GPU (call to()).
     //   x:      (in_dim, 1)
     //   logits: (num_actions, 1)
     // The scalar value prediction is left in the layer-owned cache; access
@@ -103,7 +103,7 @@ public:
     // Composes the new batched kernels (linear/relu/tanh) so the entire
     // forward is K kernel launches regardless of B. Does NOT touch the
     // single-sample backward caches; safe to call concurrently with no
-    // pending backward. Parameters must already be on Device::GPU.
+    // pending backward. Parameters must already be on brotensor::Device::GPU.
     void forward_batched(const brotensor::GpuTensor& X_BD,
                          brotensor::GpuTensor& logits_BL,
                          brotensor::GpuTensor& values_B1) override;
@@ -129,8 +129,8 @@ public:
                           const brotensor::GpuTensor& dValues_B1);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     void zero_grad();
     void sgd_step(float lr, float momentum);
@@ -169,10 +169,10 @@ private:
     Linear p_fc_;           // out = num_actions
 
     // Activation caches sized once at init() so forward/backward reuse them.
-    std::vector<Tensor> trunk_raw_;     // pre-activation per layer
-    std::vector<Tensor> trunk_act_;     // post-activation per layer
-    Tensor v_h_raw_, v_h_act_;          // value-head hidden pre/post ReLU
-    Tensor v_pre_tanh_, v_post_tanh_;   // size 1
+    std::vector<brotensor::Tensor> trunk_raw_;     // pre-activation per layer
+    std::vector<brotensor::Tensor> trunk_act_;     // post-activation per layer
+    brotensor::Tensor v_h_raw_, v_h_act_;          // value-head hidden pre/post ReLU
+    brotensor::Tensor v_pre_tanh_, v_post_tanh_;   // size 1
 
     // Resolved head shape. Always populated by init():
     //   head_sizes_   = cfg_.head_sizes if non-empty, else {cfg_.num_actions}.
@@ -182,7 +182,7 @@ private:
     std::vector<int> head_sizes_;
     std::vector<int> head_offsets_;
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     // GPU forward caches (layer-owned; sized at to(GPU) and reused).
     std::vector<brotensor::GpuTensor> trunk_raw_g_;

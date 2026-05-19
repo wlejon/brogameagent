@@ -20,8 +20,7 @@
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-#include <brogameagent/nn/gpu_glue.h>
-#include "brogameagent/nn/tensor.h"
+#include <brotensor/tensor.h>
 #include "brogameagent/observation.h"
 #include "brogameagent/world.h"
 
@@ -177,7 +176,7 @@ int gen_episode(const Args& a, int ep_idx, learn::ReplayBuffer& buf) {
     return captured;
 }
 
-void to_tensor(const learn::Situation& sit, nn::Tensor& out) {
+void to_tensor(const learn::Situation& sit, brotensor::Tensor& out) {
     if (out.size() != observation::TOTAL) out.resize(observation::TOTAL, 1);
     for (int i = 0; i < observation::TOTAL; ++i) out[i] = sit.obs[i];
 }
@@ -220,10 +219,10 @@ int main(int argc, char** argv) {
     cfg.dec_hidden    = a.dec_hidden;
     cfg.seed          = a.seed ^ 0xC0FFEE00ULL;
     ae.init(cfg);
-    ae.to(nn::Device::GPU);
+    ae.to(brotensor::Device::GPU);
     std::printf("net\tparams\t%d\tdevice=GPU\n", ae.num_params());
 
-    nn::Tensor x_host = nn::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor x_host = brotensor::Tensor::vec(observation::TOTAL);
     brotensor::GpuTensor x_g(observation::TOTAL, 1);
     brotensor::GpuTensor x_hat_g(observation::TOTAL, 1);
     brotensor::GpuTensor target_g(observation::TOTAL, 1);
@@ -240,10 +239,10 @@ int main(int argc, char** argv) {
 
         for (int idx : indices) {
             to_tensor(all[idx], x_host);
-            nn::upload_to(x_host, x_g);
+            brotensor::upload(x_host, x_g);
             // target = x (autoencoder reconstruction). Reuse upload to a
             // separate buffer so the backward kernel can read both.
-            nn::upload_to(x_host, target_g);
+            brotensor::upload(x_host, target_g);
 
             ae.zero_grad();
             ae.forward(x_g, x_hat_g);

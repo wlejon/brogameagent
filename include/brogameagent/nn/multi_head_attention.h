@@ -1,8 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/tensor.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/tensor.h>
@@ -37,7 +37,7 @@ namespace brogameagent::nn {
 // Backward accumulates into dWq/dWk/dWv/dWo (does NOT overwrite) — caller
 // is responsible for zero_grad between batches.
 //
-// GPU dispatch: device_ tracks where parameters live. `to(Device)` migrates
+// GPU dispatch: device_ tracks where parameters live. `to(brotensor::Device)` migrates
 // host↔device. CPU forward/backward overloads are unchanged. The GPU
 // overloads call mha_forward_gpu / mha_backward_gpu and own a device-side
 // cache for Qh/Kh/Vh/Attnh/Yconcat.
@@ -47,7 +47,7 @@ public:
     MultiHeadAttention() = default;
 
     // Copy semantics: copy host-side state only; destination starts on
-    // Device::CPU. Mirrors ScaledDotProductAttention.
+    // brotensor::Device::CPU. Mirrors ScaledDotProductAttention.
     MultiHeadAttention(const MultiHeadAttention& o) { copy_host_(o); }
     MultiHeadAttention& operator=(const MultiHeadAttention& o) {
         if (this != &o) copy_host_(o);
@@ -66,8 +66,8 @@ public:
 
     // X: (K, D). mask: length K (1 valid, 0 invalid), may be nullptr.
     // O: (K, D); resized if mis-shaped.
-    void forward(const Tensor& X, const float* mask, Tensor& O);
-    void backward(const Tensor& dO, Tensor& dX);
+    void forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& O);
+    void backward(const brotensor::Tensor& dO, brotensor::Tensor& dX);
 
 #ifdef BROTENSOR_HAS_GPU
     // GPU code path. mask_dev (length K) is an optional device pointer.
@@ -86,8 +86,8 @@ public:
                                     int B, int K);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "MultiHeadAttention"; }
     int  num_params() const override {
@@ -99,14 +99,14 @@ public:
     void save_to(std::vector<uint8_t>& out) const override;
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
 
-    Tensor&       Wq()  { return Wq_; }
-    Tensor&       Wk()  { return Wk_; }
-    Tensor&       Wv()  { return Wv_; }
-    Tensor&       Wo()  { return Wo_; }
-    Tensor&       dWq() { return dWq_; }
-    Tensor&       dWk() { return dWk_; }
-    Tensor&       dWv() { return dWv_; }
-    Tensor&       dWo() { return dWo_; }
+    brotensor::Tensor&       Wq()  { return Wq_; }
+    brotensor::Tensor&       Wk()  { return Wk_; }
+    brotensor::Tensor&       Wv()  { return Wv_; }
+    brotensor::Tensor&       Wo()  { return Wo_; }
+    brotensor::Tensor&       dWq() { return dWq_; }
+    brotensor::Tensor&       dWk() { return dWk_; }
+    brotensor::Tensor&       dWv() { return dWv_; }
+    brotensor::Tensor&       dWo() { return dWo_; }
 
 private:
     void copy_host_(const MultiHeadAttention& o) {
@@ -121,7 +121,7 @@ private:
         Attnh_ = o.Attnh_;
         Yconcat_ = o.Yconcat_;
         mask_cache_ = o.mask_cache_;
-        device_ = Device::CPU;
+        device_ = brotensor::Device::CPU;
         // GPU mirrors deliberately left default-constructed.
     }
 
@@ -130,23 +130,23 @@ private:
     int h_  = 1;
     int dh_ = 0;
 
-    Tensor Wq_, Wk_, Wv_, Wo_;
-    Tensor dWq_, dWk_, dWv_, dWo_;
-    Tensor vWq_, vWk_, vWv_, vWo_;
-    Tensor mWq_, mWk_, mWv_, mWo_;
-    Tensor vAWq_, vAWk_, vAWv_, vAWo_;
+    brotensor::Tensor Wq_, Wk_, Wv_, Wo_;
+    brotensor::Tensor dWq_, dWk_, dWv_, dWo_;
+    brotensor::Tensor vWq_, vWk_, vWv_, vWo_;
+    brotensor::Tensor mWq_, mWk_, mWv_, mWo_;
+    brotensor::Tensor vAWq_, vAWk_, vAWv_, vAWo_;
 
     // Caches for backward.
-    Tensor X_cache_;            // (K, D)
+    brotensor::Tensor X_cache_;            // (K, D)
     // Per-head Q/K/V/Attn/Yh stored as (h * K, head_dim) and (h * K, K) flats.
-    std::vector<Tensor> Qh_;    // h copies of (K, dh)
-    std::vector<Tensor> Kh_;
-    std::vector<Tensor> Vh_;
-    std::vector<Tensor> Attnh_; // h copies of (K, K)
-    Tensor Yconcat_;            // (K, D) — pre-Wo concat output
+    std::vector<brotensor::Tensor> Qh_;    // h copies of (K, dh)
+    std::vector<brotensor::Tensor> Kh_;
+    std::vector<brotensor::Tensor> Vh_;
+    std::vector<brotensor::Tensor> Attnh_; // h copies of (K, K)
+    brotensor::Tensor Yconcat_;            // (K, D) — pre-Wo concat output
     std::vector<uint8_t> mask_cache_;
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     brotensor::GpuTensor Wq_g_, Wk_g_, Wv_g_, Wo_g_;
     brotensor::GpuTensor dWq_g_, dWk_g_, dWv_g_, dWo_g_;

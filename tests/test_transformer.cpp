@@ -16,6 +16,7 @@
 #include <vector>
 
 using namespace brogameagent::nn;
+using brotensor::Tensor;
 
 namespace {
 

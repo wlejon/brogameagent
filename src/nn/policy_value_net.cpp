@@ -1,5 +1,5 @@
 #include "brogameagent/nn/policy_value_net.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
@@ -79,9 +79,9 @@ void PolicyValueNet::init(const Config& cfg) {
     p_fc_.init(prev, cfg_.num_actions, seed);
 }
 
-void PolicyValueNet::forward(const Tensor& x, float& value, Tensor& logits) {
+void PolicyValueNet::forward(const brotensor::Tensor& x, float& value, brotensor::Tensor& logits) {
     // Trunk.
-    const Tensor* h = &x;
+    const brotensor::Tensor* h = &x;
     for (size_t i = 0; i < trunk_.size(); ++i) {
         trunk_[i].forward(*h, trunk_raw_[i]);
         trunk_acts_[i].forward(trunk_raw_[i], trunk_act_[i]);
@@ -99,41 +99,41 @@ void PolicyValueNet::forward(const Tensor& x, float& value, Tensor& logits) {
     p_fc_.forward(*h, logits);
 }
 
-void PolicyValueNet::backward(float dValue, const Tensor& dLogits) {
+void PolicyValueNet::backward(float dValue, const brotensor::Tensor& dLogits) {
     const int trunk_out = trunk_dim();
 
     // ── Value head backward ───────────────────────────────────────────────
-    Tensor dPostTanh = Tensor::vec(1);
+    brotensor::Tensor dPostTanh = brotensor::Tensor::vec(1);
     dPostTanh[0] = dValue;
-    Tensor dPreTanh = Tensor::vec(1);
+    brotensor::Tensor dPreTanh = brotensor::Tensor::vec(1);
     v_tanh_.backward(dPostTanh, dPreTanh);
 
-    Tensor dVAct = Tensor::vec(cfg_.value_hidden);
+    brotensor::Tensor dVAct = brotensor::Tensor::vec(cfg_.value_hidden);
     v_fc2_.backward(dPreTanh, dVAct);
 
-    Tensor dVRaw = Tensor::vec(cfg_.value_hidden);
+    brotensor::Tensor dVRaw = brotensor::Tensor::vec(cfg_.value_hidden);
     v_act_.backward(dVAct, dVRaw);
 
-    Tensor dTrunkFromV = Tensor::vec(trunk_out);
+    brotensor::Tensor dTrunkFromV = brotensor::Tensor::vec(trunk_out);
     v_fc1_.backward(dVRaw, dTrunkFromV);
 
     // ── Policy head backward ──────────────────────────────────────────────
-    Tensor dTrunkFromP = Tensor::vec(trunk_out);
+    brotensor::Tensor dTrunkFromP = brotensor::Tensor::vec(trunk_out);
     p_fc_.backward(dLogits, dTrunkFromP);
 
     // ── Sum gradients into the trunk's last activation ───────────────────
-    Tensor dHAct = Tensor::vec(trunk_out);
+    brotensor::Tensor dHAct = brotensor::Tensor::vec(trunk_out);
     for (int i = 0; i < trunk_out; ++i)
         dHAct[i] = dTrunkFromV[i] + dTrunkFromP[i];
 
     // ── Walk trunk backwards ──────────────────────────────────────────────
     for (int li = static_cast<int>(trunk_.size()) - 1; li >= 0; --li) {
         const int w = cfg_.hidden[li];
-        Tensor dHRaw = Tensor::vec(w);
+        brotensor::Tensor dHRaw = brotensor::Tensor::vec(w);
         trunk_acts_[li].backward(dHAct, dHRaw);
 
         const int prev_w = (li == 0) ? cfg_.in_dim : cfg_.hidden[li - 1];
-        Tensor dPrev = Tensor::vec(prev_w);
+        brotensor::Tensor dPrev = brotensor::Tensor::vec(prev_w);
         trunk_[li].backward(dHRaw, dPrev);
 
         // dPrev becomes dHAct for the next iteration; for li==0 it's dX which
@@ -144,7 +144,7 @@ void PolicyValueNet::backward(float dValue, const Tensor& dLogits) {
 
 #ifdef BROTENSOR_HAS_GPU
 void PolicyValueNet::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& logits) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
 
     // Trunk: Linear → ReLU per layer. Caches owned by `this`.
     const brotensor::GpuTensor* h = &x;
@@ -168,7 +168,7 @@ void PolicyValueNet::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor
 void PolicyValueNet::forward_batched(const brotensor::GpuTensor& X_BD,
                                      brotensor::GpuTensor& logits_BL,
                                      brotensor::GpuTensor& values_B1) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int B = X_BD.rows;
 
     // Lazily size the batched scratch vector to match trunk depth.
@@ -204,7 +204,7 @@ void PolicyValueNet::forward_batched(const brotensor::GpuTensor& X_BD,
 void PolicyValueNet::forward_batched_train(const brotensor::GpuTensor& X_BD,
                                            brotensor::GpuTensor& logits_BL,
                                            brotensor::GpuTensor& values_B1) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int B = X_BD.rows;
 
     if (trunk_raw_btr_g_.size() != trunk_.size()) {
@@ -238,7 +238,7 @@ void PolicyValueNet::forward_batched_train(const brotensor::GpuTensor& X_BD,
 
 void PolicyValueNet::backward_batched(const brotensor::GpuTensor& dLogits_BL,
                                       const brotensor::GpuTensor& dValues_B1) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
 
     // ── Value head backward ───────────────────────────────────────────────
     brotensor::tanh_backward_batched_gpu(v_post_tanh_btr_g_, dValues_B1, dPreTanh_btr_g_);
@@ -267,7 +267,7 @@ void PolicyValueNet::backward_batched(const brotensor::GpuTensor& dLogits_BL,
 }
 
 void PolicyValueNet::backward(const brotensor::GpuTensor& dLogits) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
 
     // ── Value head backward ───────────────────────────────────────────────
     // Caller wrote d(loss)/d(value) into dPostTanh_g_ via dValue_gpu().
@@ -299,15 +299,15 @@ void PolicyValueNet::backward(const brotensor::GpuTensor& dLogits) {
 }
 #endif
 
-void PolicyValueNet::to(Device d) {
+void PolicyValueNet::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("PolicyValueNet");
+    brotensor::device_require_gpu("PolicyValueNet");
 #ifdef BROTENSOR_HAS_GPU
-    if (d == Device::GPU) {
-        for (auto& l : trunk_) l.to(Device::GPU);
-        v_fc1_.to(Device::GPU);
-        v_fc2_.to(Device::GPU);
-        p_fc_.to(Device::GPU);
+    if (d == brotensor::Device::GPU) {
+        for (auto& l : trunk_) l.to(brotensor::Device::GPU);
+        v_fc1_.to(brotensor::Device::GPU);
+        v_fc2_.to(brotensor::Device::GPU);
+        p_fc_.to(brotensor::Device::GPU);
 
         // Allocate forward caches.
         trunk_raw_g_.clear();
@@ -334,13 +334,13 @@ void PolicyValueNet::to(Device d) {
         dHRaw_g_.resize(cfg_.hidden.empty() ? 1 : cfg_.hidden.back(), 1);
         dPrev_g_.resize(cfg_.in_dim, 1);
         dXdiscard_g_.resize(cfg_.in_dim, 1);
-        device_ = Device::GPU;
+        device_ = brotensor::Device::GPU;
     } else {
-        for (auto& l : trunk_) l.to(Device::CPU);
-        v_fc1_.to(Device::CPU);
-        v_fc2_.to(Device::CPU);
-        p_fc_.to(Device::CPU);
-        device_ = Device::CPU;
+        for (auto& l : trunk_) l.to(brotensor::Device::CPU);
+        v_fc1_.to(brotensor::Device::CPU);
+        v_fc2_.to(brotensor::Device::CPU);
+        p_fc_.to(brotensor::Device::CPU);
+        device_ = brotensor::Device::CPU;
     }
 #endif
 }

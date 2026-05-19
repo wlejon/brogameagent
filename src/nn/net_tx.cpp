@@ -3,7 +3,6 @@
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
-#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -13,7 +12,7 @@ namespace brogameagent::nn {
 
 namespace {
 
-inline void copy_slice(const Tensor& src, int off, int n, Tensor& dst) {
+inline void copy_slice(const brotensor::Tensor& src, int off, int n, brotensor::Tensor& dst) {
     std::memcpy(dst.ptr(), src.ptr() + off, n * sizeof(float));
 }
 
@@ -127,9 +126,9 @@ void SingleHeroNetTX::adam_step(float lr, float b1, float b2, float eps, int ste
     head_.adam_step(lr, b1, b2, eps, step);
 }
 
-void SingleHeroNetTX::to(Device d) {
+void SingleHeroNetTX::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("SingleHeroNetTX");
+    brotensor::device_require_gpu("SingleHeroNetTX");
 #ifdef BROTENSOR_HAS_GPU
     self_fc1_.to(d);
     self_fc2_.to(d);
@@ -140,7 +139,7 @@ void SingleHeroNetTX::to(Device d) {
     trunk_.to(d);
     value_head_.to(d);
     head_.to(d);
-    if (d == Device::GPU) {
+    if (d == brotensor::Device::GPU) {
         const int D  = cfg_.d_model;
         const int TH = cfg_.trunk_hidden;
         x_g_.resize(observation::TOTAL, 1);
@@ -226,22 +225,22 @@ void SingleHeroNetTX::load(const std::vector<uint8_t>& blob) {
 
 // ─── CPU forward / backward ───────────────────────────────────────────────
 
-void SingleHeroNetTX::forward(const Tensor& x, float& value, Tensor& logits) {
+void SingleHeroNetTX::forward(const brotensor::Tensor& x, float& value, brotensor::Tensor& logits) {
     assert(x.size() == observation::TOTAL);
     x_cache_ = x;
     const int D = cfg_.d_model;
 
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         // Upload x once, route through GPU-native forward, download value+logits.
-        upload_to(x_cache_, x_g_);
+        brotensor::upload(x_cache_, x_g_);
         brotensor::GpuTensor logits_g;
         logits_g.resize(logits.size(), 1);
         forward(x_g_, logits_g);
         // Download logits + scalar value.
-        download_to(logits_g, logits);
-        Tensor v_h(1, 1);
-        download_to(value_head_.value_gpu(), v_h);
+        brotensor::download(logits_g, logits);
+        brotensor::Tensor v_h(1, 1);
+        brotensor::download(value_head_.value_gpu(), v_h);
         brotensor::cuda_sync();
         value = v_h[0];
         return;
@@ -249,18 +248,18 @@ void SingleHeroNetTX::forward(const Tensor& x, float& value, Tensor& logits) {
 #endif
 
     // ── Self stream (CPU) ──
-    Tensor self_in = Tensor::vec(observation::SELF_FEATURES);
+    brotensor::Tensor self_in = brotensor::Tensor::vec(observation::SELF_FEATURES);
     copy_slice(x, 0, observation::SELF_FEATURES, self_in);
     self_fc1_.forward(self_in, self_h_raw_);
-    relu_forward(self_h_raw_, self_h_act_);
+    brotensor::relu_forward_cpu(self_h_raw_, self_h_act_);
     self_fc2_.forward(self_h_act_, self_z_);
 
     // ── Enemy stream: per-slot proj into (K, D) ──
     const int off_e = observation::SELF_FEATURES;
     e_n_valid_ = 0;
     enemy_in_.zero();
-    Tensor slot_in = Tensor::vec(observation::ENEMY_FEATURES);
-    Tensor proj_out = Tensor::vec(D);
+    brotensor::Tensor slot_in = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
+    brotensor::Tensor proj_out = brotensor::Tensor::vec(D);
     for (int k = 0; k < observation::K_ENEMIES; ++k) {
         const int base = off_e + k * observation::ENEMY_FEATURES;
         const bool valid = x[base] > 0.5f;
@@ -287,7 +286,7 @@ void SingleHeroNetTX::forward(const Tensor& x, float& value, Tensor& logits) {
     const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
     a_n_valid_ = 0;
     ally_in_.zero();
-    Tensor slot_in_a = Tensor::vec(observation::ALLY_FEATURES);
+    brotensor::Tensor slot_in_a = brotensor::Tensor::vec(observation::ALLY_FEATURES);
     for (int k = 0; k < observation::K_ALLIES; ++k) {
         const int base = off_a + k * observation::ALLY_FEATURES;
         const bool valid = x[base] > 0.5f;
@@ -321,17 +320,17 @@ void SingleHeroNetTX::forward(const Tensor& x, float& value, Tensor& logits) {
     head_.forward(trunk_act_out_, logits);
 }
 
-void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
+void SingleHeroNetTX::backward(float dValue, const brotensor::Tensor& dLogits) {
     const int D = cfg_.d_model;
     const int TH = cfg_.trunk_hidden;
 
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         // Upload dLogits, write dValue scalar, run GPU backward.
         brotensor::GpuTensor dLogits_g;
-        upload_to(dLogits, dLogits_g);
-        Tensor dv_h(1, 1); dv_h[0] = dValue;
-        upload_to(dv_h, value_head_.dValue_gpu());
+        brotensor::upload(dLogits, dLogits_g);
+        brotensor::Tensor dv_h(1, 1); dv_h[0] = dValue;
+        brotensor::upload(dv_h, value_head_.dValue_gpu());
         backward(dLogits_g);
         brotensor::cuda_sync();
         return;
@@ -339,34 +338,34 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
 #endif
 
     // Heads → trunk_act_out_.
-    Tensor dTrunkV = Tensor::vec(TH);
+    brotensor::Tensor dTrunkV = brotensor::Tensor::vec(TH);
     value_head_.backward(dValue, dTrunkV);
-    Tensor dTrunkP = Tensor::vec(TH);
+    brotensor::Tensor dTrunkP = brotensor::Tensor::vec(TH);
     head_.backward(dLogits, dTrunkP);
 
-    Tensor dTrunkAct = Tensor::vec(TH);
+    brotensor::Tensor dTrunkAct = brotensor::Tensor::vec(TH);
     for (int i = 0; i < TH; ++i) dTrunkAct[i] = dTrunkV[i] + dTrunkP[i];
 
-    Tensor dTrunkRaw = Tensor::vec(TH);
+    brotensor::Tensor dTrunkRaw = brotensor::Tensor::vec(TH);
     trunk_act_.backward(dTrunkAct, dTrunkRaw);
 
     // Trunk Linear.
-    Tensor dConcat = Tensor::vec(3 * D);
+    brotensor::Tensor dConcat = brotensor::Tensor::vec(3 * D);
     trunk_.backward(dTrunkRaw, dConcat);
 
     // ── Self backward ──
-    Tensor dSelfZ = Tensor::vec(D);
+    brotensor::Tensor dSelfZ = brotensor::Tensor::vec(D);
     for (int j = 0; j < D; ++j) dSelfZ[j] = dConcat[0*D + j];
-    Tensor dSelfHact = Tensor::vec(cfg_.self_hidden);
+    brotensor::Tensor dSelfHact = brotensor::Tensor::vec(cfg_.self_hidden);
     self_fc2_.backward(dSelfZ, dSelfHact);
-    Tensor dSelfHraw = Tensor::vec(cfg_.self_hidden);
-    relu_backward(self_h_raw_, dSelfHact, dSelfHraw);
-    Tensor dSelfIn = Tensor::vec(observation::SELF_FEATURES);
+    brotensor::Tensor dSelfHraw = brotensor::Tensor::vec(cfg_.self_hidden);
+    brotensor::relu_backward_cpu(self_h_raw_, dSelfHact, dSelfHraw);
+    brotensor::Tensor dSelfIn = brotensor::Tensor::vec(observation::SELF_FEATURES);
     self_fc1_.backward(dSelfHraw, dSelfIn);
     (void)dSelfIn;
 
     // ── Enemy backward ──
-    Tensor dEnemyOut = Tensor::mat(observation::K_ENEMIES, D);
+    brotensor::Tensor dEnemyOut = brotensor::Tensor::mat(observation::K_ENEMIES, D);
     dEnemyOut.zero();
     if (e_n_valid_ > 0) {
         const float inv = 1.0f / static_cast<float>(e_n_valid_);
@@ -375,13 +374,13 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
             for (int j = 0; j < D; ++j) dEnemyOut(k, j) = dConcat[1*D + j] * inv;
         }
     }
-    Tensor dEnemyIn(observation::K_ENEMIES, D);
+    brotensor::Tensor dEnemyIn(observation::K_ENEMIES, D);
     enemy_enc_.backward(dEnemyOut, dEnemyIn);
     {
-        Tensor slot_in = Tensor::vec(observation::ENEMY_FEATURES);
-        Tensor dRow = Tensor::vec(D);
-        Tensor dSlot = Tensor::vec(observation::ENEMY_FEATURES);
-        Tensor dummy = Tensor::vec(D);
+        brotensor::Tensor slot_in = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
+        brotensor::Tensor dRow = brotensor::Tensor::vec(D);
+        brotensor::Tensor dSlot = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
+        brotensor::Tensor dummy = brotensor::Tensor::vec(D);
         const int off_e = observation::SELF_FEATURES;
         for (int k = 0; k < observation::K_ENEMIES; ++k) {
             if (!e_valid_[k]) continue;
@@ -395,7 +394,7 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
     }
 
     // ── Ally backward ──
-    Tensor dAllyOut = Tensor::mat(observation::K_ALLIES, D);
+    brotensor::Tensor dAllyOut = brotensor::Tensor::mat(observation::K_ALLIES, D);
     dAllyOut.zero();
     if (a_n_valid_ > 0) {
         const float inv = 1.0f / static_cast<float>(a_n_valid_);
@@ -404,13 +403,13 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
             for (int j = 0; j < D; ++j) dAllyOut(k, j) = dConcat[2*D + j] * inv;
         }
     }
-    Tensor dAllyIn(observation::K_ALLIES, D);
+    brotensor::Tensor dAllyIn(observation::K_ALLIES, D);
     ally_enc_.backward(dAllyOut, dAllyIn);
     {
-        Tensor slot_in = Tensor::vec(observation::ALLY_FEATURES);
-        Tensor dRow = Tensor::vec(D);
-        Tensor dSlot = Tensor::vec(observation::ALLY_FEATURES);
-        Tensor dummy = Tensor::vec(D);
+        brotensor::Tensor slot_in = brotensor::Tensor::vec(observation::ALLY_FEATURES);
+        brotensor::Tensor dRow = brotensor::Tensor::vec(D);
+        brotensor::Tensor dSlot = brotensor::Tensor::vec(observation::ALLY_FEATURES);
+        brotensor::Tensor dummy = brotensor::Tensor::vec(D);
         const int off_a = observation::SELF_FEATURES
                         + observation::K_ENEMIES * observation::ENEMY_FEATURES;
         for (int k = 0; k < observation::K_ALLIES; ++k) {
@@ -430,7 +429,7 @@ void SingleHeroNetTX::backward(float dValue, const Tensor& dLogits) {
 // Helper: build per-slot mask and slot validity vectors from host x_cache_.
 // Returns the count of valid slots; writes mask/valid arrays.
 namespace {
-int build_slot_mask(const Tensor& x, int off, int n_slots, int feat_per,
+int build_slot_mask(const brotensor::Tensor& x, int off, int n_slots, int feat_per,
                     std::vector<float>& mask, std::vector<uint8_t>& valid) {
     int n_valid = 0;
     mask.assign(n_slots, 0.0f);
@@ -454,14 +453,14 @@ int build_slot_mask(const Tensor& x, int off, int n_slots, int feat_per,
 } // namespace
 
 void SingleHeroNetTX::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& logits) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     assert(x.size() == observation::TOTAL);
     x_external_ = &x;
 
     // We need x on host briefly to compute slot validity mask (a tiny scalar
     // check per slot). Download once into x_cache_.
-    Tensor xh(observation::TOTAL, 1);
-    download_to(x, xh);
+    brotensor::Tensor xh(observation::TOTAL, 1);
+    brotensor::download(x, xh);
     brotensor::cuda_sync();
     x_cache_ = xh;
 
@@ -469,9 +468,9 @@ void SingleHeroNetTX::forward(const brotensor::GpuTensor& x, brotensor::GpuTenso
     // Stage self segment into self_in_g_ via a host->device upload of just
     // SELF_FEATURES (single small upload — not a per-op shuttle).
     {
-        Tensor sh = Tensor::vec(observation::SELF_FEATURES);
+        brotensor::Tensor sh = brotensor::Tensor::vec(observation::SELF_FEATURES);
         copy_slice(x_cache_, 0, observation::SELF_FEATURES, sh);
-        upload_to(sh, self_in_g_);
+        brotensor::upload(sh, self_in_g_);
     }
     self_fc1_.forward(self_in_g_, self_h_raw_g_);
     brotensor::relu_forward_gpu(self_h_raw_g_, self_h_act_g_);
@@ -484,7 +483,7 @@ void SingleHeroNetTX::forward(const brotensor::GpuTensor& x, brotensor::GpuTenso
     {
         // Build a (K_ENEMIES, ENEMY_FEATURES) host staging tensor for batched
         // input projection. Invalid slots are zeroed.
-        Tensor staging(observation::K_ENEMIES, observation::ENEMY_FEATURES);
+        brotensor::Tensor staging(observation::K_ENEMIES, observation::ENEMY_FEATURES);
         staging.zero();
         for (int k = 0; k < observation::K_ENEMIES; ++k) {
             if (!e_valid_[k]) continue;
@@ -493,16 +492,16 @@ void SingleHeroNetTX::forward(const brotensor::GpuTensor& x, brotensor::GpuTenso
                 staging(k, j) = x_cache_[base + j];
         }
         brotensor::GpuTensor staging_g;
-        upload_to(staging, staging_g);
+        brotensor::upload(staging, staging_g);
         brotensor::linear_forward_batched_gpu(enemy_proj_.W_g(), enemy_proj_.b_g(),
                                         staging_g, enemy_in_g_);
         // Cache the staging input on the layer for backward (we need it for
         // per-slot Linear backward). Stash a copy on host; upload again as a
         // single-slot input during backward as needed.
         // Upload mask vector.
-        Tensor mh = Tensor::vec(observation::K_ENEMIES);
+        brotensor::Tensor mh = brotensor::Tensor::vec(observation::K_ENEMIES);
         for (int k = 0; k < observation::K_ENEMIES; ++k) mh[k] = e_mask_[k];
-        upload_to(mh, e_mask_g_);
+        brotensor::upload(mh, e_mask_g_);
     }
     // Encoder forward.
     enemy_enc_.forward(enemy_in_g_, e_mask_g_.data, enemy_out_g_);
@@ -514,7 +513,7 @@ void SingleHeroNetTX::forward(const brotensor::GpuTensor& x, brotensor::GpuTenso
     a_n_valid_ = build_slot_mask(x_cache_, off_a, observation::K_ALLIES,
                                  observation::ALLY_FEATURES, a_mask_, a_valid_);
     {
-        Tensor staging(observation::K_ALLIES, observation::ALLY_FEATURES);
+        brotensor::Tensor staging(observation::K_ALLIES, observation::ALLY_FEATURES);
         staging.zero();
         for (int k = 0; k < observation::K_ALLIES; ++k) {
             if (!a_valid_[k]) continue;
@@ -523,12 +522,12 @@ void SingleHeroNetTX::forward(const brotensor::GpuTensor& x, brotensor::GpuTenso
                 staging(k, j) = x_cache_[base + j];
         }
         brotensor::GpuTensor staging_g;
-        upload_to(staging, staging_g);
+        brotensor::upload(staging, staging_g);
         brotensor::linear_forward_batched_gpu(ally_proj_.W_g(), ally_proj_.b_g(),
                                         staging_g, ally_in_g_);
-        Tensor mh = Tensor::vec(observation::K_ALLIES);
+        brotensor::Tensor mh = brotensor::Tensor::vec(observation::K_ALLIES);
         for (int k = 0; k < observation::K_ALLIES; ++k) mh[k] = a_mask_[k];
-        upload_to(mh, a_mask_g_);
+        brotensor::upload(mh, a_mask_g_);
     }
     ally_enc_.forward(ally_in_g_, a_mask_g_.data, ally_out_g_);
     brotensor::masked_mean_pool_forward_gpu(ally_out_g_, a_mask_g_.data, ally_pooled_g_);
@@ -545,7 +544,7 @@ void SingleHeroNetTX::forward(const brotensor::GpuTensor& x, brotensor::GpuTenso
 }
 
 void SingleHeroNetTX::backward(const brotensor::GpuTensor& dLogits) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int D = cfg_.d_model;
 
     // ── Heads → trunk_act ──
@@ -586,12 +585,12 @@ void SingleHeroNetTX::backward(const brotensor::GpuTensor& dLogits) {
     // Per-slot Linear backward. Like the CPU path, we re-prime each slot via
     // a fresh forward(slot_in) before backward(dRow, dSlot).
     {
-        Tensor slot_in_h = Tensor::vec(observation::ENEMY_FEATURES);
-        Tensor dRow_h    = Tensor::vec(D);
+        brotensor::Tensor slot_in_h = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
+        brotensor::Tensor dRow_h    = brotensor::Tensor::vec(D);
         const int off_e = observation::SELF_FEATURES;
         // Download dEnemyIn once to host so we can iterate per row cheaply.
-        Tensor dEnemyIn_h(observation::K_ENEMIES, D);
-        download_to(dEnemyIn_g_, dEnemyIn_h);
+        brotensor::Tensor dEnemyIn_h(observation::K_ENEMIES, D);
+        brotensor::download(dEnemyIn_g_, dEnemyIn_h);
         brotensor::cuda_sync();
         for (int k = 0; k < observation::K_ENEMIES; ++k) {
             if (!e_valid_[k]) continue;
@@ -599,8 +598,8 @@ void SingleHeroNetTX::backward(const brotensor::GpuTensor& dLogits) {
             const int base = off_e + k * observation::ENEMY_FEATURES;
             for (int j = 0; j < observation::ENEMY_FEATURES; ++j)
                 slot_in_h[j] = x_cache_[base + j];
-            upload_to(slot_in_h, slot_in_e_g_);
-            upload_to(dRow_h, dSlotProj_g_);
+            brotensor::upload(slot_in_h, slot_in_e_g_);
+            brotensor::upload(dRow_h, dSlotProj_g_);
             // Re-prime cache and accumulate grads.
             enemy_proj_.forward(slot_in_e_g_, slot_proj_g_);
             enemy_proj_.backward(dSlotProj_g_, dSlotInE_g_);
@@ -612,12 +611,12 @@ void SingleHeroNetTX::backward(const brotensor::GpuTensor& dLogits) {
                                        observation::K_ALLIES, dAllyOut_g_);
     ally_enc_.backward(dAllyOut_g_, dAllyIn_g_);
     {
-        Tensor slot_in_h = Tensor::vec(observation::ALLY_FEATURES);
-        Tensor dRow_h    = Tensor::vec(D);
+        brotensor::Tensor slot_in_h = brotensor::Tensor::vec(observation::ALLY_FEATURES);
+        brotensor::Tensor dRow_h    = brotensor::Tensor::vec(D);
         const int off_a = observation::SELF_FEATURES
                         + observation::K_ENEMIES * observation::ENEMY_FEATURES;
-        Tensor dAllyIn_h(observation::K_ALLIES, D);
-        download_to(dAllyIn_g_, dAllyIn_h);
+        brotensor::Tensor dAllyIn_h(observation::K_ALLIES, D);
+        brotensor::download(dAllyIn_g_, dAllyIn_h);
         brotensor::cuda_sync();
         for (int k = 0; k < observation::K_ALLIES; ++k) {
             if (!a_valid_[k]) continue;
@@ -625,8 +624,8 @@ void SingleHeroNetTX::backward(const brotensor::GpuTensor& dLogits) {
             const int base = off_a + k * observation::ALLY_FEATURES;
             for (int j = 0; j < observation::ALLY_FEATURES; ++j)
                 slot_in_h[j] = x_cache_[base + j];
-            upload_to(slot_in_h, slot_in_a_g_);
-            upload_to(dRow_h, dSlotProj_g_);
+            brotensor::upload(slot_in_h, slot_in_a_g_);
+            brotensor::upload(dRow_h, dSlotProj_g_);
             ally_proj_.forward(slot_in_a_g_, slot_proj_g_);
             ally_proj_.backward(dSlotProj_g_, dSlotInA_g_);
         }
@@ -661,7 +660,7 @@ void SingleHeroNetTX::backward(const brotensor::GpuTensor& dLogits) {
 void SingleHeroNetTX::forward_batched(const brotensor::GpuTensor& X_BD,
                                       brotensor::GpuTensor& logits_BL,
                                       brotensor::GpuTensor& values_B1) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int B    = X_BD.rows;
     const int D_in = X_BD.cols;
     assert(D_in == observation::TOTAL);
@@ -679,16 +678,16 @@ void SingleHeroNetTX::forward_batched(const brotensor::GpuTensor& X_BD,
     if (B == 0) return;
 
     // ── 1. Single download of the whole input batch. ──
-    Tensor X_h(B, D_in);
-    download_to(X_BD, X_h);
+    brotensor::Tensor X_h(B, D_in);
+    brotensor::download(X_BD, X_h);
     brotensor::cuda_sync();
 
     // ── 2. Build all host staging buffers in one pass. ──
-    Tensor self_in_h (B,           F_S);
-    Tensor enemy_in_h(B * K_E,     F_E);
-    Tensor ally_in_h (B * K_A,     F_A);
-    Tensor e_masks_h (B * K_E,     1);
-    Tensor a_masks_h (B * K_A,     1);
+    brotensor::Tensor self_in_h (B,           F_S);
+    brotensor::Tensor enemy_in_h(B * K_E,     F_E);
+    brotensor::Tensor ally_in_h (B * K_A,     F_A);
+    brotensor::Tensor e_masks_h (B * K_E,     1);
+    brotensor::Tensor a_masks_h (B * K_A,     1);
     enemy_in_h.zero();
     ally_in_h.zero();
     e_masks_h.zero();
@@ -721,11 +720,11 @@ void SingleHeroNetTX::forward_batched(const brotensor::GpuTensor& X_BD,
 
     // ── 3. Single uploads of staging buffers. ──
     brotensor::GpuTensor self_in_g, enemy_in_g, ally_in_g, e_masks_g, a_masks_g;
-    upload_to(self_in_h,  self_in_g);
-    upload_to(enemy_in_h, enemy_in_g);
-    upload_to(ally_in_h,  ally_in_g);
-    upload_to(e_masks_h,  e_masks_g);
-    upload_to(a_masks_h,  a_masks_g);
+    brotensor::upload(self_in_h,  self_in_g);
+    brotensor::upload(enemy_in_h, enemy_in_g);
+    brotensor::upload(ally_in_h,  ally_in_g);
+    brotensor::upload(e_masks_h,  e_masks_g);
+    brotensor::upload(a_masks_h,  a_masks_g);
 
     // ── 4. Batched self stream. ──
     brotensor::GpuTensor self_h_raw(B, cfg_.self_hidden);
@@ -819,7 +818,7 @@ void SingleHeroNetTX::forward_batched(const brotensor::GpuTensor& X_BD,
 void SingleHeroNetTX::forward_batched_train(const brotensor::GpuTensor& X_BD,
                                             brotensor::GpuTensor& logits_BL,
                                             brotensor::GpuTensor& values_B1) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int B = X_BD.rows;
     const int D_in = X_BD.cols;
     assert(D_in == observation::TOTAL);
@@ -845,7 +844,7 @@ void SingleHeroNetTX::forward_batched_train(const brotensor::GpuTensor& X_BD,
 
 void SingleHeroNetTX::backward_batched(const brotensor::GpuTensor& dLogits_BL,
                                        const brotensor::GpuTensor& dValues_B1) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     assert(last_train_X_BD_ != nullptr &&
            "forward_batched_train must be called before backward_batched");
     const brotensor::GpuTensor& X_BD = *last_train_X_BD_;

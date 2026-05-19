@@ -15,31 +15,31 @@ void ForwardModelHead::init(int embed_dim, int hidden, uint64_t& rng_state) {
     h_act_.resize(hidden, 1);
 }
 
-void ForwardModelHead::forward(const Tensor& embed, const Tensor& action, Tensor& pred_next) {
+void ForwardModelHead::forward(const brotensor::Tensor& embed, const brotensor::Tensor& action, brotensor::Tensor& pred_next) {
     assert(embed.size() == embed_dim_);
     assert(action.size() == ACTION_DIM);
     assert(pred_next.size() == embed_dim_);
     std::memcpy(input_cat_.ptr(),                embed.ptr(),  embed_dim_ * sizeof(float));
     std::memcpy(input_cat_.ptr() + embed_dim_,   action.ptr(), ACTION_DIM * sizeof(float));
     fc1_.forward(input_cat_, h_raw_);
-    relu_forward(h_raw_, h_act_);
+    brotensor::relu_forward_cpu(h_raw_, h_act_);
     fc2_.forward(h_act_, pred_next);
 }
 
-void ForwardModelHead::backward(const Tensor& dPred, Tensor& dEmbed) {
+void ForwardModelHead::backward(const brotensor::Tensor& dPred, brotensor::Tensor& dEmbed) {
     assert(dPred.size() == embed_dim_);
     assert(dEmbed.size() == embed_dim_);
-    Tensor dHact = Tensor::vec(h_act_.size());
+    brotensor::Tensor dHact = brotensor::Tensor::vec(h_act_.size());
     fc2_.backward(dPred, dHact);
-    Tensor dHraw = Tensor::vec(h_raw_.size());
-    relu_backward(h_raw_, dHact, dHraw);
-    Tensor dInput = Tensor::vec(input_cat_.size());
+    brotensor::Tensor dHraw = brotensor::Tensor::vec(h_raw_.size());
+    brotensor::relu_backward_cpu(h_raw_, dHact, dHraw);
+    brotensor::Tensor dInput = brotensor::Tensor::vec(input_cat_.size());
     fc1_.backward(dHraw, dInput);
     // Split: first embed_dim_ to dEmbed, remainder (action) is discarded.
     std::memcpy(dEmbed.ptr(), dInput.ptr(), embed_dim_ * sizeof(float));
 }
 
-void build_action_onehot(int move_idx, int attack_idx, int ability_idx, Tensor& out) {
+void build_action_onehot(int move_idx, int attack_idx, int ability_idx, brotensor::Tensor& out) {
     assert(out.size() == ForwardModelHead::ACTION_DIM);
     out.zero();
     if (move_idx    >= 0 && move_idx    < ForwardModelHead::N_MOVE)    out[move_idx] = 1.0f;
@@ -47,7 +47,7 @@ void build_action_onehot(int move_idx, int attack_idx, int ability_idx, Tensor& 
     if (ability_idx >= 0 && ability_idx < ForwardModelHead::N_ABILITY) out[ForwardModelHead::N_MOVE + ForwardModelHead::N_ATTACK + ability_idx] = 1.0f;
 }
 
-float spr_loss(const Tensor& pred, const Tensor& target, Tensor& dPred) {
+float spr_loss(const brotensor::Tensor& pred, const brotensor::Tensor& target, brotensor::Tensor& dPred) {
     assert(pred.size() == target.size() && dPred.size() == pred.size());
     float l = 0.0f;
     for (int i = 0; i < pred.size(); ++i) {

@@ -3,7 +3,6 @@
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
-#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -14,7 +13,7 @@ namespace brogameagent::nn {
 
 // ─── adam_step_cpu ─────────────────────────────────────────────────────────
 
-void adam_step_cpu(Tensor& param, const Tensor& grad, Tensor& m, Tensor& v,
+void adam_step_cpu(brotensor::Tensor& param, const brotensor::Tensor& grad, brotensor::Tensor& m, brotensor::Tensor& v,
                    float lr, float beta1, float beta2, float eps, int step) {
     assert(param.size() == grad.size());
     assert(param.size() == m.size());
@@ -43,7 +42,7 @@ void adam_step_cpu(Tensor& param, const Tensor& grad, Tensor& m, Tensor& v,
 
 // ─── tensor_write / tensor_read ────────────────────────────────────────────
 
-void tensor_write(const Tensor& t, std::vector<uint8_t>& out) {
+void tensor_write(const brotensor::Tensor& t, std::vector<uint8_t>& out) {
     const int32_t r = t.rows;
     const int32_t c = t.cols;
     const size_t header = sizeof(int32_t) * 2;
@@ -55,7 +54,7 @@ void tensor_write(const Tensor& t, std::vector<uint8_t>& out) {
     std::memcpy(out.data() + start + header, t.ptr(), bytes);
 }
 
-void tensor_read(Tensor& t, const uint8_t* data, size_t& offset, size_t size) {
+void tensor_read(brotensor::Tensor& t, const uint8_t* data, size_t& offset, size_t size) {
     assert(offset + sizeof(int32_t) * 2 <= size);
     int32_t r = 0, c = 0;
     std::memcpy(&r, data + offset, sizeof(int32_t)); offset += sizeof(int32_t);
@@ -85,7 +84,7 @@ void Linear::init(int in_dim, int out_dim, uint64_t& rng_state) {
     vAW_.resize(out_dim, in_dim);
     vAB_.resize(out_dim, 1);
     x_cache_.resize(in_dim, 1);
-    xavier_init(W_, rng_state);
+    brotensor::xavier_init_cpu(W_, rng_state);
     b_.zero();
     dW_.zero(); dB_.zero();
     vW_.zero(); vB_.zero();
@@ -93,22 +92,22 @@ void Linear::init(int in_dim, int out_dim, uint64_t& rng_state) {
     vAW_.zero(); vAB_.zero();
 }
 
-void Linear::forward(const Tensor& x, Tensor& y) {
+void Linear::forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
     x_cache_ = x;
-    linear_forward(W_, b_, x, y);
+    brotensor::linear_forward_cpu(W_, b_, x, y);
 }
 
-void Linear::backward(const Tensor& dY, Tensor& dX) {
-    linear_backward(W_, x_cache_, dY, dX, dW_, dB_);
+void Linear::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
+    brotensor::linear_backward_cpu(W_, x_cache_, dY, dX, dW_, dB_);
 }
 
-void Linear::backward(const Tensor& x_input, const Tensor& dY, Tensor& dX) {
-    linear_backward(W_, x_input, dY, dX, dW_, dB_);
+void Linear::backward(const brotensor::Tensor& x_input, const brotensor::Tensor& dY, brotensor::Tensor& dX) {
+    brotensor::linear_backward_cpu(W_, x_input, dY, dX, dW_, dB_);
 }
 
 #ifdef BROTENSOR_HAS_GPU
 void Linear::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     // Cache a non-owning view of x so backward can read the same input. The
     // caller must keep x alive between forward and backward (matches the CPU
     // x_cache_ semantics where we stash a value copy).
@@ -117,61 +116,61 @@ void Linear::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y) {
 }
 
 void Linear::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     brotensor::linear_backward_gpu(W_g_, x_cache_g_, dY, dX, dW_g_, dB_g_);
 }
 
 void Linear::forward_batched_train(const brotensor::GpuTensor& X_BD,
                                    brotensor::GpuTensor& Y_BD) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     x_cache_btr_g_ = brotensor::GpuTensor::view(X_BD.data, X_BD.rows, X_BD.cols);
     brotensor::linear_forward_batched_gpu(W_g_, b_g_, X_BD, Y_BD);
 }
 
 void Linear::backward_batched(const brotensor::GpuTensor& dY_BD,
                               brotensor::GpuTensor& dX_BD) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     brotensor::linear_backward_batched_gpu(W_g_, x_cache_btr_g_, dY_BD,
                                      dX_BD, dW_g_, dB_g_);
 }
 #endif
 
-void Linear::to(Device d) {
+void Linear::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("Linear");
+    brotensor::device_require_gpu("Linear");
 #ifdef BROTENSOR_HAS_GPU
-    if (d == Device::GPU) {
-        upload_to(W_, W_g_);
-        upload_to(b_, b_g_);
-        upload_to(dW_, dW_g_);
-        upload_to(dB_, dB_g_);
-        upload_to(vW_, vW_g_);
-        upload_to(vB_, vB_g_);
-        upload_to(mW_, mW_g_);
-        upload_to(mB_, mB_g_);
-        upload_to(vAW_, vAW_g_);
-        upload_to(vAB_, vAB_g_);
-        device_ = Device::GPU;
+    if (d == brotensor::Device::GPU) {
+        brotensor::upload(W_, W_g_);
+        brotensor::upload(b_, b_g_);
+        brotensor::upload(dW_, dW_g_);
+        brotensor::upload(dB_, dB_g_);
+        brotensor::upload(vW_, vW_g_);
+        brotensor::upload(vB_, vB_g_);
+        brotensor::upload(mW_, mW_g_);
+        brotensor::upload(mB_, mB_g_);
+        brotensor::upload(vAW_, vAW_g_);
+        brotensor::upload(vAB_, vAB_g_);
+        device_ = brotensor::Device::GPU;
     } else {
-        download_to(W_g_, W_);
-        download_to(b_g_, b_);
-        download_to(dW_g_, dW_);
-        download_to(dB_g_, dB_);
-        download_to(vW_g_, vW_);
-        download_to(vB_g_, vB_);
-        download_to(mW_g_, mW_);
-        download_to(mB_g_, mB_);
-        download_to(vAW_g_, vAW_);
-        download_to(vAB_g_, vAB_);
+        brotensor::download(W_g_, W_);
+        brotensor::download(b_g_, b_);
+        brotensor::download(dW_g_, dW_);
+        brotensor::download(dB_g_, dB_);
+        brotensor::download(vW_g_, vW_);
+        brotensor::download(vB_g_, vB_);
+        brotensor::download(mW_g_, mW_);
+        brotensor::download(mB_g_, mB_);
+        brotensor::download(vAW_g_, vAW_);
+        brotensor::download(vAB_g_, vAB_);
         brotensor::cuda_sync();
-        device_ = Device::CPU;
+        device_ = brotensor::Device::CPU;
     }
 #endif
 }
 
 void Linear::zero_grad() {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         dW_g_.zero();
         dB_g_.zero();
         return;
@@ -183,7 +182,7 @@ void Linear::zero_grad() {
 
 void Linear::sgd_step(float lr, float momentum) {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         brotensor::sgd_step_gpu(W_g_, dW_g_, vW_g_, lr, momentum);
         brotensor::sgd_step_gpu(b_g_, dB_g_, vB_g_, lr, momentum);
         return;
@@ -205,7 +204,7 @@ void Linear::sgd_step(float lr, float momentum) {
 
 void Linear::adam_step(float lr, float beta1, float beta2, float eps, int step) {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         brotensor::adam_step_gpu(W_g_, dW_g_, mW_g_, vAW_g_, lr, beta1, beta2, eps, step);
         brotensor::adam_step_gpu(b_g_, dB_g_, mB_g_, vAB_g_, lr, beta1, beta2, eps, step);
         return;
@@ -217,11 +216,11 @@ void Linear::adam_step(float lr, float beta1, float beta2, float eps, int step) 
 
 void Linear::save_to(std::vector<uint8_t>& out) const {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         // Sync host shadow before serializing.
         auto* self = const_cast<Linear*>(this);
-        download_to(W_g_, self->W_);
-        download_to(b_g_, self->b_);
+        brotensor::download(W_g_, self->W_);
+        brotensor::download(b_g_, self->b_);
         brotensor::cuda_sync();
     }
 #endif
@@ -244,17 +243,17 @@ void Linear::load_from(const uint8_t* data, size_t& offset, size_t size) {
     mW_.zero(); mB_.zero(); vAW_.zero(); vAB_.zero();
     x_cache_.resize(W_.cols, 1);
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
-        upload_to(W_, W_g_);
-        upload_to(b_, b_g_);
-        upload_to(dW_, dW_g_);
-        upload_to(dB_, dB_g_);
-        upload_to(vW_, vW_g_);
-        upload_to(vB_, vB_g_);
-        upload_to(mW_, mW_g_);
-        upload_to(mB_, mB_g_);
-        upload_to(vAW_, vAW_g_);
-        upload_to(vAB_, vAB_g_);
+    if (device_ == brotensor::Device::GPU) {
+        brotensor::upload(W_, W_g_);
+        brotensor::upload(b_, b_g_);
+        brotensor::upload(dW_, dW_g_);
+        brotensor::upload(dB_, dB_g_);
+        brotensor::upload(vW_, vW_g_);
+        brotensor::upload(vB_, vB_g_);
+        brotensor::upload(mW_, mW_g_);
+        brotensor::upload(mB_, mB_g_);
+        brotensor::upload(vAW_, vAW_g_);
+        brotensor::upload(vAB_, vAB_g_);
     }
 #endif
 }

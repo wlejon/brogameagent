@@ -10,9 +10,9 @@
 #include <brogameagent/nn/layernorm.h>
 
 using namespace bga_parity;
-using brogameagent::nn::Device;
+using brotensor::Device;
 using brogameagent::nn::LayerNorm;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 
 namespace {
 
@@ -51,7 +51,7 @@ void run_dispatch_adam(int n, uint64_t seed, int n_steps) {
 
         // GPU path.
         brotensor::GpuTensor gx, gy, gdY, gdX;
-        upload_to(x, gx); upload_to(dY, gdY);
+        brotensor::upload(x, gx); brotensor::upload(dY, gdY);
         gy.resize(n, 1); gdX.resize(n, 1);
         gpu_ln.zero_grad();
         gpu_ln.forward(gx, gy);

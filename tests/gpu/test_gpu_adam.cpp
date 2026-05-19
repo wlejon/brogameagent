@@ -4,10 +4,10 @@
 
 #include <brogameagent/nn/circuits.h>
 #include <brotensor/ops.h>
-#include <brogameagent/nn/tensor.h>
+#include <brotensor/tensor.h>
 
 using namespace bga_parity;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brogameagent::nn::adam_step_cpu;
 using brotensor::GpuTensor;
 
@@ -27,10 +27,10 @@ void run_adam(int n, uint64_t seed, float lr, float beta1, float beta2,
     Tensor v_cpu = v;
 
     GpuTensor gparam, ggrad, gm, gv;
-    upload_to(param, gparam);
-    upload_to(grad, ggrad);
-    upload_to(m, gm);
-    upload_to(v, gv);
+    brotensor::upload(param, gparam);
+    brotensor::upload(grad, ggrad);
+    brotensor::upload(m, gm);
+    brotensor::upload(v, gv);
 
     // Run K steps with the same gradient each step (sufficient to surface
     // any bias-correction or moment-update mismatch).

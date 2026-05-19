@@ -18,7 +18,7 @@
 
 #include "brogameagent/learn/generic_replay_buffer.h"
 #include "brogameagent/learn/generic_trainer.h"
-#include "brogameagent/nn/device.h"
+#include <brotensor/device.h>
 #include <brotensor/runtime.h>
 #include "brogameagent/nn/policy_value_net.h"
 
@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
     cfg.head_sizes = a.head_sizes;
     cfg.seed = a.seed ^ 0xA1A2A3A4ULL;
     net.init(cfg);
-    net.to(nn::Device::GPU);
+    net.to(brotensor::Device::GPU);
 
     std::printf("net\tparams\t%d\tdevice=GPU\n", net.num_params());
 
@@ -186,7 +186,7 @@ int main(int argc, char** argv) {
     tcfg.lr = a.lr;
     tcfg.momentum = a.momentum;
     tcfg.publish_every = 0;
-    tcfg.device = nn::Device::GPU;
+    tcfg.device = brotensor::Device::GPU;
     tcfg.rng_seed = a.seed ^ 0xB1B2B3B4ULL;
     tr.set_net(&net);
     tr.set_buffer(&buf);

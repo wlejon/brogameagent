@@ -5,10 +5,10 @@
 
 namespace brogameagent::nn {
 
-static inline void copy_slice(const Tensor& src, int off, int n, Tensor& dst) {
+static inline void copy_slice(const brotensor::Tensor& src, int off, int n, brotensor::Tensor& dst) {
     std::memcpy(dst.ptr(), src.ptr() + off, n * sizeof(float));
 }
-static inline void accum_slice(Tensor& dst_full, int off, const Tensor& slot_grad, int n) {
+static inline void accum_slice(brotensor::Tensor& dst_full, int off, const brotensor::Tensor& slot_grad, int n) {
     float* d = dst_full.ptr() + off;
     const float* s = slot_grad.ptr();
     for (int i = 0; i < n; ++i) d[i] += s[i];
@@ -94,26 +94,26 @@ void SetTransformerEncoder::load_from(const uint8_t* d, size_t& o, size_t s) {
     for (auto& ln : ally_ln_) ln.load_from(d, o, s);
 }
 
-void SetTransformerEncoder::forward(const Tensor& x, Tensor& y) {
+void SetTransformerEncoder::forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
     assert(x.size() == observation::TOTAL);
     assert(y.size() == out_dim());
     x_cache_ = x;
     const int D = cfg_.embed_dim;
 
     // Self stream.
-    Tensor self_in = Tensor::vec(observation::SELF_FEATURES);
+    brotensor::Tensor self_in = brotensor::Tensor::vec(observation::SELF_FEATURES);
     copy_slice(x, 0, observation::SELF_FEATURES, self_in);
-    Tensor tmp_h = Tensor::vec(cfg_.hidden);
+    brotensor::Tensor tmp_h = brotensor::Tensor::vec(cfg_.hidden);
     self_fc1_.forward(self_in, tmp_h);
-    relu_forward(tmp_h, self_h_);
+    brotensor::relu_forward_cpu(tmp_h, self_h_);
     self_fc2_.forward(self_h_, self_z_);
 
     // Enemy stream: per-slot Linear+ReLU into (K, D) matrix; attention; per-row LN; masked mean pool.
     const int off_e = observation::SELF_FEATURES;
     std::vector<float> e_mask(observation::K_ENEMIES, 0.0f);
     e_n_valid_ = 0;
-    Tensor slot_in = Tensor::vec(observation::ENEMY_FEATURES);
-    Tensor proj_out = Tensor::vec(D);
+    brotensor::Tensor slot_in = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
+    brotensor::Tensor proj_out = brotensor::Tensor::vec(D);
     enemy_proj_raw_.zero();
     enemy_proj_act_.zero();
     for (int k = 0; k < observation::K_ENEMIES; ++k) {
@@ -132,7 +132,7 @@ void SetTransformerEncoder::forward(const Tensor& x, Tensor& y) {
     }
     enemy_attn_.forward(enemy_proj_act_, e_mask.data(), enemy_attn_out_);
     // Per-row LayerNorm on valid rows.
-    Tensor row_in = Tensor::vec(D), row_out = Tensor::vec(D);
+    brotensor::Tensor row_in = brotensor::Tensor::vec(D), row_out = brotensor::Tensor::vec(D);
     enemy_ln_out_.zero();
     for (int k = 0; k < observation::K_ENEMIES; ++k) {
         if (!e_valid_[k]) continue;
@@ -141,7 +141,7 @@ void SetTransformerEncoder::forward(const Tensor& x, Tensor& y) {
         for (int j = 0; j < D; ++j) enemy_ln_out_(k, j) = row_out[j];
     }
     // Masked mean pool.
-    Tensor pooled_e = Tensor::vec(D); pooled_e.zero();
+    brotensor::Tensor pooled_e = brotensor::Tensor::vec(D); pooled_e.zero();
     if (e_n_valid_ > 0) {
         const float inv = 1.0f / static_cast<float>(e_n_valid_);
         for (int k = 0; k < observation::K_ENEMIES; ++k) {
@@ -155,7 +155,7 @@ void SetTransformerEncoder::forward(const Tensor& x, Tensor& y) {
     const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
     std::vector<float> a_mask(observation::K_ALLIES, 0.0f);
     a_n_valid_ = 0;
-    Tensor slot_in_a = Tensor::vec(observation::ALLY_FEATURES);
+    brotensor::Tensor slot_in_a = brotensor::Tensor::vec(observation::ALLY_FEATURES);
     ally_proj_raw_.zero();
     ally_proj_act_.zero();
     for (int k = 0; k < observation::K_ALLIES; ++k) {
@@ -180,7 +180,7 @@ void SetTransformerEncoder::forward(const Tensor& x, Tensor& y) {
         ally_ln_[k].forward(row_in, row_out);
         for (int j = 0; j < D; ++j) ally_ln_out_(k, j) = row_out[j];
     }
-    Tensor pooled_a = Tensor::vec(D); pooled_a.zero();
+    brotensor::Tensor pooled_a = brotensor::Tensor::vec(D); pooled_a.zero();
     if (a_n_valid_ > 0) {
         const float inv = 1.0f / static_cast<float>(a_n_valid_);
         for (int k = 0; k < observation::K_ALLIES; ++k) {
@@ -196,19 +196,19 @@ void SetTransformerEncoder::forward(const Tensor& x, Tensor& y) {
     for (int j = 0; j < D; ++j) y[2*D + j] = pooled_a[j];
 }
 
-void SetTransformerEncoder::backward(const Tensor& dY, Tensor& dX) {
+void SetTransformerEncoder::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
     assert(dY.size() == out_dim());
     assert(dX.size() == observation::TOTAL);
     dX.zero();
     const int D = cfg_.embed_dim;
 
     // Self backward.
-    Tensor dSelfZ = Tensor::vec(D);
+    brotensor::Tensor dSelfZ = brotensor::Tensor::vec(D);
     for (int j = 0; j < D; ++j) dSelfZ[j] = dY[0*D + j];
-    Tensor dSelfH = Tensor::vec(cfg_.hidden);
+    brotensor::Tensor dSelfH = brotensor::Tensor::vec(cfg_.hidden);
     self_fc2_.backward(dSelfZ, dSelfH);
     for (int i = 0; i < cfg_.hidden; ++i) if (self_h_[i] <= 0.0f) dSelfH[i] = 0.0f;
-    Tensor dSelfIn = Tensor::vec(observation::SELF_FEATURES);
+    brotensor::Tensor dSelfIn = brotensor::Tensor::vec(observation::SELF_FEATURES);
     self_fc1_.backward(dSelfH, dSelfIn);
     accum_slice(dX, 0, dSelfIn, observation::SELF_FEATURES);
 
@@ -217,14 +217,14 @@ void SetTransformerEncoder::backward(const Tensor& dY, Tensor& dX) {
     if (e_n_valid_ > 0) {
         const float inv = 1.0f / static_cast<float>(e_n_valid_);
         // Grad distributed to each valid row's LN output.
-        Tensor dLnOut = Tensor::mat(observation::K_ENEMIES, D); dLnOut.zero();
+        brotensor::Tensor dLnOut = brotensor::Tensor::mat(observation::K_ENEMIES, D); dLnOut.zero();
         for (int k = 0; k < observation::K_ENEMIES; ++k) {
             if (!e_valid_[k]) continue;
             for (int j = 0; j < D; ++j) dLnOut(k, j) = dY[1*D + j] * inv;
         }
         // Through per-row LN.
-        Tensor dAttnOut = Tensor::mat(observation::K_ENEMIES, D); dAttnOut.zero();
-        Tensor row_dy = Tensor::vec(D), row_dx = Tensor::vec(D);
+        brotensor::Tensor dAttnOut = brotensor::Tensor::mat(observation::K_ENEMIES, D); dAttnOut.zero();
+        brotensor::Tensor row_dy = brotensor::Tensor::vec(D), row_dx = brotensor::Tensor::vec(D);
         for (int k = 0; k < observation::K_ENEMIES; ++k) {
             if (!e_valid_[k]) continue;
             for (int j = 0; j < D; ++j) row_dy[j] = dLnOut(k, j);
@@ -232,21 +232,21 @@ void SetTransformerEncoder::backward(const Tensor& dY, Tensor& dX) {
             for (int j = 0; j < D; ++j) dAttnOut(k, j) = row_dx[j];
         }
         // Through attention.
-        Tensor dProjAct = Tensor::mat(observation::K_ENEMIES, D);
+        brotensor::Tensor dProjAct = brotensor::Tensor::mat(observation::K_ENEMIES, D);
         enemy_attn_.backward(dAttnOut, dProjAct);
         // Through per-slot Linear+ReLU projection.
-        Tensor dSlot = Tensor::vec(observation::ENEMY_FEATURES);
-        Tensor dRow = Tensor::vec(D);
+        brotensor::Tensor dSlot = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
+        brotensor::Tensor dRow = brotensor::Tensor::vec(D);
         for (int k = 0; k < observation::K_ENEMIES; ++k) {
             if (!e_valid_[k]) continue;
             for (int j = 0; j < D; ++j) {
                 dRow[j] = enemy_proj_raw_(k, j) > 0.0f ? dProjAct(k, j) : 0.0f;
             }
             // Re-prime the Linear's x_cache_ for this slot's input.
-            Tensor slot_in = Tensor::vec(observation::ENEMY_FEATURES);
+            brotensor::Tensor slot_in = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
             copy_slice(x_cache_, off_e + k * observation::ENEMY_FEATURES,
                        observation::ENEMY_FEATURES, slot_in);
-            Tensor dummy = Tensor::vec(D);
+            brotensor::Tensor dummy = brotensor::Tensor::vec(D);
             enemy_proj_.forward(slot_in, dummy);   // refresh x_cache_
             enemy_proj_.backward(dRow, dSlot);
             accum_slice(dX, off_e + k * observation::ENEMY_FEATURES, dSlot,
@@ -258,32 +258,32 @@ void SetTransformerEncoder::backward(const Tensor& dY, Tensor& dX) {
     const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
     if (a_n_valid_ > 0) {
         const float inv = 1.0f / static_cast<float>(a_n_valid_);
-        Tensor dLnOut = Tensor::mat(observation::K_ALLIES, D); dLnOut.zero();
+        brotensor::Tensor dLnOut = brotensor::Tensor::mat(observation::K_ALLIES, D); dLnOut.zero();
         for (int k = 0; k < observation::K_ALLIES; ++k) {
             if (!a_valid_[k]) continue;
             for (int j = 0; j < D; ++j) dLnOut(k, j) = dY[2*D + j] * inv;
         }
-        Tensor dAttnOut = Tensor::mat(observation::K_ALLIES, D); dAttnOut.zero();
-        Tensor row_dy = Tensor::vec(D), row_dx = Tensor::vec(D);
+        brotensor::Tensor dAttnOut = brotensor::Tensor::mat(observation::K_ALLIES, D); dAttnOut.zero();
+        brotensor::Tensor row_dy = brotensor::Tensor::vec(D), row_dx = brotensor::Tensor::vec(D);
         for (int k = 0; k < observation::K_ALLIES; ++k) {
             if (!a_valid_[k]) continue;
             for (int j = 0; j < D; ++j) row_dy[j] = dLnOut(k, j);
             ally_ln_[k].backward(row_dy, row_dx);
             for (int j = 0; j < D; ++j) dAttnOut(k, j) = row_dx[j];
         }
-        Tensor dProjAct = Tensor::mat(observation::K_ALLIES, D);
+        brotensor::Tensor dProjAct = brotensor::Tensor::mat(observation::K_ALLIES, D);
         ally_attn_.backward(dAttnOut, dProjAct);
-        Tensor dSlot = Tensor::vec(observation::ALLY_FEATURES);
-        Tensor dRow = Tensor::vec(D);
+        brotensor::Tensor dSlot = brotensor::Tensor::vec(observation::ALLY_FEATURES);
+        brotensor::Tensor dRow = brotensor::Tensor::vec(D);
         for (int k = 0; k < observation::K_ALLIES; ++k) {
             if (!a_valid_[k]) continue;
             for (int j = 0; j < D; ++j) {
                 dRow[j] = ally_proj_raw_(k, j) > 0.0f ? dProjAct(k, j) : 0.0f;
             }
-            Tensor slot_in = Tensor::vec(observation::ALLY_FEATURES);
+            brotensor::Tensor slot_in = brotensor::Tensor::vec(observation::ALLY_FEATURES);
             copy_slice(x_cache_, off_a + k * observation::ALLY_FEATURES,
                        observation::ALLY_FEATURES, slot_in);
-            Tensor dummy = Tensor::vec(D);
+            brotensor::Tensor dummy = brotensor::Tensor::vec(D);
             ally_proj_.forward(slot_in, dummy);
             ally_proj_.backward(dRow, dSlot);
             accum_slice(dX, off_a + k * observation::ALLY_FEATURES, dSlot,

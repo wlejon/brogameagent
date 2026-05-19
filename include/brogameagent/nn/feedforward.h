@@ -1,8 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/tensor.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/tensor.h>
@@ -23,7 +23,7 @@ namespace brogameagent::nn {
 // Activation is ReLU (deliberately simple; GELU can come later without
 // touching call sites).
 //
-// GPU dispatch: device_ tracks where parameters live. `to(Device)` migrates
+// GPU dispatch: device_ tracks where parameters live. `to(brotensor::Device)` migrates
 // host↔device. CPU forward/backward overloads are unchanged. The GPU path
 // reuses the per-vector linear_*_gpu kernels by walking the K rows of the
 // (K, D) input via GpuTensor::view() — simpler than introducing a batched
@@ -47,8 +47,8 @@ public:
     int d_ff() const { return df_; }
 
     // X: (K, D); Y: (K, D); resized if mis-shaped.
-    void forward(const Tensor& X, Tensor& Y);
-    void backward(const Tensor& dY, Tensor& dX);
+    void forward(const brotensor::Tensor& X, brotensor::Tensor& Y);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
 
 #ifdef BROTENSOR_HAS_GPU
     void forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y);
@@ -61,8 +61,8 @@ public:
                                     brotensor::GpuTensor& Y_RD);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "FeedForward"; }
     int  num_params() const override {
@@ -74,10 +74,10 @@ public:
     void save_to(std::vector<uint8_t>& out) const override;
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
 
-    Tensor& W1() { return W1_; } Tensor& b1() { return b1_; }
-    Tensor& W2() { return W2_; } Tensor& b2() { return b2_; }
-    Tensor& dW1() { return dW1_; } Tensor& dB1() { return dB1_; }
-    Tensor& dW2() { return dW2_; } Tensor& dB2() { return dB2_; }
+    brotensor::Tensor& W1() { return W1_; } brotensor::Tensor& b1() { return b1_; }
+    brotensor::Tensor& W2() { return W2_; } brotensor::Tensor& b2() { return b2_; }
+    brotensor::Tensor& dW1() { return dW1_; } brotensor::Tensor& dB1() { return dB1_; }
+    brotensor::Tensor& dW2() { return dW2_; } brotensor::Tensor& dB2() { return dB2_; }
 
 private:
     void copy_host_(const FeedForward& o) {
@@ -90,24 +90,24 @@ private:
         X_cache_ = o.X_cache_;
         H_pre_ = o.H_pre_;
         H_post_ = o.H_post_;
-        device_ = Device::CPU;
+        device_ = brotensor::Device::CPU;
     }
 
     int d_  = 0;
     int df_ = 0;
 
-    Tensor W1_, b1_, W2_, b2_;
-    Tensor dW1_, dB1_, dW2_, dB2_;
-    Tensor vW1_, vB1_, vW2_, vB2_;
-    Tensor mW1_, mB1_, mW2_, mB2_;
-    Tensor vAW1_, vAB1_, vAW2_, vAB2_;
+    brotensor::Tensor W1_, b1_, W2_, b2_;
+    brotensor::Tensor dW1_, dB1_, dW2_, dB2_;
+    brotensor::Tensor vW1_, vB1_, vW2_, vB2_;
+    brotensor::Tensor mW1_, mB1_, mW2_, mB2_;
+    brotensor::Tensor vAW1_, vAB1_, vAW2_, vAB2_;
 
     // Caches.
-    Tensor X_cache_;   // (K, D)
-    Tensor H_pre_;     // (K, d_ff) pre-activation
-    Tensor H_post_;    // (K, d_ff) post-ReLU
+    brotensor::Tensor X_cache_;   // (K, D)
+    brotensor::Tensor H_pre_;     // (K, d_ff) pre-activation
+    brotensor::Tensor H_post_;    // (K, d_ff) post-ReLU
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     brotensor::GpuTensor W1_g_, b1_g_, W2_g_, b2_g_;
     brotensor::GpuTensor dW1_g_, dB1_g_, dW2_g_, dB2_g_;

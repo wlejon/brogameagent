@@ -8,8 +8,7 @@
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 #include <brotensor/device_buffer.h>
-#include <brogameagent/nn/tensor.h>
-#include <brogameagent/nn/gpu_glue.h>
+#include <brotensor/tensor.h>
 
 #include <cmath>
 #include <cstdint>
@@ -21,11 +20,11 @@
 
 namespace bga_parity {
 
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 using brotensor::cuda_sync;
-using brogameagent::nn::download_to;
-using brogameagent::nn::upload_to;
+using brotensor::download;
+using brotensor::upload;
 
 // ─── Test registry ─────────────────────────────────────────────────────────
 
@@ -111,7 +110,7 @@ inline void compare_tensors(const Tensor& cpu, const Tensor& gpu,
 
 inline Tensor download_to_host(const GpuTensor& g) {
     Tensor h;
-    download_to(g, h);
+    brotensor::download(g, h);
     cuda_sync();
     return h;
 }

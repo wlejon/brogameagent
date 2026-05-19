@@ -1,5 +1,5 @@
 #include "brogameagent/nn/embedding.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 
 #include <cassert>
 #include <cstring>
@@ -13,17 +13,17 @@ void Embedding::init(int vocab, int dim, uint64_t& rng_state) {
     mW_.resize(vocab, dim);
     vAW_.resize(vocab, dim);
     mW_.zero(); vAW_.zero();
-    xavier_init(W_, rng_state);
+    brotensor::xavier_init_cpu(W_, rng_state);
 }
 
-void Embedding::forward(int idx, Tensor& out) {
+void Embedding::forward(int idx, brotensor::Tensor& out) {
     assert(idx >= 0 && idx < W_.rows);
     assert(out.size() == W_.cols);
     const int d = W_.cols;
     std::memcpy(out.ptr(), W_.ptr() + static_cast<size_t>(idx) * d, d * sizeof(float));
 }
 
-void Embedding::backward(int idx, const Tensor& dY) {
+void Embedding::backward(int idx, const brotensor::Tensor& dY) {
     assert(idx >= 0 && idx < W_.rows);
     assert(dY.size() == W_.cols);
     const int d = W_.cols;

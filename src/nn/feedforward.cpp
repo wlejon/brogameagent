@@ -1,10 +1,9 @@
 #include "brogameagent/nn/feedforward.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
-#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -24,8 +23,8 @@ void FeedForward::init(int dim, int d_ff, uint64_t& rng_state) {
     mW2_.resize(d_, df_); mB2_.resize(d_, 1);
     vAW1_.resize(df_, d_); vAB1_.resize(df_, 1);
     vAW2_.resize(d_, df_); vAB2_.resize(d_, 1);
-    xavier_init(W1_, rng_state);
-    xavier_init(W2_, rng_state);
+    brotensor::xavier_init_cpu(W1_, rng_state);
+    brotensor::xavier_init_cpu(W2_, rng_state);
     b1_.zero(); b2_.zero();
     dW1_.zero(); dB1_.zero(); dW2_.zero(); dB2_.zero();
     vW1_.zero(); vB1_.zero(); vW2_.zero(); vB2_.zero();
@@ -33,7 +32,7 @@ void FeedForward::init(int dim, int d_ff, uint64_t& rng_state) {
     vAW1_.zero(); vAB1_.zero(); vAW2_.zero(); vAB2_.zero();
 }
 
-void FeedForward::forward(const Tensor& X, Tensor& Y) {
+void FeedForward::forward(const brotensor::Tensor& X, brotensor::Tensor& Y) {
     const int K = X.rows;
     const int D = X.cols;
     assert(D == d_);
@@ -67,7 +66,7 @@ void FeedForward::forward(const Tensor& X, Tensor& Y) {
     }
 }
 
-void FeedForward::backward(const Tensor& dY, Tensor& dX) {
+void FeedForward::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
     const int K = X_cache_.rows;
     const int D = X_cache_.cols;
     assert(dY.rows == K && dY.cols == D);
@@ -78,7 +77,7 @@ void FeedForward::backward(const Tensor& dY, Tensor& dX) {
     //   dW2(c, k) += sum_i dY(i, c) * H_post(i, k)
     //   dB2(c)    += sum_i dY(i, c)
     //   dH_post(i, k) = sum_c dY(i, c) * W2(c, k)
-    Tensor dHpost(K, df_); dHpost.zero();
+    brotensor::Tensor dHpost(K, df_); dHpost.zero();
     for (int i = 0; i < K; ++i) {
         for (int c = 0; c < D; ++c) {
             const float g = dY(i, c);
@@ -91,7 +90,7 @@ void FeedForward::backward(const Tensor& dY, Tensor& dX) {
     }
 
     // ReLU backward: dH_pre(i, k) = (H_pre > 0) * dH_post(i, k)
-    Tensor dHpre(K, df_);
+    brotensor::Tensor dHpre(K, df_);
     for (int i = 0; i < K; ++i) {
         for (int k = 0; k < df_; ++k) {
             dHpre(i, k) = H_pre_(i, k) > 0.0f ? dHpost(i, k) : 0.0f;
@@ -116,7 +115,7 @@ void FeedForward::backward(const Tensor& dY, Tensor& dX) {
 
 #ifdef BROTENSOR_HAS_GPU
 void FeedForward::forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int K = X.rows;
     const int D = X.cols;
     assert(D == d_);
@@ -149,7 +148,7 @@ void FeedForward::forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y
 }
 
 void FeedForward::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int K = X_cache_g_.rows;
     const int D = X_cache_g_.cols;
     if (dX.rows != K || dX.cols != D) dX.resize(K, D);
@@ -188,7 +187,7 @@ void FeedForward::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor&
 
 void FeedForward::forward_inference_batched(const brotensor::GpuTensor& X_RD,
                                             brotensor::GpuTensor& Y_RD) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int R = X_RD.rows;
     if (Y_RD.rows != R || Y_RD.cols != d_) Y_RD.resize(R, d_);
     if (R == 0) return;
@@ -200,42 +199,42 @@ void FeedForward::forward_inference_batched(const brotensor::GpuTensor& X_RD,
 }
 #endif
 
-void FeedForward::to(Device d) {
+void FeedForward::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("FeedForward");
+    brotensor::device_require_gpu("FeedForward");
 #ifdef BROTENSOR_HAS_GPU
-    if (d == Device::GPU) {
-        upload_to(W1_, W1_g_); upload_to(b1_, b1_g_);
-        upload_to(W2_, W2_g_); upload_to(b2_, b2_g_);
-        upload_to(dW1_, dW1_g_); upload_to(dB1_, dB1_g_);
-        upload_to(dW2_, dW2_g_); upload_to(dB2_, dB2_g_);
-        upload_to(vW1_, vW1_g_); upload_to(vB1_, vB1_g_);
-        upload_to(vW2_, vW2_g_); upload_to(vB2_, vB2_g_);
-        upload_to(mW1_, mW1_g_); upload_to(mB1_, mB1_g_);
-        upload_to(mW2_, mW2_g_); upload_to(mB2_, mB2_g_);
-        upload_to(vAW1_, vAW1_g_); upload_to(vAB1_, vAB1_g_);
-        upload_to(vAW2_, vAW2_g_); upload_to(vAB2_, vAB2_g_);
-        device_ = Device::GPU;
+    if (d == brotensor::Device::GPU) {
+        brotensor::upload(W1_, W1_g_); brotensor::upload(b1_, b1_g_);
+        brotensor::upload(W2_, W2_g_); brotensor::upload(b2_, b2_g_);
+        brotensor::upload(dW1_, dW1_g_); brotensor::upload(dB1_, dB1_g_);
+        brotensor::upload(dW2_, dW2_g_); brotensor::upload(dB2_, dB2_g_);
+        brotensor::upload(vW1_, vW1_g_); brotensor::upload(vB1_, vB1_g_);
+        brotensor::upload(vW2_, vW2_g_); brotensor::upload(vB2_, vB2_g_);
+        brotensor::upload(mW1_, mW1_g_); brotensor::upload(mB1_, mB1_g_);
+        brotensor::upload(mW2_, mW2_g_); brotensor::upload(mB2_, mB2_g_);
+        brotensor::upload(vAW1_, vAW1_g_); brotensor::upload(vAB1_, vAB1_g_);
+        brotensor::upload(vAW2_, vAW2_g_); brotensor::upload(vAB2_, vAB2_g_);
+        device_ = brotensor::Device::GPU;
     } else {
-        download_to(W1_g_, W1_); download_to(b1_g_, b1_);
-        download_to(W2_g_, W2_); download_to(b2_g_, b2_);
-        download_to(dW1_g_, dW1_); download_to(dB1_g_, dB1_);
-        download_to(dW2_g_, dW2_); download_to(dB2_g_, dB2_);
-        download_to(vW1_g_, vW1_); download_to(vB1_g_, vB1_);
-        download_to(vW2_g_, vW2_); download_to(vB2_g_, vB2_);
-        download_to(mW1_g_, mW1_); download_to(mB1_g_, mB1_);
-        download_to(mW2_g_, mW2_); download_to(mB2_g_, mB2_);
-        download_to(vAW1_g_, vAW1_); download_to(vAB1_g_, vAB1_);
-        download_to(vAW2_g_, vAW2_); download_to(vAB2_g_, vAB2_);
+        brotensor::download(W1_g_, W1_); brotensor::download(b1_g_, b1_);
+        brotensor::download(W2_g_, W2_); brotensor::download(b2_g_, b2_);
+        brotensor::download(dW1_g_, dW1_); brotensor::download(dB1_g_, dB1_);
+        brotensor::download(dW2_g_, dW2_); brotensor::download(dB2_g_, dB2_);
+        brotensor::download(vW1_g_, vW1_); brotensor::download(vB1_g_, vB1_);
+        brotensor::download(vW2_g_, vW2_); brotensor::download(vB2_g_, vB2_);
+        brotensor::download(mW1_g_, mW1_); brotensor::download(mB1_g_, mB1_);
+        brotensor::download(mW2_g_, mW2_); brotensor::download(mB2_g_, mB2_);
+        brotensor::download(vAW1_g_, vAW1_); brotensor::download(vAB1_g_, vAB1_);
+        brotensor::download(vAW2_g_, vAW2_); brotensor::download(vAB2_g_, vAB2_);
         brotensor::cuda_sync();
-        device_ = Device::CPU;
+        device_ = brotensor::Device::CPU;
     }
 #endif
 }
 
 void FeedForward::zero_grad() {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         dW1_g_.zero(); dB1_g_.zero(); dW2_g_.zero(); dB2_g_.zero();
         return;
     }
@@ -243,7 +242,7 @@ void FeedForward::zero_grad() {
     dW1_.zero(); dB1_.zero(); dW2_.zero(); dB2_.zero();
 }
 
-static void sgd_buf_(Tensor& W, Tensor& vW, const Tensor& dW,
+static void sgd_buf_(brotensor::Tensor& W, brotensor::Tensor& vW, const brotensor::Tensor& dW,
                      float lr, float momentum) {
     const int n = W.size();
     float* w = W.ptr(); float* v = vW.ptr(); const float* g = dW.ptr();
@@ -255,7 +254,7 @@ static void sgd_buf_(Tensor& W, Tensor& vW, const Tensor& dW,
 
 void FeedForward::sgd_step(float lr, float momentum) {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         brotensor::sgd_step_gpu(W1_g_, dW1_g_, vW1_g_, lr, momentum);
         brotensor::sgd_step_gpu(b1_g_, dB1_g_, vB1_g_, lr, momentum);
         brotensor::sgd_step_gpu(W2_g_, dW2_g_, vW2_g_, lr, momentum);
@@ -271,7 +270,7 @@ void FeedForward::sgd_step(float lr, float momentum) {
 
 void FeedForward::adam_step(float lr, float beta1, float beta2, float eps, int step) {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         brotensor::adam_step_gpu(W1_g_, dW1_g_, mW1_g_, vAW1_g_, lr, beta1, beta2, eps, step);
         brotensor::adam_step_gpu(b1_g_, dB1_g_, mB1_g_, vAB1_g_, lr, beta1, beta2, eps, step);
         brotensor::adam_step_gpu(W2_g_, dW2_g_, mW2_g_, vAW2_g_, lr, beta1, beta2, eps, step);
@@ -287,10 +286,10 @@ void FeedForward::adam_step(float lr, float beta1, float beta2, float eps, int s
 
 void FeedForward::save_to(std::vector<uint8_t>& out) const {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         auto* self = const_cast<FeedForward*>(this);
-        download_to(W1_g_, self->W1_); download_to(b1_g_, self->b1_);
-        download_to(W2_g_, self->W2_); download_to(b2_g_, self->b2_);
+        brotensor::download(W1_g_, self->W1_); brotensor::download(b1_g_, self->b1_);
+        brotensor::download(W2_g_, self->W2_); brotensor::download(b2_g_, self->b2_);
         brotensor::cuda_sync();
     }
 #endif
@@ -316,17 +315,17 @@ void FeedForward::load_from(const uint8_t* data, size_t& offset, size_t size) {
     mW1_.zero(); mB1_.zero(); mW2_.zero(); mB2_.zero();
     vAW1_.zero(); vAB1_.zero(); vAW2_.zero(); vAB2_.zero();
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
-        upload_to(W1_, W1_g_); upload_to(b1_, b1_g_);
-        upload_to(W2_, W2_g_); upload_to(b2_, b2_g_);
-        upload_to(dW1_, dW1_g_); upload_to(dB1_, dB1_g_);
-        upload_to(dW2_, dW2_g_); upload_to(dB2_, dB2_g_);
-        upload_to(vW1_, vW1_g_); upload_to(vB1_, vB1_g_);
-        upload_to(vW2_, vW2_g_); upload_to(vB2_, vB2_g_);
-        upload_to(mW1_, mW1_g_); upload_to(mB1_, mB1_g_);
-        upload_to(mW2_, mW2_g_); upload_to(mB2_, mB2_g_);
-        upload_to(vAW1_, vAW1_g_); upload_to(vAB1_, vAB1_g_);
-        upload_to(vAW2_, vAW2_g_); upload_to(vAB2_, vAB2_g_);
+    if (device_ == brotensor::Device::GPU) {
+        brotensor::upload(W1_, W1_g_); brotensor::upload(b1_, b1_g_);
+        brotensor::upload(W2_, W2_g_); brotensor::upload(b2_, b2_g_);
+        brotensor::upload(dW1_, dW1_g_); brotensor::upload(dB1_, dB1_g_);
+        brotensor::upload(dW2_, dW2_g_); brotensor::upload(dB2_, dB2_g_);
+        brotensor::upload(vW1_, vW1_g_); brotensor::upload(vB1_, vB1_g_);
+        brotensor::upload(vW2_, vW2_g_); brotensor::upload(vB2_, vB2_g_);
+        brotensor::upload(mW1_, mW1_g_); brotensor::upload(mB1_, mB1_g_);
+        brotensor::upload(mW2_, mW2_g_); brotensor::upload(mB2_, mB2_g_);
+        brotensor::upload(vAW1_, vAW1_g_); brotensor::upload(vAB1_, vAB1_g_);
+        brotensor::upload(vAW2_, vAW2_g_); brotensor::upload(vAB2_, vAB2_g_);
     }
 #endif
 }

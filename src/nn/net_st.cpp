@@ -19,7 +19,7 @@ void SingleHeroNetST::init(const Config& cfg) {
     logits_scratch_.resize(head_.total_logits(), 1);
 }
 
-void SingleHeroNetST::forward(const Tensor& x, float& value, Tensor& logits) {
+void SingleHeroNetST::forward(const brotensor::Tensor& x, float& value, brotensor::Tensor& logits) {
     enc_.forward(x, enc_out_);
     trunk_.forward(enc_out_, trunk_raw_);
     trunk_act_.forward(trunk_raw_, trunk_act_out_);
@@ -27,23 +27,23 @@ void SingleHeroNetST::forward(const Tensor& x, float& value, Tensor& logits) {
     head_.forward(trunk_act_out_, logits);
 }
 
-void SingleHeroNetST::backward(float dValue, const Tensor& dLogits) {
-    Tensor dTrunkV = Tensor::vec(cfg_.trunk_hidden);
+void SingleHeroNetST::backward(float dValue, const brotensor::Tensor& dLogits) {
+    brotensor::Tensor dTrunkV = brotensor::Tensor::vec(cfg_.trunk_hidden);
     value_head_.backward(dValue, dTrunkV);
-    Tensor dTrunkP = Tensor::vec(cfg_.trunk_hidden);
+    brotensor::Tensor dTrunkP = brotensor::Tensor::vec(cfg_.trunk_hidden);
     head_.backward(dLogits, dTrunkP);
 
-    Tensor dTrunkAct = Tensor::vec(cfg_.trunk_hidden);
+    brotensor::Tensor dTrunkAct = brotensor::Tensor::vec(cfg_.trunk_hidden);
     for (int i = 0; i < cfg_.trunk_hidden; ++i)
         dTrunkAct[i] = dTrunkV[i] + dTrunkP[i];
 
-    Tensor dTrunkRaw = Tensor::vec(cfg_.trunk_hidden);
+    brotensor::Tensor dTrunkRaw = brotensor::Tensor::vec(cfg_.trunk_hidden);
     trunk_act_.backward(dTrunkAct, dTrunkRaw);
 
-    Tensor dEnc = Tensor::vec(enc_.out_dim());
+    brotensor::Tensor dEnc = brotensor::Tensor::vec(enc_.out_dim());
     trunk_.backward(dTrunkRaw, dEnc);
 
-    Tensor dX = Tensor::vec(observation::TOTAL);
+    brotensor::Tensor dX = brotensor::Tensor::vec(observation::TOTAL);
     enc_.backward(dEnc, dX);
 }
 

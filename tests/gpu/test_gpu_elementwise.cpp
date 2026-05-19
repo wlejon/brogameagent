@@ -3,10 +3,10 @@
 #include "parity_helpers.h"
 
 #include <brotensor/ops.h>
-#include <brogameagent/nn/ops.h>
+#include <brotensor/ops_cpu.h>
 
 using namespace bga_parity;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 namespace {
@@ -18,11 +18,11 @@ void test_relu(int n, uint64_t seed) {
     fill_random(dY, rng);
 
     Tensor y_cpu(n, 1), dX_cpu(n, 1);
-    brogameagent::nn::relu_forward(x, y_cpu);
-    brogameagent::nn::relu_backward(x, dY, dX_cpu);
+    brotensor::relu_forward_cpu(x, y_cpu);
+    brotensor::relu_backward_cpu(x, dY, dX_cpu);
 
     GpuTensor gx, gdY, gy, gdX;
-    upload_to(x, gx); upload_to(dY, gdY);
+    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
     gy.resize(n, 1); gdX.resize(n, 1);
     brotensor::relu_forward_gpu(gx, gy);
     brotensor::relu_backward_gpu(gx, gdY, gdX);
@@ -38,11 +38,11 @@ void test_tanh(int n, uint64_t seed) {
     fill_random(dY, rng);
 
     Tensor y_cpu(n, 1), dX_cpu(n, 1);
-    brogameagent::nn::tanh_forward(x, y_cpu);
-    brogameagent::nn::tanh_backward(y_cpu, dY, dX_cpu);
+    brotensor::tanh_forward_cpu(x, y_cpu);
+    brotensor::tanh_backward_cpu(y_cpu, dY, dX_cpu);
 
     GpuTensor gx, gy, gdY, gdX;
-    upload_to(x, gx); upload_to(dY, gdY);
+    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
     gy.resize(n, 1); gdX.resize(n, 1);
     brotensor::tanh_forward_gpu(gx, gy);
     Tensor y_gpu = download_to_host(gy);
@@ -59,11 +59,11 @@ void test_sigmoid(int n, uint64_t seed) {
     fill_random(dY, rng);
 
     Tensor y_cpu(n, 1), dX_cpu(n, 1);
-    brogameagent::nn::sigmoid_forward(x, y_cpu);
-    brogameagent::nn::sigmoid_backward(y_cpu, dY, dX_cpu);
+    brotensor::sigmoid_forward_cpu(x, y_cpu);
+    brotensor::sigmoid_backward_cpu(y_cpu, dY, dX_cpu);
 
     GpuTensor gx, gy, gdY, gdX;
-    upload_to(x, gx); upload_to(dY, gdY);
+    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
     gy.resize(n, 1); gdX.resize(n, 1);
     brotensor::sigmoid_forward_gpu(gx, gy);
     Tensor y_gpu = download_to_host(gy);
@@ -80,10 +80,10 @@ void test_add_inplace(int n, uint64_t seed) {
     fill_random(x, rng);
 
     Tensor y_cpu = y;
-    brogameagent::nn::add_inplace(y_cpu, x);
+    brotensor::add_inplace_cpu(y_cpu, x);
 
     GpuTensor gy, gx;
-    upload_to(y, gy); upload_to(x, gx);
+    brotensor::upload(y, gy); brotensor::upload(x, gx);
     brotensor::add_inplace_gpu(gy, gx);
 
     compare_tensors(y_cpu, download_to_host(gy), "add_inplace");
@@ -96,10 +96,10 @@ void test_add_scalar_inplace(int n, uint64_t seed) {
     const float s = 0.375f;
 
     Tensor y_cpu = y;
-    brogameagent::nn::add_scalar_inplace(y_cpu, s);
+    brotensor::add_scalar_inplace_cpu(y_cpu, s);
 
     GpuTensor gy;
-    upload_to(y, gy);
+    brotensor::upload(y, gy);
     brotensor::add_scalar_inplace_gpu(gy, s);
 
     compare_tensors(y_cpu, download_to_host(gy), "add_scalar_inplace");

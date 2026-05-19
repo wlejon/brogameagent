@@ -1,8 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/tensor.h>
 #include "brogameagent/action_mask.h"
 #include "brogameagent/observation.h"
 
@@ -25,8 +25,8 @@ public:
 
     void init(int embed_dim, int hidden, uint64_t& rng_state);
 
-    void forward(const Tensor& embed, float& value);
-    void backward(float dValue, Tensor& dEmbed);
+    void forward(const brotensor::Tensor& embed, float& value);
+    void backward(float dValue, brotensor::Tensor& dEmbed);
 
 #ifdef BROTENSOR_HAS_GPU
     // GPU code path. Internal Linears must be on GPU (call to(GPU)).
@@ -40,8 +40,8 @@ public:
     brotensor::GpuTensor&       dValue_gpu()      { return dValue_g_; }
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "ValueHead"; }
     int  num_params() const override { return fc1_.num_params() + fc2_.num_params(); }
@@ -57,11 +57,11 @@ public:
 
 private:
     Linear fc1_, fc2_;
-    Tensor h_raw_, h_act_;       // hidden before/after ReLU
-    Tensor out_raw_;              // pre-tanh scalar (1-vec)
+    brotensor::Tensor h_raw_, h_act_;       // hidden before/after ReLU
+    brotensor::Tensor out_raw_;              // pre-tanh scalar (1-vec)
     float  y_cache_ = 0.0f;       // post-tanh scalar
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     // GPU forward caches (sized at to(GPU)).
     brotensor::GpuTensor h_raw_g_, h_act_g_;
@@ -102,9 +102,9 @@ public:
 
     // Forward: produces logits. Softmax happens inside the xent loss or at
     // inference time via apply_softmax() helper.
-    void forward(const Tensor& embed, Tensor& logits);
+    void forward(const brotensor::Tensor& embed, brotensor::Tensor& logits);
     // Backward: dLogits is size total_logits(), dEmbed is size embed_dim.
-    void backward(const Tensor& dLogits, Tensor& dEmbed);
+    void backward(const brotensor::Tensor& dLogits, brotensor::Tensor& dEmbed);
 
 #ifdef BROTENSOR_HAS_GPU
     // GPU code path. Internal Linears must be on GPU.
@@ -114,8 +114,8 @@ public:
     void backward(const brotensor::GpuTensor& dLogits, brotensor::GpuTensor& dEmbed);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "FactoredPolicyHead"; }
     int  num_params() const override { return move_.num_params() + atk_.num_params() + abil_.num_params(); }
@@ -137,7 +137,7 @@ public:
 
 private:
     Linear move_, atk_, abil_;
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     // GPU per-segment buffers (allocated at to(GPU); reused).
     brotensor::GpuTensor lm_g_, la_g_, lb_g_;     // forward outputs per segment
@@ -157,7 +157,7 @@ using OpponentPolicyHead = FactoredPolicyHead;
 // vector. Optional attack_mask / ability_mask: size N_ATTACK-1 and
 // N_ABILITY-1 respectively, reflecting action_mask::build output. The
 // trailing "no-op" class is always legal.
-void factored_softmax(const Tensor& logits, Tensor& probs,
+void factored_softmax(const brotensor::Tensor& logits, brotensor::Tensor& probs,
                       const float* attack_mask = nullptr,
                       const float* ability_mask = nullptr);
 
@@ -165,11 +165,11 @@ void factored_softmax(const Tensor& logits, Tensor& probs,
 // ability_target) each expressed as a soft distribution (visit fractions from
 // MCTS). Returns total loss summed across the three heads. dLogits has
 // gradient contributions from all three.
-float factored_xent(const Tensor& logits,
-                    const Tensor& move_target,
-                    const Tensor& attack_target,
-                    const Tensor& ability_target,
-                    Tensor& probs, Tensor& dLogits,
+float factored_xent(const brotensor::Tensor& logits,
+                    const brotensor::Tensor& move_target,
+                    const brotensor::Tensor& attack_target,
+                    const brotensor::Tensor& ability_target,
+                    brotensor::Tensor& probs, brotensor::Tensor& dLogits,
                     const float* attack_mask = nullptr,
                     const float* ability_mask = nullptr);
 

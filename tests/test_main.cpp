@@ -4895,9 +4895,9 @@ TEST(policy_value_net_save_load_v2_roundtrip_factored) {
     b.load(blob);
 
     // After loading, b's forward must match a's forward exactly.
-    nn::Tensor x = nn::Tensor::vec(4);
+    brotensor::Tensor x = brotensor::Tensor::vec(4);
     for (int i = 0; i < 4; ++i) x[i] = 0.1f * (i + 1);
-    nn::Tensor la = nn::Tensor::vec(8), lb = nn::Tensor::vec(8);
+    brotensor::Tensor la = brotensor::Tensor::vec(8), lb = brotensor::Tensor::vec(8);
     float va = 0.0f, vb = 0.0f;
     a.forward(x, va, la);
     b.forward(x, vb, lb);
@@ -4932,9 +4932,9 @@ TEST(policy_value_net_v1_blob_loads_into_single_head_net) {
 
     // Forward must match — load only restored weights, head shape was set
     // by init().
-    nn::Tensor x = nn::Tensor::vec(3);
+    brotensor::Tensor x = brotensor::Tensor::vec(3);
     x[0] = 0.5f; x[1] = -0.25f; x[2] = 1.0f;
-    nn::Tensor la = nn::Tensor::vec(5), lb = nn::Tensor::vec(5);
+    brotensor::Tensor la = brotensor::Tensor::vec(5), lb = brotensor::Tensor::vec(5);
     float va = 0.0f, vb = 0.0f;
     a.forward(x, va, la);
     b.forward(x, vb, lb);

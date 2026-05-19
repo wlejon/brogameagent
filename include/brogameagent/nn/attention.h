@@ -1,8 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
-#include "tensor.h"
+#include <brotensor/device.h>
+#include <brotensor/tensor.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/tensor.h>
@@ -21,7 +21,7 @@ namespace brogameagent::nn {
 // the softmax denominator (additive -inf on scores pre-softmax) and produce
 // zero output rows — this matches the convention of softmax_forward's mask.
 //
-// GPU dispatch: device_ tracks where parameters live. `to(Device)` migrates
+// GPU dispatch: device_ tracks where parameters live. `to(brotensor::Device)` migrates
 // host↔device. The CPU forward/backward overloads are unchanged. The GPU
 // overloads call attention_forward_gpu / attention_backward_gpu and own a
 // device-side mask buffer mirroring mask_cache_.
@@ -31,7 +31,7 @@ public:
     ScaledDotProductAttention() = default;
 
     // Copy semantics: same rationale as LayerNorm — copy host state only,
-    // destination starts on Device::CPU.
+    // destination starts on brotensor::Device::CPU.
     ScaledDotProductAttention(const ScaledDotProductAttention& o) { copy_host_(o); }
     ScaledDotProductAttention& operator=(const ScaledDotProductAttention& o) {
         if (this != &o) copy_host_(o);
@@ -46,8 +46,8 @@ public:
     int dim()     const { return d_; }
 
     // CPU code path — unchanged.
-    void forward(const Tensor& X, const float* mask, Tensor& O);
-    void backward(const Tensor& dO, Tensor& dX);
+    void forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& O);
+    void backward(const brotensor::Tensor& dO, brotensor::Tensor& dX);
 
 #ifdef BROTENSOR_HAS_GPU
     // GPU code path. mask_dev (length n_) is an optional device pointer.
@@ -56,8 +56,8 @@ public:
     void backward(const brotensor::GpuTensor& dO, brotensor::GpuTensor& dX);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "ScaledDotProductAttention"; }
     int  num_params() const override { return Wq_.size() + Wk_.size() + Wv_.size() + Wo_.size(); }
@@ -67,14 +67,14 @@ public:
     void save_to(std::vector<uint8_t>& out) const override;
     void load_from(const uint8_t* data, size_t& offset, size_t size) override;
 
-    Tensor&       Wq()       { return Wq_; }
-    Tensor&       Wk()       { return Wk_; }
-    Tensor&       Wv()       { return Wv_; }
-    Tensor&       Wo()       { return Wo_; }
-    Tensor&       dWq()      { return dWq_; }
-    Tensor&       dWk()      { return dWk_; }
-    Tensor&       dWv()      { return dWv_; }
-    Tensor&       dWo()      { return dWo_; }
+    brotensor::Tensor&       Wq()       { return Wq_; }
+    brotensor::Tensor&       Wk()       { return Wk_; }
+    brotensor::Tensor&       Wv()       { return Wv_; }
+    brotensor::Tensor&       Wo()       { return Wo_; }
+    brotensor::Tensor&       dWq()      { return dWq_; }
+    brotensor::Tensor&       dWk()      { return dWk_; }
+    brotensor::Tensor&       dWv()      { return dWv_; }
+    brotensor::Tensor&       dWo()      { return dWo_; }
 
 private:
     void copy_host_(const ScaledDotProductAttention& o) {
@@ -89,26 +89,26 @@ private:
         Attn_ = o.Attn_;
         Y_ = o.Y_;
         mask_cache_ = o.mask_cache_;
-        device_ = Device::CPU;
+        device_ = brotensor::Device::CPU;
         // GPU mirrors / mask pointer left default.
     }
 
     int n_ = 0, d_ = 0;
-    Tensor Wq_, Wk_, Wv_, Wo_;
-    Tensor dWq_, dWk_, dWv_, dWo_;
-    Tensor vWq_, vWk_, vWv_, vWo_;
+    brotensor::Tensor Wq_, Wk_, Wv_, Wo_;
+    brotensor::Tensor dWq_, dWk_, dWv_, dWo_;
+    brotensor::Tensor vWq_, vWk_, vWv_, vWo_;
     // Adam moment buffers.
-    Tensor mWq_, mWk_, mWv_, mWo_;
-    Tensor vAWq_, vAWk_, vAWv_, vAWo_;
+    brotensor::Tensor mWq_, mWk_, mWv_, mWo_;
+    brotensor::Tensor vAWq_, vAWk_, vAWv_, vAWo_;
 
     // Caches for backward.
-    Tensor X_cache_;       // (N, D)
-    Tensor Q_, K_, V_;     // (N, D)
-    Tensor Attn_;          // (N, N)
-    Tensor Y_;             // (N, D) = Attn @ V
+    brotensor::Tensor X_cache_;       // (N, D)
+    brotensor::Tensor Q_, K_, V_;     // (N, D)
+    brotensor::Tensor Attn_;          // (N, N)
+    brotensor::Tensor Y_;             // (N, D) = Attn @ V
     std::vector<uint8_t> mask_cache_;
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     brotensor::GpuTensor Wq_g_, Wk_g_, Wv_g_, Wo_g_;
     brotensor::GpuTensor dWq_g_, dWk_g_, dWv_g_, dWo_g_;

@@ -1,10 +1,10 @@
 #pragma once
 
 #include "decoder.h"
-#include "device.h"
+#include <brotensor/device.h>
 #include "encoder.h"
 #include "net.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/tensor.h>
@@ -21,7 +21,7 @@ namespace brogameagent::nn {
 // Observation in, observation reconstruction out. Loss is masked MSE
 // (see reconstruction_loss in autoencoder.cpp).
 //
-// GPU dispatch: to(Device) recurses into encoder/decoder. The GPU
+// GPU dispatch: to(brotensor::Device) recurses into encoder/decoder. The GPU
 // forward/backward route through the children's GPU overloads and use a
 // device-resident `embed` cache between them.
 
@@ -38,16 +38,16 @@ public:
     const Config& config() const { return cfg_; }
 
     // Single-sample forward/backward.
-    void forward(const Tensor& x, Tensor& x_hat);
-    void backward(const Tensor& dX_hat);
+    void forward(const brotensor::Tensor& x, brotensor::Tensor& x_hat);
+    void backward(const brotensor::Tensor& dX_hat);
 
 #ifdef BROTENSOR_HAS_GPU
     void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& x_hat);
     void backward(const brotensor::GpuTensor& dX_hat);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     void zero_grad();
     void sgd_step(float lr, float momentum);
@@ -72,10 +72,10 @@ private:
     Config cfg_{};
     DeepSetsEncoder enc_;
     DeepSetsDecoder dec_;
-    Tensor embed_;       // cached forward output of encoder
-    Tensor dEmbed_;      // scratch for backward
+    brotensor::Tensor embed_;       // cached forward output of encoder
+    brotensor::Tensor dEmbed_;      // scratch for backward
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     brotensor::GpuTensor embed_g_;
     brotensor::GpuTensor dEmbed_g_;
@@ -93,7 +93,7 @@ private:
 //    slots).
 // Returns mean per-element loss over the count of features that actually
 // contribute (self features + sum of valid slot features).
-float reconstruction_loss(const Tensor& x, const Tensor& x_hat, Tensor& dX_hat);
+float reconstruction_loss(const brotensor::Tensor& x, const brotensor::Tensor& x_hat, brotensor::Tensor& dX_hat);
 
 // Copy encoder weights from an autoencoder into a SingleHeroNet by
 // round-tripping through the encoder's save/load byte layout.

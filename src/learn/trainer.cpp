@@ -1,13 +1,13 @@
 #include "brogameagent/learn/trainer.h"
 #include "brogameagent/nn/heads.h"
-#include "brogameagent/nn/ops.h"
+#include <brotensor/ops_cpu.h>
 
 #include <cassert>
 #include <cstring>
 
 namespace brogameagent::learn {
 
-static void fill_from_array(nn::Tensor& t, const float* src, int n) {
+static void fill_from_array(brotensor::Tensor& t, const float* src, int n) {
     assert(t.size() == n);
     std::memcpy(t.ptr(), src, n * sizeof(float));
 }
@@ -21,14 +21,14 @@ TrainStep ExItTrainer::step() {
 
     net_->zero_grad();
 
-    nn::Tensor obs    = nn::Tensor::vec(observation::TOTAL);
-    nn::Tensor logits = nn::Tensor::vec(net_->policy_logits());
-    nn::Tensor probs  = nn::Tensor::vec(net_->policy_logits());
-    nn::Tensor dLog   = nn::Tensor::vec(net_->policy_logits());
+    brotensor::Tensor obs    = brotensor::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor logits = brotensor::Tensor::vec(net_->policy_logits());
+    brotensor::Tensor probs  = brotensor::Tensor::vec(net_->policy_logits());
+    brotensor::Tensor dLog   = brotensor::Tensor::vec(net_->policy_logits());
 
-    nn::Tensor tgt_move   = nn::Tensor::vec(nn::FactoredPolicyHead::N_MOVE);
-    nn::Tensor tgt_atk    = nn::Tensor::vec(nn::FactoredPolicyHead::N_ATTACK);
-    nn::Tensor tgt_abil   = nn::Tensor::vec(nn::FactoredPolicyHead::N_ABILITY);
+    brotensor::Tensor tgt_move   = brotensor::Tensor::vec(nn::FactoredPolicyHead::N_MOVE);
+    brotensor::Tensor tgt_atk    = brotensor::Tensor::vec(nn::FactoredPolicyHead::N_ATTACK);
+    brotensor::Tensor tgt_abil   = brotensor::Tensor::vec(nn::FactoredPolicyHead::N_ABILITY);
 
     float tot_loss_v = 0.0f, tot_loss_p = 0.0f;
 
@@ -43,7 +43,7 @@ TrainStep ExItTrainer::step() {
 
         // Value gradient.
         float dv = 0.0f;
-        const float lv = nn::mse_scalar(v_pred, sit.value_target, dv);
+        const float lv = brotensor::mse_scalar_cpu(v_pred, sit.value_target, dv);
         tot_loss_v += lv;
 
         // Policy gradient: combined factored softmax-xent.

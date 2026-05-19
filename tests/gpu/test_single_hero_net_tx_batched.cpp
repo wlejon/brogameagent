@@ -12,8 +12,8 @@
 #include <vector>
 
 using namespace bga_parity;
-using brogameagent::nn::Tensor;
-using brogameagent::nn::Device;
+using brotensor::Tensor;
+using brotensor::Device;
 using brogameagent::nn::SingleHeroNetTX;
 using brotensor::GpuTensor;
 
@@ -74,7 +74,7 @@ void run_tx_batched(int B, uint64_t seed) {
         for (int j = 0; j < obs::TOTAL; ++j)
             xb.data[j] = X_BD.data[static_cast<size_t>(b) * obs::TOTAL + j];
         GpuTensor gxb;
-        upload_to(xb, gxb);
+        brotensor::upload(xb, gxb);
         GpuTensor glogits;
         net.forward(gxb, glogits);
         Tensor h_logits = download_to_host(glogits);
@@ -86,7 +86,7 @@ void run_tx_batched(int B, uint64_t seed) {
 
     // Batched.
     GpuTensor gX_BD, glogits_BD, gvalues_B1;
-    upload_to(X_BD, gX_BD);
+    brotensor::upload(X_BD, gX_BD);
     net.forward_batched(gX_BD, glogits_BD, gvalues_B1);
     Tensor logits_batched = download_to_host(glogits_BD);
     Tensor values_batched = download_to_host(gvalues_B1);
@@ -125,7 +125,7 @@ BGA_PARITY_TEST(tx_batched_speedup_smoke) {
     SplitMix64 rng(0xBE7C7Bull ^ 0xFEEDull);
     Tensor X_BD = make_batch_inputs(B, rng);
     GpuTensor gX_BD;
-    upload_to(X_BD, gX_BD);
+    brotensor::upload(X_BD, gX_BD);
 
     // Warmup.
     {
@@ -153,7 +153,7 @@ BGA_PARITY_TEST(tx_batched_speedup_smoke) {
             for (int j = 0; j < obs::TOTAL; ++j)
                 xb.data[j] = X_BD.data[static_cast<size_t>(b) * obs::TOTAL + j];
             GpuTensor gxb;
-            upload_to(xb, gxb);
+            brotensor::upload(xb, gxb);
             GpuTensor glogits;
             net.forward(gxb, glogits);
         }

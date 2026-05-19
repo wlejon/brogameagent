@@ -1,6 +1,6 @@
 #pragma once
 
-#include "brogameagent/nn/tensor.h"
+#include <brotensor/tensor.h>
 
 #include <vector>
 
@@ -13,10 +13,10 @@ namespace brogameagent::learn {
 // softmax across j, target is one-hot at j=i. Loss = mean cross-entropy
 // over the batch. Produces gradients w.r.t. anchors and positives.
 
-float infonce_loss(const std::vector<nn::Tensor>& anchors,
-                   const std::vector<nn::Tensor>& positives,
-                   std::vector<nn::Tensor>& dAnchors,
-                   std::vector<nn::Tensor>& dPositives,
+float infonce_loss(const std::vector<brotensor::Tensor>& anchors,
+                   const std::vector<brotensor::Tensor>& positives,
+                   std::vector<brotensor::Tensor>& dAnchors,
+                   std::vector<brotensor::Tensor>& dPositives,
                    float temperature = 0.1f);
 
 } // namespace brogameagent::learn

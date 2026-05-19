@@ -1,10 +1,10 @@
 #pragma once
 
 #include "circuits.h"
-#include "device.h"
+#include <brotensor/device.h>
 #include "feedforward.h"
 #include "multi_head_attention.h"
-#include "tensor.h"
+#include <brotensor/tensor.h>
 
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/tensor.h>
@@ -30,7 +30,7 @@ namespace brogameagent::nn {
 //     a = LN1(x + MHA(x, mask))
 //     y = LN2(a + FF(a))
 //
-// GPU dispatch: composite layer. `to(Device)` recurses into children
+// GPU dispatch: composite layer. `to(brotensor::Device)` recurses into children
 // (mha, ff) and the two RowLN sublayers. The GPU forward/backward
 // overloads for RowLN loop the per-vector layernorm_*_gpu kernel over the
 // K rows — simpler than introducing a batched-LN primitive. Per-row
@@ -60,8 +60,8 @@ public:
 
     // X: (K, D), mask length K (1 valid / 0 invalid) or nullptr.
     // Y: (K, D); resized if mis-shaped.
-    void forward(const Tensor& X, const float* mask, Tensor& Y);
-    void backward(const Tensor& dY, Tensor& dX);
+    void forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& Y);
+    void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
 
 #ifdef BROTENSOR_HAS_GPU
     void forward(const brotensor::GpuTensor& X, const float* mask_dev,
@@ -78,8 +78,8 @@ public:
                                     int B, int K);
 #endif
 
-    Device device() const { return device_; }
-    void to(Device d);
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "TransformerBlock"; }
     int  num_params() const override;
@@ -106,18 +106,18 @@ public:
     // per row in forward. A batched LN kernel can replace this without
     // changing the public API.
     struct RowLN {
-        Tensor gamma, beta;
-        Tensor dGamma, dBeta;
-        Tensor vGamma, vBeta;
-        Tensor mGamma, mBeta;
-        Tensor vAGamma, vABeta;
+        brotensor::Tensor gamma, beta;
+        brotensor::Tensor dGamma, dBeta;
+        brotensor::Tensor vGamma, vBeta;
+        brotensor::Tensor mGamma, mBeta;
+        brotensor::Tensor vAGamma, vABeta;
         // Caches.
-        Tensor xhat;            // (K, D)
+        brotensor::Tensor xhat;            // (K, D)
         std::vector<float> mean;
         std::vector<float> rstd;
         float eps = 1e-5f;
 
-        Device device_ = Device::CPU;
+        brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
         brotensor::GpuTensor gamma_g, beta_g;
         brotensor::GpuTensor dGamma_g, dBeta_g;
@@ -128,13 +128,13 @@ public:
 #endif
 
         void init(int D, float eps);
-        void to(Device d);
+        void to(brotensor::Device d);
         void zero_grad();
         void sgd_step(float lr, float momentum);
         void adam_step(float lr, float beta1, float beta2, float eps, int step);
         // X, Y both (K, D).
-        void forward(const Tensor& X, Tensor& Y);
-        void backward(const Tensor& dY, Tensor& dX);
+        void forward(const brotensor::Tensor& X, brotensor::Tensor& Y);
+        void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
 #ifdef BROTENSOR_HAS_GPU
         void forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y);
         void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
@@ -159,16 +159,16 @@ private:
 
     // Caches for backward (named per pre-norm path; post-norm reuses them
     // with adjusted semantics — see implementation comments).
-    Tensor X_cache_;
-    Tensor LN1_out_;     // pre-norm: LN1(x); post-norm: x + MHA(x)
-    Tensor MHA_out_;     // MHA(LN1_out)        (pre-norm) or MHA(x) (post-norm)
-    Tensor A_cache_;     // x + MHA_out (pre)   or  LN1(x + MHA(x)) (post)
-    Tensor LN2_out_;     // LN2(A) (pre)        or  A (post)
-    Tensor FF_out_;      // FF(LN2_out) (pre)   or  FF(A) (post)
+    brotensor::Tensor X_cache_;
+    brotensor::Tensor LN1_out_;     // pre-norm: LN1(x); post-norm: x + MHA(x)
+    brotensor::Tensor MHA_out_;     // MHA(LN1_out)        (pre-norm) or MHA(x) (post-norm)
+    brotensor::Tensor A_cache_;     // x + MHA_out (pre)   or  LN1(x + MHA(x)) (post)
+    brotensor::Tensor LN2_out_;     // LN2(A) (pre)        or  A (post)
+    brotensor::Tensor FF_out_;      // FF(LN2_out) (pre)   or  FF(A) (post)
     std::vector<uint8_t> mask_cache_;
     bool has_mask_ = false;
 
-    Device device_ = Device::CPU;
+    brotensor::Device device_ = brotensor::Device::CPU;
 #ifdef BROTENSOR_HAS_GPU
     // GPU-side scratch tensors mirroring the host caches above. Only the
     // ones actually consulted by backward are kept around.

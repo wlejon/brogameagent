@@ -2,7 +2,7 @@
 
 #include "brogameagent/action_mask.h"
 #include "brogameagent/nn/heads.h"
-#include "brogameagent/nn/tensor.h"
+#include <brotensor/tensor.h>
 #include "brogameagent/observation.h"
 
 #include <array>

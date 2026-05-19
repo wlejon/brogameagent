@@ -3,7 +3,6 @@
 #ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
-#include <brogameagent/nn/gpu_glue.h>
 #endif
 
 #include <cassert>
@@ -27,7 +26,7 @@ void LayerNorm::init(int n, float eps) {
     for (int i = 0; i < n; ++i) { gamma_[i] = 1.0f; beta_[i] = 0.0f; }
 }
 
-void LayerNorm::forward(const Tensor& x, Tensor& y) {
+void LayerNorm::forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
     const int n = x.size();
     assert(gamma_.size() == n && y.size() == n);
     float sum = 0.0f, sum_sq = 0.0f;
@@ -45,7 +44,7 @@ void LayerNorm::forward(const Tensor& x, Tensor& y) {
     }
 }
 
-void LayerNorm::backward(const Tensor& dY, Tensor& dX) {
+void LayerNorm::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
     const int n = dY.size();
     const float nf = static_cast<float>(n);
 
@@ -73,7 +72,7 @@ void LayerNorm::backward(const Tensor& dY, Tensor& dX) {
 
 #ifdef BROTENSOR_HAS_GPU
 void LayerNorm::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     const int n = gamma_.size();
     if (xhat_g_.rows != n || xhat_g_.cols != 1) xhat_g_.resize(n, 1);
     brotensor::layernorm_forward_gpu(x, gamma_g_, beta_g_, y, xhat_g_,
@@ -81,52 +80,52 @@ void LayerNorm::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y) 
 }
 
 void LayerNorm::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     brotensor::layernorm_backward_gpu(dY, xhat_g_, gamma_g_, rstd_,
                                 dX, dGamma_g_, dBeta_g_);
 }
 #endif
 
-void LayerNorm::to(Device d) {
+void LayerNorm::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("LayerNorm");
+    brotensor::device_require_gpu("LayerNorm");
 #ifdef BROTENSOR_HAS_GPU
-    if (d == Device::GPU) {
+    if (d == brotensor::Device::GPU) {
         // Upload params/grads/velocities; allocate xhat mirror.
-        upload_to(gamma_, gamma_g_);
-        upload_to(beta_,  beta_g_);
-        upload_to(dGamma_, dGamma_g_);
-        upload_to(dBeta_,  dBeta_g_);
-        upload_to(vGamma_, vGamma_g_);
-        upload_to(vBeta_,  vBeta_g_);
-        upload_to(mGamma_, mGamma_g_);
-        upload_to(mBeta_,  mBeta_g_);
-        upload_to(vAGamma_, vAGamma_g_);
-        upload_to(vABeta_,  vABeta_g_);
+        brotensor::upload(gamma_, gamma_g_);
+        brotensor::upload(beta_,  beta_g_);
+        brotensor::upload(dGamma_, dGamma_g_);
+        brotensor::upload(dBeta_,  dBeta_g_);
+        brotensor::upload(vGamma_, vGamma_g_);
+        brotensor::upload(vBeta_,  vBeta_g_);
+        brotensor::upload(mGamma_, mGamma_g_);
+        brotensor::upload(mBeta_,  mBeta_g_);
+        brotensor::upload(vAGamma_, vAGamma_g_);
+        brotensor::upload(vABeta_,  vABeta_g_);
         const int n = gamma_.size();
         if (xhat_g_.rows != n || xhat_g_.cols != 1) xhat_g_.resize(n, 1);
-        device_ = Device::GPU;
+        device_ = brotensor::Device::GPU;
     } else {
         // Download back to host.
-        download_to(gamma_g_, gamma_);
-        download_to(beta_g_,  beta_);
-        download_to(dGamma_g_, dGamma_);
-        download_to(dBeta_g_,  dBeta_);
-        download_to(vGamma_g_, vGamma_);
-        download_to(vBeta_g_,  vBeta_);
-        download_to(mGamma_g_, mGamma_);
-        download_to(mBeta_g_,  mBeta_);
-        download_to(vAGamma_g_, vAGamma_);
-        download_to(vABeta_g_,  vABeta_);
+        brotensor::download(gamma_g_, gamma_);
+        brotensor::download(beta_g_,  beta_);
+        brotensor::download(dGamma_g_, dGamma_);
+        brotensor::download(dBeta_g_,  dBeta_);
+        brotensor::download(vGamma_g_, vGamma_);
+        brotensor::download(vBeta_g_,  vBeta_);
+        brotensor::download(mGamma_g_, mGamma_);
+        brotensor::download(mBeta_g_,  mBeta_);
+        brotensor::download(vAGamma_g_, vAGamma_);
+        brotensor::download(vABeta_g_,  vABeta_);
         brotensor::cuda_sync();
-        device_ = Device::CPU;
+        device_ = brotensor::Device::CPU;
     }
 #endif
 }
 
 void LayerNorm::zero_grad() {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         dGamma_g_.zero();
         dBeta_g_.zero();
         return;
@@ -138,7 +137,7 @@ void LayerNorm::zero_grad() {
 
 void LayerNorm::sgd_step(float lr, float momentum) {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         brotensor::sgd_step_gpu(gamma_g_, dGamma_g_, vGamma_g_, lr, momentum);
         brotensor::sgd_step_gpu(beta_g_,  dBeta_g_,  vBeta_g_,  lr, momentum);
         return;
@@ -155,7 +154,7 @@ void LayerNorm::sgd_step(float lr, float momentum) {
 
 void LayerNorm::adam_step(float lr, float beta1, float beta2, float eps, int step) {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         brotensor::adam_step_gpu(gamma_g_, dGamma_g_, mGamma_g_, vAGamma_g_,
                            lr, beta1, beta2, eps, step);
         brotensor::adam_step_gpu(beta_g_,  dBeta_g_,  mBeta_g_,  vABeta_g_,
@@ -169,12 +168,12 @@ void LayerNorm::adam_step(float lr, float beta1, float beta2, float eps, int ste
 
 void LayerNorm::save_to(std::vector<uint8_t>& out) const {
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         // Sync host shadow before serializing. const_cast is local to here:
-        // download writes into the (logically cached) host Tensor.
+        // download writes into the (logically cached) host brotensor::Tensor.
         auto* self = const_cast<LayerNorm*>(this);
-        download_to(gamma_g_, self->gamma_);
-        download_to(beta_g_,  self->beta_);
+        brotensor::download(gamma_g_, self->gamma_);
+        brotensor::download(beta_g_,  self->beta_);
         brotensor::cuda_sync();
     }
 #endif
@@ -194,18 +193,18 @@ void LayerNorm::load_from(const uint8_t* data, size_t& offset, size_t size) {
     vAGamma_.zero(); vABeta_.zero();
     xhat_.resize(n, 1);
 #ifdef BROTENSOR_HAS_GPU
-    if (device_ == Device::GPU) {
+    if (device_ == brotensor::Device::GPU) {
         // Re-upload after deserialization.
-        upload_to(gamma_, gamma_g_);
-        upload_to(beta_,  beta_g_);
-        upload_to(dGamma_, dGamma_g_);
-        upload_to(dBeta_,  dBeta_g_);
-        upload_to(vGamma_, vGamma_g_);
-        upload_to(vBeta_,  vBeta_g_);
-        upload_to(mGamma_, mGamma_g_);
-        upload_to(mBeta_,  mBeta_g_);
-        upload_to(vAGamma_, vAGamma_g_);
-        upload_to(vABeta_,  vABeta_g_);
+        brotensor::upload(gamma_, gamma_g_);
+        brotensor::upload(beta_,  beta_g_);
+        brotensor::upload(dGamma_, dGamma_g_);
+        brotensor::upload(dBeta_,  dBeta_g_);
+        brotensor::upload(vGamma_, vGamma_g_);
+        brotensor::upload(vBeta_,  vBeta_g_);
+        brotensor::upload(mGamma_, mGamma_g_);
+        brotensor::upload(mBeta_,  mBeta_g_);
+        brotensor::upload(vAGamma_, vAGamma_g_);
+        brotensor::upload(vABeta_,  vABeta_g_);
         if (xhat_g_.rows != n || xhat_g_.cols != 1) xhat_g_.resize(n, 1);
     }
 #endif

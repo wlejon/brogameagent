@@ -6,7 +6,7 @@
 
 namespace brogameagent::learn {
 
-using nn::Tensor;
+using brotensor::Tensor;
 
 float infonce_loss(const std::vector<Tensor>& anchors,
                    const std::vector<Tensor>& positives,

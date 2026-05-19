@@ -12,7 +12,7 @@
 
 #include <brogameagent/learn/generic_replay_buffer.h>
 #include <brogameagent/learn/generic_trainer.h>
-#include <brogameagent/nn/device.h>
+#include <brotensor/device.h>
 #include <brotensor/runtime.h>
 #include <brogameagent/nn/policy_value_net.h>
 
@@ -21,7 +21,7 @@
 #include <cstdlib>
 #include <vector>
 
-using brogameagent::nn::Device;
+using brotensor::Device;
 using brogameagent::nn::PolicyValueNet;
 using brogameagent::learn::GenericExItTrainer;
 using brogameagent::learn::GenericReplayBuffer;

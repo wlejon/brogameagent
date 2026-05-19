@@ -16,7 +16,7 @@
 #include <vector>
 
 using brogameagent::nn::SingleHeroNetTX;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brogameagent::nn::NormPlacement;
 namespace obs = brogameagent::observation;
 

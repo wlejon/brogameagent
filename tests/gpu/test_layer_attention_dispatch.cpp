@@ -6,9 +6,9 @@
 
 
 using namespace bga_parity;
-using brogameagent::nn::Device;
+using brotensor::Device;
 using brogameagent::nn::ScaledDotProductAttention;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 namespace {
@@ -48,7 +48,7 @@ void run_dispatch(int N, int D, uint64_t seed) {
     gpu_a.to(Device::GPU);
     BGA_CHECK(gpu_a.device() == Device::GPU);
     GpuTensor gX, gO, gdO, gdX;
-    upload_to(X, gX); upload_to(dO, gdO);
+    brotensor::upload(X, gX); brotensor::upload(dO, gdO);
     gO.resize(N, D); gdX.resize(N, D);
     gpu_a.zero_grad();
     gpu_a.forward(gX, nullptr, gO);

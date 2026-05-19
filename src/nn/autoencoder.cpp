@@ -25,21 +25,21 @@ void DeepSetsAutoencoder::init(const Config& cfg) {
     dEmbed_.resize(enc_.out_dim(), 1);
 }
 
-void DeepSetsAutoencoder::forward(const Tensor& x, Tensor& x_hat) {
+void DeepSetsAutoencoder::forward(const brotensor::Tensor& x, brotensor::Tensor& x_hat) {
     enc_.forward(x, embed_);
     dec_.forward(embed_, x_hat);
 }
 
-void DeepSetsAutoencoder::backward(const Tensor& dX_hat) {
+void DeepSetsAutoencoder::backward(const brotensor::Tensor& dX_hat) {
     dec_.backward(dX_hat, dEmbed_);
-    Tensor dX_obs = Tensor::vec(observation::TOTAL);
+    brotensor::Tensor dX_obs = brotensor::Tensor::vec(observation::TOTAL);
     enc_.backward(dEmbed_, dX_obs);
     // dX_obs discarded — no upstream consumer for the raw observation grad.
 }
 
 #ifdef BROTENSOR_HAS_GPU
 void DeepSetsAutoencoder::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& x_hat) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     if (embed_g_.rows != enc_.out_dim() || embed_g_.cols != 1)
         embed_g_.resize(enc_.out_dim(), 1);
     enc_.forward(x, embed_g_);
@@ -47,7 +47,7 @@ void DeepSetsAutoencoder::forward(const brotensor::GpuTensor& x, brotensor::GpuT
 }
 
 void DeepSetsAutoencoder::backward(const brotensor::GpuTensor& dX_hat) {
-    assert(device_ == Device::GPU);
+    assert(device_ == brotensor::Device::GPU);
     if (dEmbed_g_.rows != enc_.out_dim() || dEmbed_g_.cols != 1)
         dEmbed_g_.resize(enc_.out_dim(), 1);
     if (dX_obs_g_.rows != observation::TOTAL || dX_obs_g_.cols != 1)
@@ -58,13 +58,13 @@ void DeepSetsAutoencoder::backward(const brotensor::GpuTensor& dX_hat) {
 }
 #endif
 
-void DeepSetsAutoencoder::to(Device d) {
+void DeepSetsAutoencoder::to(brotensor::Device d) {
     if (d == device_) return;
-    device_require_cuda("DeepSetsAutoencoder");
+    brotensor::device_require_gpu("DeepSetsAutoencoder");
     enc_.to(d);
     dec_.to(d);
 #ifdef BROTENSOR_HAS_GPU
-    if (d == Device::GPU) {
+    if (d == brotensor::Device::GPU) {
         embed_g_.resize(enc_.out_dim(), 1);
         dEmbed_g_.resize(enc_.out_dim(), 1);
         dX_obs_g_.resize(observation::TOTAL, 1);
@@ -123,7 +123,7 @@ std::vector<uint8_t> DeepSetsAutoencoder::save_encoder() const {
 
 // ─── reconstruction_loss ──────────────────────────────────────────────────
 
-float reconstruction_loss(const Tensor& x, const Tensor& x_hat, Tensor& dX_hat) {
+float reconstruction_loss(const brotensor::Tensor& x, const brotensor::Tensor& x_hat, brotensor::Tensor& dX_hat) {
     assert(x.size() == observation::TOTAL);
     assert(x_hat.size() == observation::TOTAL);
     assert(dX_hat.size() == observation::TOTAL);

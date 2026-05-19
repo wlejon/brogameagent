@@ -3,12 +3,12 @@
 #include "parity_helpers.h"
 
 #include <brotensor/ops.h>
-#include <brogameagent/nn/tensor.h>
+#include <brotensor/tensor.h>
 
 #include <vector>
 
 using namespace bga_parity;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 namespace {
@@ -36,7 +36,7 @@ void run_concat(const std::vector<int>& sizes, uint64_t seed) {
     std::vector<GpuTensor> g_parts(sizes.size());
     std::vector<const GpuTensor*> g_parts_ptr;
     for (size_t i = 0; i < sizes.size(); ++i) {
-        upload_to(parts_cpu[i], g_parts[i]);
+        brotensor::upload(parts_cpu[i], g_parts[i]);
         g_parts_ptr.push_back(&g_parts[i]);
     }
     GpuTensor gcat;

@@ -24,7 +24,7 @@
 #include <vector>
 
 using namespace bga_parity;
-using brogameagent::nn::Device;
+using brotensor::Device;
 using brogameagent::nn::SingleHeroNetTX;
 using brogameagent::learn::DirectBatchedNetBackend;
 using brogameagent::learn::ServerBackend;

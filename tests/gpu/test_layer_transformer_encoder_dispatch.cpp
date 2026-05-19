@@ -6,10 +6,10 @@
 
 
 using namespace bga_parity;
-using brogameagent::nn::Device;
+using brotensor::Device;
 using brogameagent::nn::TransformerEncoder;
 using brogameagent::nn::NormPlacement;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 namespace {
@@ -53,7 +53,7 @@ void run_dispatch(int K, int D, int H, int Df, int n_layers,
     gpu_e.to(Device::GPU);
     BGA_CHECK(gpu_e.device() == Device::GPU);
     GpuTensor gX, gY, gdY, gdX;
-    upload_to(X, gX); upload_to(dY, gdY);
+    brotensor::upload(X, gX); brotensor::upload(dY, gdY);
     gY.resize(K, D); gdX.resize(K, D);
     gpu_e.zero_grad();
     gpu_e.forward(gX, nullptr, gY);

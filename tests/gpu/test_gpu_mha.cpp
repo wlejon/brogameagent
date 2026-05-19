@@ -7,7 +7,7 @@
 
 using namespace bga_parity;
 using brogameagent::nn::MultiHeadAttention;
-using brogameagent::nn::Tensor;
+using brotensor::Tensor;
 using brotensor::GpuTensor;
 
 namespace {
@@ -47,8 +47,8 @@ void run_mha(int K, int D, int H, uint64_t seed, const std::vector<float>* mask)
 
     // GPU path.
     GpuTensor gX, gWq, gWk, gWv, gWo;
-    upload_to(X, gX);
-    upload_to(Wq, gWq); upload_to(Wk, gWk); upload_to(Wv, gWv); upload_to(Wo, gWo);
+    brotensor::upload(X, gX);
+    brotensor::upload(Wq, gWq); brotensor::upload(Wk, gWk); brotensor::upload(Wv, gWv); brotensor::upload(Wo, gWo);
 
     GpuTensor gQh, gKh, gVh, gAttnh, gYconcat, gO;
     const int dh = D / H;
@@ -64,10 +64,10 @@ void run_mha(int K, int D, int H, uint64_t seed, const std::vector<float>* mask)
     Tensor O_gpu = download_to_host(gO);
 
     GpuTensor gdO, gdX, gdWq, gdWk, gdWv, gdWo;
-    upload_to(dO, gdO);
+    brotensor::upload(dO, gdO);
     gdX.resize(K, D);
-    upload_to(dWq_init, gdWq); upload_to(dWk_init, gdWk);
-    upload_to(dWv_init, gdWv); upload_to(dWo_init, gdWo);
+    brotensor::upload(dWq_init, gdWq); brotensor::upload(dWk_init, gdWk);
+    brotensor::upload(dWv_init, gdWv); brotensor::upload(dWo_init, gdWo);
 
     brotensor::mha_backward_gpu(
         gdO, gX, gQh, gKh, gVh, gAttnh, gYconcat,
