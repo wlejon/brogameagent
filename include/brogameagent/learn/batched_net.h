@@ -2,16 +2,14 @@
 
 // BatchedNet
 // ──────────
-// Thin abstract interface for GPU-resident nets that can serve a batched
-// inference forward pass. The BatchedInferenceServer and ServerBackend depend
-// only on this interface, so any net that implements it (PolicyValueNet,
-// SingleHeroNetTX, future variants) can be plugged in.
+// Thin abstract interface for nets that can serve a batched inference forward
+// pass. BatchedInferenceServer and ServerBackend depend only on this
+// interface, so any net that implements it (PolicyValueNet, SingleHeroNetTX,
+// future variants) can be plugged in.
 //
-// GPU-only: the interface is gated behind BROTENSOR_HAS_GPU because GpuTensor is
-// only defined in CUDA builds. Direct CPU dispatch goes through the
-// per-net forward(...) APIs as before.
-
-#ifdef BROTENSOR_HAS_GPU
+// Device-neutral: brotensor::Tensor carries its own Device tag and ops
+// dispatch at runtime, so a BatchedNet runs wherever its parameters live.
+// `device()` reports that so the server can stage inputs on the same backend.
 
 #include <brotensor/tensor.h>
 
@@ -27,6 +25,10 @@ public:
     // Width of one logits row. The server uses this to size per-call results.
     virtual int logits_dim() const = 0;
 
+    // Device the net's parameters currently live on. The server stages its
+    // (B, *) input/output tensors on this device before calling forward.
+    virtual brotensor::Device device() const = 0;
+
     // Run a batched forward.
     //   X_BD       : (B, input_dim())                observations, row-major
     //   logits_BL  : (B, logits_dim())  — resized to fit if mis-shaped
@@ -35,11 +37,9 @@ public:
     // Implementations must produce results equivalent (within floating-point
     // tolerance) to running B independent single-sample forward passes on the
     // same inputs.
-    virtual void forward_batched(const brotensor::GpuTensor& X_BD,
-                                 brotensor::GpuTensor& logits_BL,
-                                 brotensor::GpuTensor& values_B1) = 0;
+    virtual void forward_batched(const brotensor::Tensor& X_BD,
+                                 brotensor::Tensor& logits_BL,
+                                 brotensor::Tensor& values_B1) = 0;
 };
 
 } // namespace brogameagent::learn
-
-#endif // BROTENSOR_HAS_GPU

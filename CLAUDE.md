@@ -19,27 +19,30 @@ tools/               replay_query, mcts_bench, nn_* CLIs
 examples/            tutorial-grade demos
 ```
 
-The `nn/` module owns higher-level circuit structure (parameter
-mirrors, SGD+momentum, serialization, `Device::to()` migration). The
-underlying tensor type and per-op math live in
-[brotensor](../brotensor) — `brotensor::Tensor`, `brotensor::GpuTensor`,
-and the `*_cpu` / `*_gpu` op surfaces. **Do not reintroduce CPU tensor
-or op code into brogameagent.**
+The `nn/` module owns higher-level circuit structure (SGD/Adam updates,
+serialization, `to(Device)` migration). The underlying tensor type and
+per-op math live in [brotensor](../brotensor): one `brotensor::Tensor`
+that carries a runtime `Device` tag, and a single device-neutral op
+surface (`brotensor::linear_forward(...)`, etc.) that dispatches to the
+CPU/CUDA/Metal backend by its operands' device. **Do not reintroduce
+tensor storage or op math into brogameagent** — a missing CPU op gets
+added to brotensor's CPU backend, not hand-rolled here.
 
 ## Build
 
 ```sh
-# CPU default — brotensor links in CPU-only.
+# CPU default — brotensor's CPU backend is always built in.
 cmake -S . -B build && cmake --build build --config Release
 
-# GPU dispatch (mutually exclusive):
+# Add a GPU backend (brotensor compiles it as an extra self-registering
+# static lib; the dispatcher routes by tensor device tag at runtime):
 cmake -S . -B build -DBROGAMEAGENT_WITH_CUDA=ON
 cmake -S . -B build -DBROGAMEAGENT_WITH_METAL=ON
 ```
 
 `brotensor` is an unconditional `add_subdirectory` dependency at `../brotensor`. `bromath` (header-only) is also a sibling at `../bromath`. Both have first-loader-wins guards so they're safe inside a parent project that pulls in multiple siblings.
 
-Defines that propagate from brotensor: `BROTENSOR_HAS_CUDA` / `BROTENSOR_HAS_METAL` / `BROTENSOR_HAS_GPU`. Use these to gate any GPU-only code.
+Defines that propagate from brotensor: `BROTENSOR_HAS_CUDA` / `BROTENSOR_HAS_METAL` / `BROTENSOR_HAS_GPU`. Code rarely needs them — the unified `Tensor` and op surface compile the same regardless of backend; reach for them only to gate a test path that genuinely needs a GPU device present.
 
 ## Tests
 
@@ -53,8 +56,9 @@ build/Release/brogameagent_test.exe
 
 ## Conventions
 
-- **Tensor + ops are external.** Any new layer should use `brotensor::Tensor` (host) and `brotensor::GpuTensor` (device). For CPU ops call `brotensor::*_cpu(...)`; for GPU call `brotensor::*_gpu(...)`. Don't add `using namespace brogameagent::nn { using brotensor::… }` shims — fully-qualified call sites are the convention since the rename.
-- **Device migration pattern.** Parameter-bearing layers hold `Device device_` (from `<brotensor/device.h>`), a host `Tensor` for each parameter, and an optional `GpuTensor` mirror gated on `BROTENSOR_HAS_GPU`. `to(Device::GPU)` uploads, `to(Device::CPU)` downloads. CPU-only builds throw at `to(GPU)` via `brotensor::device_require_gpu(layer_name)`.
+- **Tensor + ops are external.** A layer holds `brotensor::Tensor` members and calls the device-neutral ops (`brotensor::linear_forward(...)`, `brotensor::layernorm_forward(...)`, …); the op dispatches on its operands' `Device` tag. There is no separate host/device tensor type and no `_cpu`/`_gpu` op suffix. Fully-qualified call sites are the convention.
+- **Device migration pattern.** A parameter-bearing layer keeps one `brotensor::Tensor` per parameter/grad/optimizer-buffer and a `brotensor::Device device_` field that caches where they live. `to(Device d)` does `member_ = member_.to(d)` for every owned tensor (and recurses into sub-layers), then sets `device_`. `Tensor::to()` to an unregistered backend throws on its own — no separate guard needed.
+- **`resize()` does not zero.** `brotensor::Tensor::resize()` leaves contents undefined; after resizing a gradient / velocity / Adam-moment buffer in `init()`/`load_from()`, call `.zero()` explicitly. `Tensor::mat`/`vec` factories are zero-filled.
 - **Autograd-free.** Every circuit owns its own `forward` and `backward`. A net's `backward()` calls them in reverse order. No tape, no graph. Keep gradients hand-readable.
 - **Factored heads.** Policies are factored (`MoveDir × AttackSlot × AbilitySlot`), not flat-joint. Aligns with `action_mask::build`. Don't collapse to a flat softmax.
 - **Mask everywhere.** Masked softmax + cross-entropy zero out illegal slots in fwd and bwd; trainer never post-filters.

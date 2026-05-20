@@ -3,37 +3,35 @@
 #include "parity_helpers.h"
 
 #include <brotensor/ops.h>
-#include <brotensor/ops_cpu.h>
 
 using namespace bga_parity;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
+using brotensor::Device;
 
 namespace {
 
 void run_softmax(int n, uint64_t seed, const std::vector<float>* mask) {
     SplitMix64 rng(seed);
-    Tensor logits(n, 1), dProbs(n, 1);
+    Tensor logits = Tensor::vec(n), dProbs = Tensor::vec(n);
     fill_random(logits, rng);
     fill_random(dProbs, rng);
 
-    Tensor probs_cpu(n, 1);
-    brotensor::softmax_forward_cpu(logits, probs_cpu, mask ? mask->data() : nullptr);
-    Tensor dLogits_cpu(n, 1);
-    brotensor::softmax_backward_cpu(probs_cpu, dProbs, dLogits_cpu);
+    Tensor probs_cpu = Tensor::vec(n);
+    brotensor::softmax_forward(logits, probs_cpu, mask ? mask->data() : nullptr);
+    Tensor dLogits_cpu = Tensor::vec(n);
+    brotensor::softmax_backward(probs_cpu, dProbs, dLogits_cpu);
 
     // GPU.
-    GpuTensor glogits, gprobs, gdProbs, gdLogits;
-    brotensor::upload(logits, glogits);
-    brotensor::upload(dProbs, gdProbs);
-    gprobs.resize(n, 1);
-    gdLogits.resize(n, 1);
+    Tensor glogits = logits.to(Device::CUDA);
+    Tensor gdProbs = dProbs.to(Device::CUDA);
+    Tensor gprobs = Tensor::zeros_on(Device::CUDA, n, 1);
+    Tensor gdLogits = Tensor::zeros_on(Device::CUDA, n, 1);
 
-    auto d_mask_buf = upload_mask(mask);
-    float* d_mask = d_mask_buf.device_ptr();
-    brotensor::softmax_forward_gpu(glogits, gprobs, d_mask);
+    Tensor d_mask_buf = upload_mask(mask);
+    const float* d_mask = static_cast<const float*>(d_mask_buf.data);
+    brotensor::softmax_forward(glogits, gprobs, d_mask);
     Tensor probs_gpu = download_to_host(gprobs);
-    brotensor::softmax_backward_gpu(gprobs, gdProbs, gdLogits);
+    brotensor::softmax_backward(gprobs, gdProbs, gdLogits);
     Tensor dLogits_gpu = download_to_host(gdLogits);
 
     compare_tensors(probs_cpu, probs_gpu, "softmax_forward");
@@ -45,9 +43,9 @@ void run_softmax(int n, uint64_t seed, const std::vector<float>* mask) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) {
             if ((*mask)[i] < 0.5f) {
-                BGA_CHECK(probs_gpu.data[i] == 0.0f);
+                BGA_CHECK(probs_gpu[i] == 0.0f);
             } else {
-                s += probs_gpu.data[i];
+                s += probs_gpu[i];
             }
         }
         BGA_CHECK(std::fabs(s - 1.0f) < 1e-5f);

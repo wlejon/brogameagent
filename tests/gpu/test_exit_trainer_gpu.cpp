@@ -1,18 +1,17 @@
 // GPU smoke test for GenericExItTrainer.
 //
 // Trains a tiny PolicyValueNet (small trunk, small action space) on a fixed
-// supervised mapping for 20 steps on Device::GPU. Verifies:
+// supervised mapping for 20 steps on Device::CUDA. Verifies:
 //   - the trainer accepts the GPU device flag;
 //   - per-step loss values are finite;
 //   - the loss after N steps is strictly less than the initial loss.
 //
 // This is the "milestone" test the task spec calls for. It exercises the
-// upload → forward → softmax_xent_fused_gpu (per-head) → backward → sgd_step
+// upload -> forward -> softmax_xent_fused (per-head) -> backward -> sgd_step
 // rhythm end-to-end without depending on any sim/world code.
 
 #include <brogameagent/learn/generic_replay_buffer.h>
 #include <brogameagent/learn/generic_trainer.h>
-#include <brotensor/device.h>
 #include <brotensor/runtime.h>
 #include <brogameagent/nn/policy_value_net.h>
 
@@ -45,7 +44,7 @@ void push(GenericReplayBuffer& buf,
 }  // namespace
 
 int main() {
-    brotensor::cuda_init();
+    brotensor::init();
 
     // Two-head net (head sizes 3, 4). Small trunk so the test is fast.
     PolicyValueNet net;
@@ -56,7 +55,7 @@ int main() {
     cfg.head_sizes = {3, 4};
     cfg.seed = 0xABCDEF42ULL;
     net.init(cfg);
-    net.to(Device::GPU);
+    net.to(Device::CUDA);
 
     GenericReplayBuffer buf(16);
     push(buf, {1, 0, 0, 0}, 0, 0,  0.5f);
@@ -70,7 +69,7 @@ int main() {
     tcfg.lr = 0.05f;
     tcfg.momentum = 0.9f;
     tcfg.publish_every = 0;
-    tcfg.device = Device::GPU;
+    tcfg.device = Device::CUDA;
     tr.set_net(&net);
     tr.set_buffer(&buf);
     tr.set_config(tcfg);

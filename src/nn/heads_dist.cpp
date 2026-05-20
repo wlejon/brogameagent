@@ -1,5 +1,7 @@
 #include "brogameagent/nn/heads_dist.h"
 
+#include <brotensor/ops.h>
+
 #include <cassert>
 #include <cmath>
 
@@ -17,9 +19,9 @@ void DistributionalValueHead::init(int embed_dim, int hidden, int K, uint64_t& r
 void DistributionalValueHead::forward(const brotensor::Tensor& embed, brotensor::Tensor& probs, float& value) {
     assert(probs.size() == K_);
     fc1_.forward(embed, h_raw_);
-    brotensor::relu_forward_cpu(h_raw_, h_act_);
+    brotensor::relu_forward(h_raw_, h_act_);
     fc2_.forward(h_act_, logits_);
-    brotensor::softmax_forward_cpu(logits_, probs, nullptr);
+    brotensor::softmax_forward(logits_, probs, nullptr);
     float v = 0.0f;
     for (int i = 0; i < K_; ++i) v += probs[i] * support(i);
     value = v;
@@ -39,7 +41,7 @@ float DistributionalValueHead::xent_backward(const brotensor::Tensor& probs, con
     brotensor::Tensor dHact = brotensor::Tensor::vec(h_act_.size());
     fc2_.backward(dLogits, dHact);
     brotensor::Tensor dHraw = brotensor::Tensor::vec(h_raw_.size());
-    brotensor::relu_backward_cpu(h_raw_, dHact, dHraw);
+    brotensor::relu_backward(h_raw_, dHact, dHraw);
     fc1_.backward(dHraw, dEmbed);
     return loss;
 }

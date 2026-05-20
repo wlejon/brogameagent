@@ -1,13 +1,14 @@
 // nn_pretrain_ae_gpu — GPU autoencoder pretraining for DeepSetsEncoder.
 //
-// Mirrors the shape of nn_pretrain_ae.cpp but trains on Device::GPU end-to-end:
+// Mirrors the shape of nn_pretrain_ae.cpp but trains on the default device
+// (best available — CUDA/Metal/CPU) end-to-end:
 //   1. Generate observations via short MCTS duels (same as the CPU tool).
-//   2. Construct DeepSetsAutoencoder, call to(Device::GPU) once.
+//   2. Construct DeepSetsAutoencoder, call to(default_device()) once.
 //   3. Per step: upload observation → forward → mse_vec_forward → mse_vec_backward
-//      → backward → sgd_step (all on GPU).
+//      → backward → sgd_step (all on the chosen device).
 //   4. Periodically save checkpoint via save() (sync from device).
 //
-// Loss semantics differ from the CPU tool: this trainer uses mse_vec_*_gpu
+// Loss semantics differ from the CPU tool: this trainer uses mse_vec_*
 // (plain mean-of-squared-diffs over the whole reconstruction, no masking),
 // matching the task spec. The CPU tool uses a masked 0.5*d^2 reconstruction
 // loss; both are valid pretraining objectives.
@@ -19,7 +20,6 @@
 #include "brogameagent/nn/autoencoder.h"
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
-#include <brotensor/tensor.h>
 #include <brotensor/tensor.h>
 #include "brogameagent/observation.h"
 #include "brogameagent/world.h"
@@ -187,7 +187,8 @@ int main(int argc, char** argv) {
     Args a;
     if (!parse(argc, argv, a)) return 2;
 
-    brotensor::cuda_init();
+    brotensor::init();
+    const brotensor::Device dev = brotensor::default_device();
 
     // ─── Gather observations ───────────────────────────────────────────────
     std::printf("phase\tstep\tdetail\n");
@@ -211,7 +212,7 @@ int main(int argc, char** argv) {
     std::mt19937_64 rng(a.seed ^ 0xDEADBEEFULL);
     std::shuffle(indices.begin(), indices.end(), rng);
 
-    // ─── Init AE on GPU ────────────────────────────────────────────────────
+    // ─── Init AE on the chosen device ──────────────────────────────────────
     nn::DeepSetsAutoencoder ae;
     nn::DeepSetsAutoencoder::Config cfg;
     cfg.enc.embed_dim = a.embed_dim;
@@ -219,14 +220,12 @@ int main(int argc, char** argv) {
     cfg.dec_hidden    = a.dec_hidden;
     cfg.seed          = a.seed ^ 0xC0FFEE00ULL;
     ae.init(cfg);
-    ae.to(brotensor::Device::GPU);
-    std::printf("net\tparams\t%d\tdevice=GPU\n", ae.num_params());
+    ae.to(dev);
+    std::printf("net\tparams\t%d\tdevice=%s\n",
+                ae.num_params(), brotensor::device_name(dev));
 
     brotensor::Tensor x_host = brotensor::Tensor::vec(observation::TOTAL);
-    brotensor::GpuTensor x_g(observation::TOTAL, 1);
-    brotensor::GpuTensor x_hat_g(observation::TOTAL, 1);
-    brotensor::GpuTensor target_g(observation::TOTAL, 1);
-    brotensor::GpuTensor dXh_g(observation::TOTAL, 1);
+    brotensor::Tensor x_g, x_hat_g, target_g, dXh_g;
 
     // ─── Train ─────────────────────────────────────────────────────────────
     std::printf("train\tepoch\tloss\n");
@@ -239,15 +238,15 @@ int main(int argc, char** argv) {
 
         for (int idx : indices) {
             to_tensor(all[idx], x_host);
-            brotensor::upload(x_host, x_g);
-            // target = x (autoencoder reconstruction). Reuse upload to a
-            // separate buffer so the backward kernel can read both.
-            brotensor::upload(x_host, target_g);
+            x_g = x_host.to(dev);
+            // target = x (autoencoder reconstruction). Copy to a separate
+            // buffer so the backward op can read both.
+            target_g = x_host.to(dev);
 
             ae.zero_grad();
             ae.forward(x_g, x_hat_g);
-            const float loss = brotensor::mse_vec_forward_gpu(x_hat_g, target_g);
-            brotensor::mse_vec_backward_gpu(x_hat_g, target_g, dXh_g);
+            const float loss = brotensor::mse_vec_forward(x_hat_g, target_g);
+            brotensor::mse_vec_backward(x_hat_g, target_g, dXh_g);
             ae.backward(dXh_g);
             ae.sgd_step(a.lr, a.momentum);
 
@@ -262,7 +261,7 @@ int main(int argc, char** argv) {
             ? static_cast<float>(ep_loss_sum / ep_samples) : 0.0f;
         std::printf("epoch\t%d\tloss=%.6f\n", ep + 1, train_loss);
     }
-    brotensor::cuda_sync();
+    brotensor::sync_all();
     auto tt1 = std::chrono::steady_clock::now();
     long train_ms = std::chrono::duration_cast<std::chrono::milliseconds>(tt1-tt0).count();
     std::printf("train\tdone\ttrain_ms=%ld\n", train_ms);

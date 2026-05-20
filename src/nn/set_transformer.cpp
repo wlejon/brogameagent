@@ -1,5 +1,7 @@
 #include "brogameagent/nn/set_transformer.h"
 
+#include <brotensor/ops.h>
+
 #include <cassert>
 #include <cstring>
 
@@ -105,7 +107,7 @@ void SetTransformerEncoder::forward(const brotensor::Tensor& x, brotensor::Tenso
     copy_slice(x, 0, observation::SELF_FEATURES, self_in);
     brotensor::Tensor tmp_h = brotensor::Tensor::vec(cfg_.hidden);
     self_fc1_.forward(self_in, tmp_h);
-    brotensor::relu_forward_cpu(tmp_h, self_h_);
+    brotensor::relu_forward(tmp_h, self_h_);
     self_fc2_.forward(self_h_, self_z_);
 
     // Enemy stream: per-slot Linear+ReLU into (K, D) matrix; attention; per-row LN; masked mean pool.

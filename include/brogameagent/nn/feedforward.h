@@ -1,12 +1,7 @@
 #pragma once
 
 #include "circuits.h"
-#include <brotensor/device.h>
 #include <brotensor/tensor.h>
-
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/tensor.h>
-#endif
 
 #include <cstdint>
 #include <vector>
@@ -23,23 +18,15 @@ namespace brogameagent::nn {
 // Activation is ReLU (deliberately simple; GELU can come later without
 // touching call sites).
 //
-// GPU dispatch: device_ tracks where parameters live. `to(brotensor::Device)` migrates
-// host↔device. CPU forward/backward overloads are unchanged. The GPU path
-// reuses the per-vector linear_*_gpu kernels by walking the K rows of the
-// (K, D) input via GpuTensor::view() — simpler than introducing a batched
-// linear primitive, and lets us keep this layer composed of existing ops.
+// Device: brotensor::Tensor carries its own Device tag and the brotensor
+// batched linear / relu ops dispatch on it at runtime, so there is a single
+// forward/backward that runs on whatever device the parameters live on.
+// `to(brotensor::Device)` migrates every owned tensor; `device()` reports
+// where they currently are.
 
 class FeedForward : public ICircuit {
 public:
     FeedForward() = default;
-
-    FeedForward(const FeedForward& o) { copy_host_(o); }
-    FeedForward& operator=(const FeedForward& o) {
-        if (this != &o) copy_host_(o);
-        return *this;
-    }
-    FeedForward(FeedForward&&) = default;
-    FeedForward& operator=(FeedForward&&) = default;
 
     void init(int dim, int d_ff, uint64_t& rng_state);
 
@@ -49,17 +36,6 @@ public:
     // X: (K, D); Y: (K, D); resized if mis-shaped.
     void forward(const brotensor::Tensor& X, brotensor::Tensor& Y);
     void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
-
-#ifdef BROTENSOR_HAS_GPU
-    void forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y);
-    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
-
-    // Inference-only batched forward. Input/output (R, D); FF is purely
-    // position-wise so we just call batched Linear→ReLU→Linear over R rows
-    // in three launches. Allocates two scratch (R, d_ff) tensors per call.
-    void forward_inference_batched(const brotensor::GpuTensor& X_RD,
-                                    brotensor::GpuTensor& Y_RD);
-#endif
 
     brotensor::Device device() const { return device_; }
     void to(brotensor::Device d);
@@ -80,19 +56,6 @@ public:
     brotensor::Tensor& dW2() { return dW2_; } brotensor::Tensor& dB2() { return dB2_; }
 
 private:
-    void copy_host_(const FeedForward& o) {
-        d_ = o.d_; df_ = o.df_;
-        W1_ = o.W1_; b1_ = o.b1_; W2_ = o.W2_; b2_ = o.b2_;
-        dW1_ = o.dW1_; dB1_ = o.dB1_; dW2_ = o.dW2_; dB2_ = o.dB2_;
-        vW1_ = o.vW1_; vB1_ = o.vB1_; vW2_ = o.vW2_; vB2_ = o.vB2_;
-        mW1_ = o.mW1_; mB1_ = o.mB1_; mW2_ = o.mW2_; mB2_ = o.mB2_;
-        vAW1_ = o.vAW1_; vAB1_ = o.vAB1_; vAW2_ = o.vAW2_; vAB2_ = o.vAB2_;
-        X_cache_ = o.X_cache_;
-        H_pre_ = o.H_pre_;
-        H_post_ = o.H_post_;
-        device_ = brotensor::Device::CPU;
-    }
-
     int d_  = 0;
     int df_ = 0;
 
@@ -108,17 +71,6 @@ private:
     brotensor::Tensor H_post_;    // (K, d_ff) post-ReLU
 
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    brotensor::GpuTensor W1_g_, b1_g_, W2_g_, b2_g_;
-    brotensor::GpuTensor dW1_g_, dB1_g_, dW2_g_, dB2_g_;
-    brotensor::GpuTensor vW1_g_, vB1_g_, vW2_g_, vB2_g_;
-    brotensor::GpuTensor mW1_g_, mB1_g_, mW2_g_, mB2_g_;
-    brotensor::GpuTensor vAW1_g_, vAB1_g_, vAW2_g_, vAB2_g_;
-    // Forward caches mirroring the (K, D)/(K, df) host caches.
-    brotensor::GpuTensor X_cache_g_;
-    brotensor::GpuTensor H_pre_g_;
-    brotensor::GpuTensor H_post_g_;
-#endif
 };
 
 } // namespace brogameagent::nn

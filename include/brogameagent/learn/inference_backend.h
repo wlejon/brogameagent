@@ -6,8 +6,7 @@
 // MCTS leaf evaluation calls evaluate() once per expansion. Two implementations:
 //
 //   DirectBackend  — wraps a PolicyValueNet*; calls forward() synchronously.
-//                    Always available (CPU-build-safe).
-//   ServerBackend  — submits to a BatchedInferenceServer. CUDA only.
+//   ServerBackend  — submits to a BatchedInferenceServer.
 //
 // The interface lets MCTS integrate either path with no other changes:
 //   GenericMcts holds prior_fn / value_fn callables already; build them on
@@ -21,10 +20,8 @@ namespace brogameagent::nn { class PolicyValueNet; }
 
 namespace brogameagent::learn {
 
-#ifdef BROTENSOR_HAS_GPU
 class BatchedInferenceServer;
 class BatchedNet;
-#endif
 
 struct EvalResult {
     std::vector<float> logits;
@@ -56,10 +53,9 @@ private:
     brogameagent::nn::PolicyValueNet* net_;
 };
 
-#ifdef BROTENSOR_HAS_GPU
-// Synchronous direct call into any GPU-resident BatchedNet. Uses the
-// forward_batched path with B = 1. Useful when the net implementing
-// BatchedNet isn't a PolicyValueNet (e.g. SingleHeroNetTX).
+// Synchronous direct call into any BatchedNet. Uses the forward_batched path
+// with B = 1. Useful when the net implementing BatchedNet isn't a
+// PolicyValueNet (e.g. SingleHeroNetTX).
 class DirectBatchedNetBackend : public IInferenceBackend {
 public:
     explicit DirectBatchedNetBackend(BatchedNet* net);
@@ -70,9 +66,7 @@ public:
 private:
     BatchedNet* net_;
 };
-#endif
 
-#ifdef BROTENSOR_HAS_GPU
 // Submits requests to a BatchedInferenceServer. The caller owns the server.
 //
 // The server is net-agnostic — it talks to any BatchedNet under the hood —
@@ -95,6 +89,5 @@ private:
     int num_actions_;
     int in_dim_;
 };
-#endif
 
 } // namespace brogameagent::learn

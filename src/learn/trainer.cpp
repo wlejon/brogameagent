@@ -1,6 +1,6 @@
 #include "brogameagent/learn/trainer.h"
 #include "brogameagent/nn/heads.h"
-#include <brotensor/ops_cpu.h>
+#include <brotensor/ops.h>
 
 #include <cassert>
 #include <cstring>
@@ -43,7 +43,7 @@ TrainStep ExItTrainer::step() {
 
         // Value gradient.
         float dv = 0.0f;
-        const float lv = brotensor::mse_scalar_cpu(v_pred, sit.value_target, dv);
+        const float lv = brotensor::mse_scalar(v_pred, sit.value_target, dv);
         tot_loss_v += lv;
 
         // Policy gradient: combined factored softmax-xent.

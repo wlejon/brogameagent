@@ -1,8 +1,8 @@
 // nn_exit_gpu — GPU ExIt training driver for PolicyValueNet via
 // GenericExItTrainer.
 //
-// Mirrors the spirit of tools/nn_exit.cpp but runs end-to-end on Device::GPU
-// using the new GPU code path through GenericExItTrainer. The CPU tool
+// Mirrors the spirit of tools/nn_exit.cpp but runs end-to-end on the default
+// device (best available) through GenericExItTrainer. The CPU tool
 // trains a SingleHeroNet via ExItTrainer; this tool drives the *generic*
 // trainer (which is the one we just retrofitted for GPU), so the net it
 // trains is PolicyValueNet rather than SingleHeroNet. The training data
@@ -18,8 +18,8 @@
 
 #include "brogameagent/learn/generic_replay_buffer.h"
 #include "brogameagent/learn/generic_trainer.h"
-#include <brotensor/device.h>
 #include <brotensor/runtime.h>
+#include <brotensor/tensor.h>
 #include "brogameagent/nn/policy_value_net.h"
 
 #include <chrono>
@@ -52,7 +52,7 @@ struct Args {
 void print_help() {
     std::printf(
         "nn_exit_gpu — GPU training driver for PolicyValueNet via\n"
-        "GenericExItTrainer (Device::GPU).\n"
+        "GenericExItTrainer (runs on the best available device).\n"
         "\n"
         "Options:\n"
         "  --steps N         training steps (default 500)\n"
@@ -155,7 +155,8 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    brotensor::cuda_init();
+    brotensor::init();
+    const brotensor::Device dev = brotensor::default_device();
 
     int total_actions = 0;
     for (int h : a.head_sizes) total_actions += h;
@@ -169,9 +170,10 @@ int main(int argc, char** argv) {
     cfg.head_sizes = a.head_sizes;
     cfg.seed = a.seed ^ 0xA1A2A3A4ULL;
     net.init(cfg);
-    net.to(brotensor::Device::GPU);
+    net.to(dev);
 
-    std::printf("net\tparams\t%d\tdevice=GPU\n", net.num_params());
+    std::printf("net\tparams\t%d\tdevice=%s\n",
+                net.num_params(), brotensor::device_name(dev));
 
     // Synthesize supervised data (mirrors the "load training data" step the
     // CPU tool does, without pulling in the world/MCTS pipeline).
@@ -186,7 +188,7 @@ int main(int argc, char** argv) {
     tcfg.lr = a.lr;
     tcfg.momentum = a.momentum;
     tcfg.publish_every = 0;
-    tcfg.device = brotensor::Device::GPU;
+    tcfg.device = dev;
     tcfg.rng_seed = a.seed ^ 0xB1B2B3B4ULL;
     tr.set_net(&net);
     tr.set_buffer(&buf);
@@ -205,7 +207,7 @@ int main(int argc, char** argv) {
                         s, last.loss_total, last.loss_value, last.loss_policy);
         }
     }
-    brotensor::cuda_sync();
+    brotensor::sync_all();
     auto t1 = std::chrono::steady_clock::now();
     long ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count();
     std::printf("train\tdone\tms=%ld\tinitial=%.6f\tfinal=%.6f\n",

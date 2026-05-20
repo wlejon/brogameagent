@@ -16,7 +16,6 @@ using namespace bga_parity;
 using brotensor::Tensor;
 using brotensor::Device;
 using brogameagent::nn::PolicyValueNet;
-using brotensor::GpuTensor;
 using brogameagent::learn::BatchedInferenceServer;
 
 namespace {
@@ -30,7 +29,7 @@ PolicyValueNet make_net() {
     cfg.seed         = 0xFEEDBEEFull;
     PolicyValueNet net;
     net.init(cfg);
-    net.to(Device::GPU);
+    net.to(Device::CUDA);
     return net;
 }
 
@@ -45,17 +44,17 @@ BatchedInferenceServer::EvalResult direct_forward(PolicyValueNet& net,
                                                   const std::vector<float>& obs) {
     const int in_dim = net.in_dim();
     const int A = net.num_actions();
-    Tensor x(in_dim, 1);
-    for (int i = 0; i < in_dim; ++i) x.data[i] = obs[i];
-    GpuTensor gx, glogits;
-    brotensor::upload(x, gx);
-    net.forward(gx, glogits);
+    Tensor x = Tensor::vec(in_dim);
+    for (int i = 0; i < in_dim; ++i) x[i] = obs[i];
+    Tensor gx = x.to(Device::CUDA);
+    Tensor glogits = Tensor::zeros_on(Device::CUDA, A, 1);
+    float gv = 0.0f;
+    net.forward(gx, gv, glogits);
     Tensor h_logits = download_to_host(glogits);
-    Tensor h_value  = download_to_host(net.value_gpu());
     BatchedInferenceServer::EvalResult r;
     r.logits.assign(A, 0.0f);
-    for (int i = 0; i < A; ++i) r.logits[i] = h_logits.data[i];
-    r.value = h_value.data[0];
+    for (int i = 0; i < A; ++i) r.logits[i] = h_logits[i];
+    r.value = gv;
     return r;
 }
 

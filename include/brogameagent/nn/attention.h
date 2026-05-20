@@ -1,12 +1,7 @@
 #pragma once
 
 #include "circuits.h"
-#include <brotensor/device.h>
 #include <brotensor/tensor.h>
-
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/tensor.h>
-#endif
 
 #include <cstdint>
 #include <vector>
@@ -21,40 +16,25 @@ namespace brogameagent::nn {
 // the softmax denominator (additive -inf on scores pre-softmax) and produce
 // zero output rows — this matches the convention of softmax_forward's mask.
 //
-// GPU dispatch: device_ tracks where parameters live. `to(brotensor::Device)` migrates
-// host↔device. The CPU forward/backward overloads are unchanged. The GPU
-// overloads call attention_forward_gpu / attention_backward_gpu and own a
-// device-side mask buffer mirroring mask_cache_.
+// Device: brotensor::Tensor carries its own Device tag and the brotensor
+// attention ops dispatch on it at runtime, so there is a single
+// forward/backward that runs on whatever device the parameters live on.
+// `to(brotensor::Device)` migrates every owned tensor; `device()` reports
+// where they currently are.
 
 class ScaledDotProductAttention : public ICircuit {
 public:
     ScaledDotProductAttention() = default;
-
-    // Copy semantics: same rationale as LayerNorm — copy host state only,
-    // destination starts on brotensor::Device::CPU.
-    ScaledDotProductAttention(const ScaledDotProductAttention& o) { copy_host_(o); }
-    ScaledDotProductAttention& operator=(const ScaledDotProductAttention& o) {
-        if (this != &o) copy_host_(o);
-        return *this;
-    }
-    ScaledDotProductAttention(ScaledDotProductAttention&&) = default;
-    ScaledDotProductAttention& operator=(ScaledDotProductAttention&&) = default;
 
     void init(int n_slots, int dim, uint64_t& rng_state, int num_heads = 1);
 
     int n_slots() const { return n_; }
     int dim()     const { return d_; }
 
-    // CPU code path — unchanged.
+    // X: (N, D). mask: length N (1 valid, 0 invalid), may be nullptr.
+    // O: (N, D).
     void forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& O);
     void backward(const brotensor::Tensor& dO, brotensor::Tensor& dX);
-
-#ifdef BROTENSOR_HAS_GPU
-    // GPU code path. mask_dev (length n_) is an optional device pointer.
-    void forward(const brotensor::GpuTensor& X, const float* mask_dev,
-                 brotensor::GpuTensor& O);
-    void backward(const brotensor::GpuTensor& dO, brotensor::GpuTensor& dX);
-#endif
 
     brotensor::Device device() const { return device_; }
     void to(brotensor::Device d);
@@ -77,22 +57,6 @@ public:
     brotensor::Tensor&       dWo()      { return dWo_; }
 
 private:
-    void copy_host_(const ScaledDotProductAttention& o) {
-        n_ = o.n_; d_ = o.d_;
-        Wq_ = o.Wq_; Wk_ = o.Wk_; Wv_ = o.Wv_; Wo_ = o.Wo_;
-        dWq_ = o.dWq_; dWk_ = o.dWk_; dWv_ = o.dWv_; dWo_ = o.dWo_;
-        vWq_ = o.vWq_; vWk_ = o.vWk_; vWv_ = o.vWv_; vWo_ = o.vWo_;
-        mWq_ = o.mWq_; mWk_ = o.mWk_; mWv_ = o.mWv_; mWo_ = o.mWo_;
-        vAWq_ = o.vAWq_; vAWk_ = o.vAWk_; vAWv_ = o.vAWv_; vAWo_ = o.vAWo_;
-        X_cache_ = o.X_cache_;
-        Q_ = o.Q_; K_ = o.K_; V_ = o.V_;
-        Attn_ = o.Attn_;
-        Y_ = o.Y_;
-        mask_cache_ = o.mask_cache_;
-        device_ = brotensor::Device::CPU;
-        // GPU mirrors / mask pointer left default.
-    }
-
     int n_ = 0, d_ = 0;
     brotensor::Tensor Wq_, Wk_, Wv_, Wo_;
     brotensor::Tensor dWq_, dWk_, dWv_, dWo_;
@@ -105,26 +69,13 @@ private:
     brotensor::Tensor X_cache_;       // (N, D)
     brotensor::Tensor Q_, K_, V_;     // (N, D)
     brotensor::Tensor Attn_;          // (N, N)
-    brotensor::Tensor Y_;             // (N, D) = Attn @ V
-    std::vector<uint8_t> mask_cache_;
+    brotensor::Tensor Y_;             // (N, D) = Attn @ V (pre-Wo)
+    // Validity-mask pointer used by the most recent forward; reused verbatim
+    // by backward. The caller owns the buffer and must keep it alive (and on
+    // the same device as X) between the forward and the matching backward.
+    const float* mask_ptr_ = nullptr;
 
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    brotensor::GpuTensor Wq_g_, Wk_g_, Wv_g_, Wo_g_;
-    brotensor::GpuTensor dWq_g_, dWk_g_, dWv_g_, dWo_g_;
-    brotensor::GpuTensor vWq_g_, vWk_g_, vWv_g_, vWo_g_;
-    // Adam GPU mirrors.
-    brotensor::GpuTensor mWq_g_, mWk_g_, mWv_g_, mWo_g_;
-    brotensor::GpuTensor vAWq_g_, vAWk_g_, vAWv_g_, vAWo_g_;
-    brotensor::GpuTensor X_cache_g_;
-    brotensor::GpuTensor Q_g_, K_g_, V_g_;
-    brotensor::GpuTensor Attn_g_;
-    brotensor::GpuTensor Y_g_;            // Y_pre_Wo
-    // Mask pointer used by the most recent GPU forward; cached for backward.
-    // Non-owning — caller manages lifetime (matches CPU API where the caller
-    // owns the host mask buffer for the duration of forward+backward).
-    const float* last_mask_dev_ = nullptr;
-#endif
 };
 
 } // namespace brogameagent::nn

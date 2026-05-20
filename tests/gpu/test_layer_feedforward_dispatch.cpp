@@ -9,7 +9,6 @@ using namespace bga_parity;
 using brotensor::Device;
 using brogameagent::nn::FeedForward;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
 
 namespace {
 
@@ -17,10 +16,10 @@ void seed_layer(FeedForward& f, int D, int Df, uint64_t seed) {
     uint64_t s = seed;
     f.init(D, Df, s);
     SplitMix64 rng(seed ^ 0xF00Dull);
-    for (int i = 0; i < f.W1().size(); ++i) f.W1().data[i] = rng.next_unit() * 0.5f;
-    for (int i = 0; i < f.b1().size(); ++i) f.b1().data[i] = rng.next_unit() * 0.1f;
-    for (int i = 0; i < f.W2().size(); ++i) f.W2().data[i] = rng.next_unit() * 0.5f;
-    for (int i = 0; i < f.b2().size(); ++i) f.b2().data[i] = rng.next_unit() * 0.1f;
+    for (int i = 0; i < f.W1().size(); ++i) f.W1()[i] = rng.next_unit() * 0.5f;
+    for (int i = 0; i < f.b1().size(); ++i) f.b1()[i] = rng.next_unit() * 0.1f;
+    for (int i = 0; i < f.W2().size(); ++i) f.W2()[i] = rng.next_unit() * 0.5f;
+    for (int i = 0; i < f.b2().size(); ++i) f.b2()[i] = rng.next_unit() * 0.1f;
 }
 
 void run_dispatch(int K, int D, int Df, uint64_t seed) {
@@ -29,20 +28,20 @@ void run_dispatch(int K, int D, int Df, uint64_t seed) {
     seed_layer(gpu_f, D, Df, seed);
 
     SplitMix64 rng(seed ^ 0xBEEFull);
-    Tensor X(K, D), dY(K, D);
+    Tensor X = Tensor::mat(K, D), dY = Tensor::mat(K, D);
     fill_random(X, rng);
     fill_random(dY, rng);
 
-    Tensor Y_cpu(K, D), dX_cpu(K, D);
+    Tensor Y_cpu = Tensor::mat(K, D), dX_cpu = Tensor::mat(K, D);
     cpu.zero_grad();
     cpu.forward(X, Y_cpu);
     cpu.backward(dY, dX_cpu);
 
-    gpu_f.to(Device::GPU);
-    BGA_CHECK(gpu_f.device() == Device::GPU);
-    GpuTensor gX, gY, gdY, gdX;
-    brotensor::upload(X, gX); brotensor::upload(dY, gdY);
-    gY.resize(K, D); gdX.resize(K, D);
+    gpu_f.to(Device::CUDA);
+    BGA_CHECK(gpu_f.device() == Device::CUDA);
+    Tensor gX = X.to(Device::CUDA), gdY = dY.to(Device::CUDA);
+    Tensor gY = Tensor::zeros_on(Device::CUDA, K, D);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, K, D);
     gpu_f.zero_grad();
     gpu_f.forward(gX, gY);
     gpu_f.backward(gdY, gdX);
@@ -59,7 +58,7 @@ void run_dispatch(int K, int D, int Df, uint64_t seed) {
     compare_tensors(cpu.b2(), gpu_f.b2(), "ff.dispatch.b2_after_sgd");
 
     // Save/load round-trip after GPU migration.
-    gpu_f.to(Device::GPU);
+    gpu_f.to(Device::CUDA);
     std::vector<uint8_t> blob;
     gpu_f.save_to(blob);
     FeedForward restored;

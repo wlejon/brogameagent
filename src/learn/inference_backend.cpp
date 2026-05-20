@@ -1,14 +1,10 @@
 #include "brogameagent/learn/inference_backend.h"
 
 #include "brogameagent/nn/policy_value_net.h"
-#include <brotensor/tensor.h>
-
-#ifdef BROTENSOR_HAS_GPU
 #include "brogameagent/learn/batched_net.h"
 #include "brogameagent/learn/inference_server.h"
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-#endif
 
 #include <stdexcept>
 
@@ -33,38 +29,19 @@ EvalResult DirectBackend::evaluate(const std::vector<float>& obs) {
     }
     brotensor::Tensor x = brotensor::Tensor::vec(net_->in_dim());
     for (int i = 0; i < net_->in_dim(); ++i) x[i] = obs[i];
-    brotensor::Tensor logits = brotensor::Tensor::vec(net_->num_actions());
+    x = x.to(net_->device());
+
+    brotensor::Tensor logits;
     float v = 0.0f;
-
-#ifdef BROTENSOR_HAS_GPU
-    if (net_->device() == brotensor::Device::GPU) {
-        // Use the batched-1 GPU forward to avoid the single-sample overhead
-        // path's caches. Stage as a (1, in_dim) host buffer.
-        brotensor::Tensor host_X(1, net_->in_dim());
-        for (int i = 0; i < net_->in_dim(); ++i) host_X.data[i] = obs[i];
-        brotensor::GpuTensor X_BD, logits_BD, values_B1;
-        brotensor::upload(host_X, X_BD);
-        net_->forward_batched(X_BD, logits_BD, values_B1);
-        brotensor::Tensor host_logits, host_values;
-        brotensor::download(logits_BD, host_logits);
-        brotensor::download(values_B1, host_values);
-        brotensor::cuda_sync();
-        r.logits.assign(net_->num_actions(), 0.0f);
-        for (int j = 0; j < net_->num_actions(); ++j)
-            r.logits[j] = host_logits.data[j];
-        r.value = host_values.data[0];
-        return r;
-    }
-#endif
-
     net_->forward(x, v, logits);
+
+    const brotensor::Tensor host_logits = logits.to(brotensor::Device::CPU);
     r.logits.assign(net_->num_actions(), 0.0f);
-    for (int j = 0; j < net_->num_actions(); ++j) r.logits[j] = logits[j];
+    for (int j = 0; j < net_->num_actions(); ++j) r.logits[j] = host_logits[j];
     r.value = v;
     return r;
 }
 
-#ifdef BROTENSOR_HAS_GPU
 // ─── DirectBatchedNetBackend ──────────────────────────────────────────────
 
 DirectBatchedNetBackend::DirectBatchedNetBackend(BatchedNet* net) : net_(net) {
@@ -81,19 +58,19 @@ EvalResult DirectBatchedNetBackend::evaluate(const std::vector<float>& obs) {
         throw std::runtime_error(
             "DirectBatchedNetBackend::evaluate: obs.size() != net->input_dim()");
     }
-    brotensor::Tensor host_X(1, D);
-    for (int i = 0; i < D; ++i) host_X.data[i] = obs[i];
-    brotensor::GpuTensor X_BD, logits_BD, values_B1;
-    brotensor::upload(host_X, X_BD);
+    brotensor::Tensor host_X = brotensor::Tensor::mat(1, D);
+    for (int i = 0; i < D; ++i) host_X.ptr()[i] = obs[i];
+    brotensor::Tensor X_BD = host_X.to(net_->device());
+
+    brotensor::Tensor logits_BD, values_B1;
     net_->forward_batched(X_BD, logits_BD, values_B1);
-    brotensor::Tensor host_logits, host_values;
-    brotensor::download(logits_BD, host_logits);
-    brotensor::download(values_B1, host_values);
-    brotensor::cuda_sync();
+
+    const brotensor::Tensor host_logits = logits_BD.to(brotensor::Device::CPU);
+    const brotensor::Tensor host_values = values_B1.to(brotensor::Device::CPU);
     EvalResult r;
     r.logits.assign(L, 0.0f);
-    for (int j = 0; j < L; ++j) r.logits[j] = host_logits.data[j];
-    r.value = host_values.data[0];
+    for (int j = 0; j < L; ++j) r.logits[j] = host_logits.ptr()[j];
+    r.value = host_values.ptr()[0];
     return r;
 }
 
@@ -120,6 +97,5 @@ EvalResult ServerBackend::evaluate(const std::vector<float>& obs) {
     r.value  = sr.value;
     return r;
 }
-#endif
 
 } // namespace brogameagent::learn

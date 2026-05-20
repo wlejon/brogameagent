@@ -10,7 +10,6 @@ using brotensor::Device;
 using brogameagent::nn::TransformerBlock;
 using brogameagent::nn::NormPlacement;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
 
 namespace {
 
@@ -23,13 +22,13 @@ void seed_block(TransformerBlock& b, int K, int D, int H, int Df,
     b.init(cfg, s);
     SplitMix64 rng(seed ^ 0xF00Dull);
     auto& mha = b.mha();
-    for (int i = 0; i < mha.Wq().size(); ++i) mha.Wq().data[i] = rng.next_unit() * 0.4f;
-    for (int i = 0; i < mha.Wk().size(); ++i) mha.Wk().data[i] = rng.next_unit() * 0.4f;
-    for (int i = 0; i < mha.Wv().size(); ++i) mha.Wv().data[i] = rng.next_unit() * 0.4f;
-    for (int i = 0; i < mha.Wo().size(); ++i) mha.Wo().data[i] = rng.next_unit() * 0.4f;
+    for (int i = 0; i < mha.Wq().size(); ++i) mha.Wq()[i] = rng.next_unit() * 0.4f;
+    for (int i = 0; i < mha.Wk().size(); ++i) mha.Wk()[i] = rng.next_unit() * 0.4f;
+    for (int i = 0; i < mha.Wv().size(); ++i) mha.Wv()[i] = rng.next_unit() * 0.4f;
+    for (int i = 0; i < mha.Wo().size(); ++i) mha.Wo()[i] = rng.next_unit() * 0.4f;
     auto& ff = b.ff();
-    for (int i = 0; i < ff.W1().size(); ++i) ff.W1().data[i] = rng.next_unit() * 0.4f;
-    for (int i = 0; i < ff.W2().size(); ++i) ff.W2().data[i] = rng.next_unit() * 0.4f;
+    for (int i = 0; i < ff.W1().size(); ++i) ff.W1()[i] = rng.next_unit() * 0.4f;
+    for (int i = 0; i < ff.W2().size(); ++i) ff.W2()[i] = rng.next_unit() * 0.4f;
 }
 
 void run_dispatch(int K, int D, int H, int Df, NormPlacement np, uint64_t seed) {
@@ -38,20 +37,20 @@ void run_dispatch(int K, int D, int H, int Df, NormPlacement np, uint64_t seed) 
     seed_block(gpu_b, K, D, H, Df, np, seed);
 
     SplitMix64 rng(seed ^ 0xBEEFull);
-    Tensor X(K, D), dY(K, D);
+    Tensor X = Tensor::mat(K, D), dY = Tensor::mat(K, D);
     fill_random(X, rng);
     fill_random(dY, rng);
 
-    Tensor Y_cpu(K, D), dX_cpu(K, D);
+    Tensor Y_cpu = Tensor::mat(K, D), dX_cpu = Tensor::mat(K, D);
     cpu.zero_grad();
     cpu.forward(X, nullptr, Y_cpu);
     cpu.backward(dY, dX_cpu);
 
-    gpu_b.to(Device::GPU);
-    BGA_CHECK(gpu_b.device() == Device::GPU);
-    GpuTensor gX, gY, gdY, gdX;
-    brotensor::upload(X, gX); brotensor::upload(dY, gdY);
-    gY.resize(K, D); gdX.resize(K, D);
+    gpu_b.to(Device::CUDA);
+    BGA_CHECK(gpu_b.device() == Device::CUDA);
+    Tensor gX = X.to(Device::CUDA), gdY = dY.to(Device::CUDA);
+    Tensor gY = Tensor::zeros_on(Device::CUDA, K, D);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, K, D);
     gpu_b.zero_grad();
     gpu_b.forward(gX, nullptr, gY);
     gpu_b.backward(gdY, gdX);
@@ -72,7 +71,7 @@ void run_dispatch(int K, int D, int H, int Df, NormPlacement np, uint64_t seed) 
                     1e-4f, 1e-3f);
 
     // Save/load round-trip after GPU migration.
-    gpu_b.to(Device::GPU);
+    gpu_b.to(Device::CUDA);
     std::vector<uint8_t> blob;
     gpu_b.save_to(blob);
     TransformerBlock restored;

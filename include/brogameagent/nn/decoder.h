@@ -1,13 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include <brotensor/device.h>
 #include <brotensor/tensor.h>
 #include "brogameagent/observation.h"
-
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/tensor.h>
-#endif
 
 #include <cstdint>
 #include <vector>
@@ -37,9 +32,9 @@ namespace brogameagent::nn {
 // No bottleneck beyond what the encoder already produces. Hand-authored
 // forward/backward — see decoder.cpp.
 //
-// GPU dispatch mirrors DeepSetsEncoder: device_ field, GpuTensor mirrors,
-// to(brotensor::Device) migration, GPU forward/backward overloads using linear_*_gpu /
-// relu_*_gpu / split_rows_gpu.
+// Device: device_ field tracks where parameters live; to(brotensor::Device)
+// migrates every owned tensor (and sub-Linear). brotensor ops dispatch on
+// operand device at runtime, so a single forward/backward path suffices.
 
 class DeepSetsDecoder : public ICircuit {
 public:
@@ -58,11 +53,6 @@ public:
     // x: size 3*embed_dim. y: size observation::TOTAL.
     void forward(const brotensor::Tensor& x, brotensor::Tensor& y);
     void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
-
-#ifdef BROTENSOR_HAS_GPU
-    void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y);
-    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
-#endif
 
     brotensor::Device device() const { return device_; }
     void to(brotensor::Device d);
@@ -83,46 +73,26 @@ private:
     // Self stream.
     Linear self_fc1_, self_fc2_;
     brotensor::Tensor self_h_raw_, self_h_;   // post-fc1, post-relu
+    brotensor::Tensor self_out_;              // reconstructed self block
 
-    // Enemy stream (shared across slots; per-slot caches).
+    // Enemy stream (shared MLP applied per slot; batched (K, *) caches).
     Linear enemy_fc1_, enemy_fc2_;
-    std::vector<brotensor::Tensor> e_h_raw_, e_h_;  // per-slot hidden caches
+    brotensor::Tensor e_in_;       // (K_ENEMIES, embed_dim) broadcast input
+    brotensor::Tensor e_h_raw_;    // (K_ENEMIES, hidden) pre-relu
+    brotensor::Tensor e_h_;        // (K_ENEMIES, hidden) post-relu
+    brotensor::Tensor e_out_;      // (K_ENEMIES, ENEMY_FEATURES)
 
     // Ally stream.
     Linear ally_fc1_, ally_fc2_;
-    std::vector<brotensor::Tensor> a_h_raw_, a_h_;
+    brotensor::Tensor a_in_;       // (K_ALLIES, embed_dim)
+    brotensor::Tensor a_h_raw_;    // (K_ALLIES, hidden)
+    brotensor::Tensor a_h_;        // (K_ALLIES, hidden)
+    brotensor::Tensor a_out_;      // (K_ALLIES, ALLY_FEATURES)
 
     // Cached split of input for backward.
     brotensor::Tensor self_in_, pooled_e_, pooled_a_;
 
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    brotensor::GpuTensor self_W1_g_, self_b1_g_, self_W2_g_, self_b2_g_;
-    brotensor::GpuTensor self_dW1_g_, self_db1_g_, self_dW2_g_, self_db2_g_;
-    brotensor::GpuTensor self_vW1_g_, self_vb1_g_, self_vW2_g_, self_vb2_g_;
-
-    brotensor::GpuTensor enemy_W1_g_, enemy_b1_g_, enemy_W2_g_, enemy_b2_g_;
-    brotensor::GpuTensor enemy_dW1_g_, enemy_db1_g_, enemy_dW2_g_, enemy_db2_g_;
-    brotensor::GpuTensor enemy_vW1_g_, enemy_vb1_g_, enemy_vW2_g_, enemy_vb2_g_;
-
-    brotensor::GpuTensor ally_W1_g_, ally_b1_g_, ally_W2_g_, ally_b2_g_;
-    brotensor::GpuTensor ally_dW1_g_, ally_db1_g_, ally_dW2_g_, ally_db2_g_;
-    brotensor::GpuTensor ally_vW1_g_, ally_vb1_g_, ally_vW2_g_, ally_vb2_g_;
-
-    // Cached input split (views into x_g_cache_).
-    brotensor::GpuTensor x_g_cache_;        // (3*embed_dim, 1) — clone of forward x
-
-    // Self stream caches.
-    brotensor::GpuTensor self_h_raw_g_;     // (hidden, 1)
-    brotensor::GpuTensor self_h_g_;         // (hidden, 1)
-
-    // Per-slot caches (broadcast input is the same pooled vec for every slot).
-    brotensor::GpuTensor e_h_raw_g_;        // (K_ENEMIES, hidden)
-    brotensor::GpuTensor e_h_g_;            // (K_ENEMIES, hidden)
-
-    brotensor::GpuTensor a_h_raw_g_;        // (K_ALLIES, hidden)
-    brotensor::GpuTensor a_h_g_;            // (K_ALLIES, hidden)
-#endif
 };
 
 } // namespace brogameagent::nn

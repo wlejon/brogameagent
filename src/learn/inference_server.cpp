@@ -1,11 +1,8 @@
-#ifdef BROTENSOR_HAS_GPU
-
 #include "brogameagent/learn/inference_server.h"
 
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 #include "brogameagent/nn/policy_value_net.h"
-#include <brotensor/tensor.h>
 
 #include <chrono>
 #include <stdexcept>
@@ -26,21 +23,9 @@ BatchedInferenceServer::BatchedInferenceServer(BatchedNet* net, Config cfg)
     worker_ = std::thread(&BatchedInferenceServer::worker_loop_, this);
 }
 
-namespace {
-brogameagent::nn::PolicyValueNet* check_pvn_gpu_(
-    brogameagent::nn::PolicyValueNet* net) {
-    if (net && net->device() != brotensor::Device::GPU) {
-        throw std::runtime_error(
-            "BatchedInferenceServer: net must be on Device::GPU");
-    }
-    return net;
-}
-} // namespace
-
 BatchedInferenceServer::BatchedInferenceServer(
     brogameagent::nn::PolicyValueNet* net, Config cfg)
-    : BatchedInferenceServer(static_cast<BatchedNet*>(check_pvn_gpu_(net)),
-                             cfg) {}
+    : BatchedInferenceServer(static_cast<BatchedNet*>(net), cfg) {}
 
 BatchedInferenceServer::~BatchedInferenceServer() {
     {
@@ -94,11 +79,9 @@ BatchedInferenceServer::evaluate(const std::vector<float>& obs) {
 }
 
 void BatchedInferenceServer::worker_loop_() {
-    // Reusable host staging buffer + GPU tensors. Grown only when needed.
+    // Reusable host staging buffer. Device tensors are produced per-batch via
+    // to(); grown only when needed.
     Tensor host_X;       // (B, in_dim)
-    Tensor host_logits;  // (B, num_actions)
-    Tensor host_values;  // (B, 1)
-    brotensor::GpuTensor X_BD, logits_BD, values_B1;
 
     std::vector<std::unique_ptr<Pending>> batch;
     batch.reserve(cfg_.max_batch_size);
@@ -148,23 +131,25 @@ void BatchedInferenceServer::worker_loop_() {
         for (int b = 0; b < B; ++b) {
             const auto& obs = batch[b]->obs;
             const size_t off = static_cast<size_t>(b) * in_dim_;
-            for (int j = 0; j < in_dim_; ++j) host_X.data[off + j] = obs[j];
+            for (int j = 0; j < in_dim_; ++j) host_X.ptr()[off + j] = obs[j];
         }
 
         try {
-            brotensor::upload(host_X, X_BD);
+            const brotensor::Device dev = net_->device();
+            Tensor X_BD = host_X.to(dev);
+            Tensor logits_BD, values_B1;
             net_->forward_batched(X_BD, logits_BD, values_B1);
-            brotensor::download(logits_BD, host_logits);
-            brotensor::download(values_B1, host_values);
-            brotensor::cuda_sync();
+            const Tensor host_logits = logits_BD.to(brotensor::Device::CPU);
+            const Tensor host_values = values_B1.to(brotensor::Device::CPU);
+            brotensor::sync(dev);
 
             for (int b = 0; b < B; ++b) {
                 EvalResult r;
                 r.logits.assign(num_actions_, 0.0f);
                 const size_t off = static_cast<size_t>(b) * num_actions_;
                 for (int j = 0; j < num_actions_; ++j)
-                    r.logits[j] = host_logits.data[off + j];
-                r.value = host_values.data[b];
+                    r.logits[j] = host_logits.ptr()[off + j];
+                r.value = host_values.ptr()[b];
                 batch[b]->promise.set_value(std::move(r));
             }
             ++batches_run_;
@@ -187,5 +172,3 @@ void BatchedInferenceServer::run_batch_(
 }
 
 } // namespace brogameagent::learn
-
-#endif // BROTENSOR_HAS_GPU

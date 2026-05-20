@@ -11,7 +11,6 @@ using namespace bga_parity;
 using brotensor::Tensor;
 using brotensor::Device;
 using brogameagent::nn::PolicyValueNet;
-using brotensor::GpuTensor;
 
 static void run_pvn_batched(int B, uint64_t seed) {
     PolicyValueNet::Config cfg;
@@ -23,36 +22,36 @@ static void run_pvn_batched(int B, uint64_t seed) {
 
     PolicyValueNet net;
     net.init(cfg);
-    net.to(Device::GPU);
+    net.to(Device::CUDA);
 
     SplitMix64 rng(seed ^ 0xBADCAFEull);
 
     // (B, in_dim) random observations.
-    Tensor X_BD(B, cfg.in_dim);
+    Tensor X_BD = Tensor::mat(B, cfg.in_dim);
     fill_random(X_BD, rng);
 
     // ── Reference: B sequential single-sample forwards on GPU. ─────────────
-    Tensor logits_ref(B, cfg.num_actions);
-    Tensor values_ref(B, 1);
+    Tensor logits_ref = Tensor::mat(B, cfg.num_actions);
+    Tensor values_ref = Tensor::mat(B, 1);
     for (int b = 0; b < B; ++b) {
-        Tensor xb(cfg.in_dim, 1);
+        Tensor xb = Tensor::vec(cfg.in_dim);
         for (int j = 0; j < cfg.in_dim; ++j)
-            xb.data[j] = X_BD.data[static_cast<size_t>(b) * cfg.in_dim + j];
-        GpuTensor gxb;
-        brotensor::upload(xb, gxb);
-        GpuTensor glogits;
-        net.forward(gxb, glogits);
+            xb[j] = X_BD[static_cast<size_t>(b) * cfg.in_dim + j];
+        Tensor gxb = xb.to(Device::CUDA);
+        Tensor glogits = Tensor::zeros_on(Device::CUDA, cfg.num_actions, 1);
+        float gv = 0.0f;
+        net.forward(gxb, gv, glogits);
         Tensor h_logits = download_to_host(glogits);
-        Tensor h_value  = download_to_host(net.value_gpu());
         for (int j = 0; j < cfg.num_actions; ++j)
-            logits_ref.data[static_cast<size_t>(b) * cfg.num_actions + j] =
-                h_logits.data[j];
-        values_ref.data[b] = h_value.data[0];
+            logits_ref[static_cast<size_t>(b) * cfg.num_actions + j] =
+                h_logits[j];
+        values_ref[b] = gv;
     }
 
     // ── Batched. ───────────────────────────────────────────────────────────
-    GpuTensor gX_BD, glogits_BD, gvalues_B1;
-    brotensor::upload(X_BD, gX_BD);
+    Tensor gX_BD = X_BD.to(Device::CUDA);
+    Tensor glogits_BD = Tensor::zeros_on(Device::CUDA, B, cfg.num_actions);
+    Tensor gvalues_B1 = Tensor::zeros_on(Device::CUDA, B, 1);
     net.forward_batched(gX_BD, glogits_BD, gvalues_B1);
     Tensor logits_batched = download_to_host(glogits_BD);
     Tensor values_batched = download_to_host(gvalues_B1);

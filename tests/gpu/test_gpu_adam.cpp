@@ -8,15 +8,16 @@
 
 using namespace bga_parity;
 using brotensor::Tensor;
+using brotensor::Device;
 using brogameagent::nn::adam_step_cpu;
-using brotensor::GpuTensor;
 
 namespace {
 
 void run_adam(int n, uint64_t seed, float lr, float beta1, float beta2,
               float eps, int n_steps) {
     SplitMix64 rng(seed);
-    Tensor param(n, 1), grad(n, 1), m(n, 1), v(n, 1);
+    Tensor param = Tensor::vec(n), grad = Tensor::vec(n),
+           m = Tensor::vec(n), v = Tensor::vec(n);
     fill_random(param, rng);
     fill_random(grad, rng);
     m.zero();
@@ -26,18 +27,16 @@ void run_adam(int n, uint64_t seed, float lr, float beta1, float beta2,
     Tensor m_cpu = m;
     Tensor v_cpu = v;
 
-    GpuTensor gparam, ggrad, gm, gv;
-    brotensor::upload(param, gparam);
-    brotensor::upload(grad, ggrad);
-    brotensor::upload(m, gm);
-    brotensor::upload(v, gv);
+    Tensor gparam = param.to(Device::CUDA);
+    Tensor ggrad = grad.to(Device::CUDA);
+    Tensor gm = m.to(Device::CUDA);
+    Tensor gv = v.to(Device::CUDA);
 
     // Run K steps with the same gradient each step (sufficient to surface
     // any bias-correction or moment-update mismatch).
     for (int s = 1; s <= n_steps; ++s) {
         adam_step_cpu(param_cpu, grad, m_cpu, v_cpu, lr, beta1, beta2, eps, s);
-        brotensor::adam_step_gpu(gparam, ggrad, gm, gv,
-                                             lr, beta1, beta2, eps, s);
+        brotensor::adam_step(gparam, ggrad, gm, gv, lr, beta1, beta2, eps, s);
     }
 
     compare_tensors(param_cpu, download_to_host(gparam), "adam.param");

@@ -158,7 +158,7 @@ SingleHeroNetTX make_net() {
     cfg.seed         = 0xC0FFEE99ull;
     SingleHeroNetTX net;
     net.init(cfg);
-    net.to(Device::GPU);
+    net.to(Device::CUDA);
     return net;
 }
 

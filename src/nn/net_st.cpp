@@ -1,5 +1,7 @@
 #include "brogameagent/nn/net_st.h"
 
+#include <brotensor/ops.h>
+
 #include <cassert>
 #include <cstring>
 
@@ -28,22 +30,23 @@ void SingleHeroNetST::forward(const brotensor::Tensor& x, float& value, brotenso
 }
 
 void SingleHeroNetST::backward(float dValue, const brotensor::Tensor& dLogits) {
-    brotensor::Tensor dTrunkV = brotensor::Tensor::vec(cfg_.trunk_hidden);
+    // Scratch follows the upstream gradient's device.
+    const brotensor::Device dev = dLogits.device;
+    brotensor::Tensor dTrunkV = brotensor::Tensor::zeros_on(dev, cfg_.trunk_hidden, 1);
     value_head_.backward(dValue, dTrunkV);
-    brotensor::Tensor dTrunkP = brotensor::Tensor::vec(cfg_.trunk_hidden);
+    brotensor::Tensor dTrunkP = brotensor::Tensor::zeros_on(dev, cfg_.trunk_hidden, 1);
     head_.backward(dLogits, dTrunkP);
 
-    brotensor::Tensor dTrunkAct = brotensor::Tensor::vec(cfg_.trunk_hidden);
-    for (int i = 0; i < cfg_.trunk_hidden; ++i)
-        dTrunkAct[i] = dTrunkV[i] + dTrunkP[i];
+    brotensor::Tensor dTrunkAct = dTrunkV;
+    brotensor::add_inplace(dTrunkAct, dTrunkP);
 
-    brotensor::Tensor dTrunkRaw = brotensor::Tensor::vec(cfg_.trunk_hidden);
+    brotensor::Tensor dTrunkRaw = brotensor::Tensor::zeros_on(dev, cfg_.trunk_hidden, 1);
     trunk_act_.backward(dTrunkAct, dTrunkRaw);
 
-    brotensor::Tensor dEnc = brotensor::Tensor::vec(enc_.out_dim());
+    brotensor::Tensor dEnc = brotensor::Tensor::zeros_on(dev, enc_.out_dim(), 1);
     trunk_.backward(dTrunkRaw, dEnc);
 
-    brotensor::Tensor dX = brotensor::Tensor::vec(observation::TOTAL);
+    brotensor::Tensor dX = brotensor::Tensor::zeros_on(dev, observation::TOTAL, 1);
     enc_.backward(dEnc, dX);
 }
 

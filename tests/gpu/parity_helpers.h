@@ -7,8 +7,6 @@
 
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-#include <brotensor/device_buffer.h>
-#include <brotensor/tensor.h>
 
 #include <cmath>
 #include <cstdint>
@@ -21,10 +19,6 @@
 namespace bga_parity {
 
 using brotensor::Tensor;
-using brotensor::GpuTensor;
-using brotensor::cuda_sync;
-using brotensor::download;
-using brotensor::upload;
 
 // ─── Test registry ─────────────────────────────────────────────────────────
 
@@ -75,7 +69,7 @@ struct SplitMix64 {
 };
 
 inline void fill_random(Tensor& t, SplitMix64& rng, float scale = 1.0f) {
-    for (int i = 0; i < t.size(); ++i) t.data[i] = rng.next_unit() * scale;
+    for (int i = 0; i < t.size(); ++i) t.ptr()[i] = rng.next_unit() * scale;
 }
 
 // ─── Tolerance comparison ─────────────────────────────────────────────────
@@ -92,8 +86,8 @@ inline void compare_tensors(const Tensor& cpu, const Tensor& gpu,
     int worst_idx = -1;
     float worst_diff = 0.0f;
     for (int i = 0; i < n; ++i) {
-        const float a = cpu.data[i];
-        const float b = gpu.data[i];
+        const float a = cpu[i];
+        const float b = gpu[i];
         const float d = std::fabs(a - b);
         const float tol = atol + rtol * std::fabs(a);
         if (d > tol) {
@@ -103,44 +97,51 @@ inline void compare_tensors(const Tensor& cpu, const Tensor& gpu,
     if (worst_idx >= 0) {
         std::printf("    [%s] mismatch at i=%d  cpu=%.7g gpu=%.7g  diff=%.3g\n",
                     tag, worst_idx,
-                    cpu.data[worst_idx], gpu.data[worst_idx], worst_diff);
+                    cpu[worst_idx], gpu[worst_idx], worst_diff);
         throw 0;
     }
 }
 
-inline Tensor download_to_host(const GpuTensor& g) {
-    Tensor h;
-    brotensor::download(g, h);
-    cuda_sync();
-    return h;
+// Bring a (possibly device-resident) tensor back to a CPU tensor for
+// host-side inspection. Replaces the old download(GpuTensor, Tensor) pattern.
+inline Tensor download_to_host(const Tensor& g) {
+    brotensor::sync_all();
+    return g.to(brotensor::Device::CPU);
 }
 
 // ─── Backend-neutral mask / index buffer helpers ──────────────────────────
 
-using brotensor::DeviceBuffer;
-
-// Upload a host float mask vector to a device buffer. If `mask` is null,
-// returns an empty buffer whose device_ptr() is null — matches the "no mask"
-// sentinel used by the GPU op APIs. Replaces the previous pattern of
-// cudaMalloc + cudaMemcpy + cudaFree inlined into every test.
-inline DeviceBuffer<float> upload_mask(const std::vector<float>* mask) {
-    DeviceBuffer<float> b;
-    if (mask) b.upload(mask->data(), mask->size());
-    return b;
+// Build a CUDA-resident float mask buffer from a host float mask vector. If
+// `mask` is null, returns a default-constructed (empty) Tensor whose `.data`
+// is null — matches the "no mask" sentinel used by the op APIs. Replaces the
+// previous DeviceBuffer<float> pattern.
+inline Tensor upload_mask(const std::vector<float>* mask) {
+    if (!mask) return Tensor{};
+    const int n = static_cast<int>(mask->size());
+    Tensor h = Tensor::vec(n);
+    for (int i = 0; i < n; ++i) h.ptr()[i] = (*mask)[i];
+    return h.to(brotensor::Device::CUDA);
 }
 
-// Same for an int32 index vector (embedding lookup tests).
-inline DeviceBuffer<int32_t> upload_indices(const std::vector<int32_t>& idx) {
-    DeviceBuffer<int32_t> b;
-    b.upload(idx.data(), idx.size());
-    return b;
+// Same for an int32 index vector (embedding lookup tests). Returns a
+// CUDA-resident INT32 tensor.
+inline Tensor upload_indices(const std::vector<int32_t>& idx) {
+    const int n = static_cast<int>(idx.size());
+    Tensor h = Tensor::zeros_on(brotensor::Device::CPU, n, 1,
+                                brotensor::Dtype::INT32);
+    auto* p = static_cast<int32_t*>(h.host_raw_mut());
+    for (int i = 0; i < n; ++i) p[i] = idx[i];
+    return h.to(brotensor::Device::CUDA);
 }
 
 // Same for an int offsets array (head_offsets in batched softmax-xent).
-inline DeviceBuffer<int> upload_offsets(const std::vector<int>& off) {
-    DeviceBuffer<int> b;
-    b.upload(off.data(), off.size());
-    return b;
+inline Tensor upload_offsets(const std::vector<int>& off) {
+    const int n = static_cast<int>(off.size());
+    Tensor h = Tensor::zeros_on(brotensor::Device::CPU, n, 1,
+                                brotensor::Dtype::INT32);
+    auto* p = static_cast<int32_t*>(h.host_raw_mut());
+    for (int i = 0; i < n; ++i) p[i] = static_cast<int32_t>(off[i]);
+    return h.to(brotensor::Device::CUDA);
 }
 
 // ─── Test runner ──────────────────────────────────────────────────────────
@@ -150,7 +151,7 @@ inline int run_all(const char* banner) {
     for (size_t i = 0; i < std::strlen(banner); ++i) std::putchar('=');
     std::putchar('\n');
 
-    brotensor::cuda_init();
+    brotensor::init();
 
     int passed = 0;
     int total = static_cast<int>(registry().size());
@@ -159,6 +160,8 @@ inline int run_all(const char* banner) {
             t.fn();
             ++passed;
             std::printf("  PASS  %s\n", t.name);
+        } catch (const std::exception& e) {
+            std::printf("  FAIL  %s  (exception: %s)\n", t.name, e.what());
         } catch (...) {
             std::printf("  FAIL  %s\n", t.name);
         }

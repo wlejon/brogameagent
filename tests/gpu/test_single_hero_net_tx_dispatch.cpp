@@ -2,8 +2,8 @@
 // instances; one kept on CPU, one migrated to GPU. With the full GPU
 // retrofit every Linear, encoder, and head runs on device — outputs and
 // gradients must match the CPU reference within transformer dispatch
-// tolerances. A separate sub-test exercises the GpuTensor-native forward /
-// backward overloads (no host-API entrypoint per call).
+// tolerances. A separate sub-test exercises the unified forward/backward
+// driven with CUDA-resident tensors (no host-API entrypoint per call).
 
 #include "parity_helpers.h"
 
@@ -75,8 +75,8 @@ void run_dispatch(uint64_t seed) {
     cpu.backward(dValue, dLogits);
 
     // GPU dispatch.
-    gnet.to(Device::GPU);
-    BGA_CHECK(gnet.device() == Device::GPU);
+    gnet.to(Device::CUDA);
+    BGA_CHECK(gnet.device() == Device::CUDA);
     float v_gpu; Tensor l_gpu = Tensor::vec(gnet.policy_logits());
     gnet.zero_grad();
     gnet.forward(x, v_gpu, l_gpu);
@@ -98,7 +98,7 @@ void run_dispatch(uint64_t seed) {
                     "tx.dispatch.trunk_W_after_sgd", 1e-5f, 1e-4f);
 
     // save/load round-trip after migration. Migrate again to GPU first.
-    gnet.to(Device::GPU);
+    gnet.to(Device::CUDA);
     auto blob = gnet.save();
     SingleHeroNetTX restored;
     restored.init(tiny_cfg(seed ^ 0x12345));   // different init seed
@@ -113,7 +113,7 @@ void run_dispatch(uint64_t seed) {
 void run_smoke_training_gpu(uint64_t seed) {
     SingleHeroNetTX net;
     net.init(tiny_cfg(seed));
-    net.to(Device::GPU);
+    net.to(Device::CUDA);
 
     SplitMix64 rng(seed ^ 0xCAFEull);
     Tensor x; make_obs(x, rng, 2, 2);
@@ -146,11 +146,11 @@ void run_smoke_training_gpu(uint64_t seed) {
 
 } // namespace
 
-// GPU-native (GpuTensor in, GpuTensor out) forward/backward — checks that
-// SingleHeroNetTX exposes a path with no host↔device conversion for the
-// hot tensor I/O. We compare against the CPU reference for the same inputs.
+// GPU-native forward/backward — drives the unified API with CUDA-resident
+// input tensors, checking that SingleHeroNetTX runs entirely on device with
+// no host↔device conversion in the layer. We compare against the CPU
+// reference for the same inputs.
 void run_gpu_native(uint64_t seed) {
-    namespace gpu = brotensor;
     SingleHeroNetTX cpu, gnet;
     cpu.init(tiny_cfg(seed));
     gnet.init(tiny_cfg(seed));
@@ -166,36 +166,28 @@ void run_gpu_native(uint64_t seed) {
     cpu.forward(x, v_cpu, l_cpu);
     cpu.backward(dValue, dLogits);
 
-    gnet.to(Device::GPU);
-    BGA_CHECK(gnet.device() == Device::GPU);
+    gnet.to(Device::CUDA);
+    BGA_CHECK(gnet.device() == Device::CUDA);
 
-    // Native GPU forward/backward: input is GpuTensor, output is GpuTensor.
-    brotensor::GpuTensor x_g, logits_g;
-    brotensor::upload(x, x_g);
-    logits_g.resize(gnet.policy_logits(), 1);
+    // Native GPU forward/backward: inputs are CUDA-resident tensors.
+    Tensor x_g = x.to(Device::CUDA);
+    Tensor dLogits_g = dLogits.to(Device::CUDA);
+    Tensor logits_g = Tensor::zeros_on(Device::CUDA, gnet.policy_logits(), 1);
+    float v_gpu = 0.0f;
     gnet.zero_grad();
-    gnet.forward(x_g, logits_g);
+    gnet.forward(x_g, v_gpu, logits_g);
 
     // Read back results.
-    Tensor l_gpu = Tensor::vec(gnet.policy_logits());
-    brotensor::download(logits_g, l_gpu);
-    Tensor v_h(1, 1);
-    brotensor::download(gnet.value_gpu(), v_h);
-    brotensor::cuda_sync();
-    BGA_CHECK(std::fabs(v_cpu - v_h[0]) < 5e-3f);
+    Tensor l_gpu = download_to_host(logits_g);
+    BGA_CHECK(std::fabs(v_cpu - v_gpu) < 5e-3f);
     compare_tensors(l_cpu, l_gpu, "tx.gpu_native.logits", 1e-4f, 5e-3f);
 
-    // Backward through GpuTensor API.
-    brotensor::GpuTensor dLogits_g;
-    brotensor::upload(dLogits, dLogits_g);
-    Tensor dv_h(1, 1); dv_h[0] = dValue;
-    brotensor::upload(dv_h, gnet.dValue_gpu());
-    gnet.backward(dLogits_g);
-    brotensor::cuda_sync();
+    // Backward through the unified API with CUDA-resident dLogits.
+    gnet.backward(dValue, dLogits_g);
 
     // Single SGD step then compare a representative weight against the CPU
-    // reference — confirms gradients propagated correctly through the native
-    // GPU backward.
+    // reference — confirms gradients propagated correctly through the GPU
+    // backward.
     cpu.sgd_step(0.01f, 0.9f);
     gnet.sgd_step(0.01f, 0.9f);
     gnet.to(Device::CPU);

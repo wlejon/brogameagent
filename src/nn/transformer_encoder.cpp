@@ -1,9 +1,6 @@
 #include "brogameagent/nn/transformer_encoder.h"
 
-#ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
-#include <brotensor/runtime.h>
-#endif
 
 #include <cassert>
 #include <cstring>
@@ -57,16 +54,15 @@ void TransformerEncoder::forward(const brotensor::Tensor& X, const float* mask, 
         pre_final_ln_ = last;
         final_ln_.forward(pre_final_ln_, Y);
     } else {
-        // Copy last → Y.
-        if (Y.rows != K || Y.cols != D) Y.resize(K, D);
-        std::memcpy(Y.ptr(), last.ptr(), sizeof(float) * K * D);
+        // Copy last → Y (device-aware deep copy).
+        Y = last;
     }
 }
 
 void TransformerEncoder::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
     const int K = dY.rows;
     const int D = dY.cols;
-    brotensor::Tensor d_top(K, D);
+    brotensor::Tensor d_top = brotensor::Tensor::zeros_on(dY.device, K, D);
     if (has_final_ln_) {
         final_ln_.backward(dY, d_top);
     } else {
@@ -75,111 +71,19 @@ void TransformerEncoder::backward(const brotensor::Tensor& dY, brotensor::Tensor
 
     brotensor::Tensor d_cur = std::move(d_top);
     for (int i = cfg_.n_layers - 1; i >= 0; --i) {
-        brotensor::Tensor d_in(K, D);
-        blocks_[i]->backward(d_cur, d_in);
-        d_cur = std::move(d_in);
-    }
-    if (dX.rows != K || dX.cols != D) dX.resize(K, D);
-    std::memcpy(dX.ptr(), d_cur.ptr(), sizeof(float) * K * D);
-}
-
-#ifdef BROTENSOR_HAS_GPU
-void TransformerEncoder::forward(const brotensor::GpuTensor& X, const float* mask_dev,
-                                 brotensor::GpuTensor& Y) {
-    assert(device_ == brotensor::Device::GPU);
-    const int K = X.rows;
-    const int D = X.cols;
-    assert(D == cfg_.dim);
-    if (Y.rows != K || Y.cols != D) Y.resize(K, D);
-
-    // activations_g_ has size n_layers + 1; [0] = X clone, [i+1] = block i out.
-    if ((int)activations_g_.size() != cfg_.n_layers + 1) {
-        activations_g_.clear();
-        activations_g_.reserve(cfg_.n_layers + 1);
-        for (int i = 0; i <= cfg_.n_layers; ++i) {
-            activations_g_.emplace_back(K, D);
-        }
-    } else {
-        for (auto& a : activations_g_) {
-            if (a.rows != K || a.cols != D) a.resize(K, D);
-        }
-    }
-    activations_g_[0] = X.clone();
-    for (int i = 0; i < cfg_.n_layers; ++i) {
-        blocks_[i]->forward(activations_g_[i], mask_dev, activations_g_[i + 1]);
-    }
-    const brotensor::GpuTensor& last = activations_g_[cfg_.n_layers];
-    if (has_final_ln_) {
-        if (pre_final_ln_g_.rows != K || pre_final_ln_g_.cols != D) {
-            pre_final_ln_g_.resize(K, D);
-        }
-        pre_final_ln_g_ = last.clone();
-        final_ln_.forward(pre_final_ln_g_, Y);
-    } else {
-        // Y = last (clone copy).
-        Y = last.clone();
-    }
-}
-
-void TransformerEncoder::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
-    assert(device_ == brotensor::Device::GPU);
-    const int K = dY.rows;
-    const int D = dY.cols;
-    if (dX.rows != K || dX.cols != D) dX.resize(K, D);
-
-    brotensor::GpuTensor d_top(K, D);
-    if (has_final_ln_) {
-        final_ln_.backward(dY, d_top);
-    } else {
-        d_top = dY.clone();
-    }
-
-    brotensor::GpuTensor d_cur = std::move(d_top);
-    for (int i = cfg_.n_layers - 1; i >= 0; --i) {
-        brotensor::GpuTensor d_in(K, D);
+        brotensor::Tensor d_in = brotensor::Tensor::zeros_on(dY.device, K, D);
         blocks_[i]->backward(d_cur, d_in);
         d_cur = std::move(d_in);
     }
     dX = std::move(d_cur);
 }
 
-void TransformerEncoder::forward_inference_batched(
-        const brotensor::GpuTensor& X_RD, const float* mask_R_dev,
-        brotensor::GpuTensor& Y_RD, int B, int K) {
-    assert(device_ == brotensor::Device::GPU);
-    const int D = cfg_.dim;
-    const int R = B * K;
-    if (Y_RD.rows != R || Y_RD.cols != D) Y_RD.resize(R, D);
-    if (R == 0) return;
-    if (cfg_.n_layers == 0) {
-        if (has_final_ln_) {
-            final_ln_.forward_inference_batched(X_RD, Y_RD);
-        } else {
-            brotensor::copy_d2d_gpu(X_RD, 0, Y_RD, 0, R * D);
-        }
-        return;
-    }
-    brotensor::GpuTensor a(R, D), b(R, D);
-    const brotensor::GpuTensor* cur = &X_RD;
-    brotensor::GpuTensor* dst = &a;
-    for (int i = 0; i < cfg_.n_layers; ++i) {
-        blocks_[i]->forward_inference_batched(*cur, mask_R_dev, *dst, B, K);
-        cur = dst;
-        dst = (dst == &a) ? &b : &a;
-    }
-    if (has_final_ln_) {
-        final_ln_.forward_inference_batched(*cur, Y_RD);
-    } else {
-        brotensor::copy_d2d_gpu(*cur, 0, Y_RD, 0, R * D);
-    }
-}
-#endif
-
 void TransformerEncoder::to(brotensor::Device d) {
     if (d == device_) return;
-    brotensor::device_require_gpu("TransformerEncoder");
     for (auto& b : blocks_) b->to(d);
     if (has_final_ln_) final_ln_.to(d);
+    for (auto& t : activations_) t = t.to(d);
+    pre_final_ln_ = pre_final_ln_.to(d);
     device_ = d;
 }
 

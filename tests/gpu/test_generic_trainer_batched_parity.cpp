@@ -14,7 +14,6 @@
 
 #include <brogameagent/learn/generic_replay_buffer.h>
 #include <brogameagent/learn/generic_trainer.h>
-#include <brotensor/device.h>
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 #include <brogameagent/nn/policy_value_net.h>
@@ -95,7 +94,7 @@ bool close(float a, float b, float atol, float rtol) {
 }  // namespace
 
 int main() {
-    brotensor::cuda_init();
+    brotensor::init();
 
     PolicyValueNet::Config cfg;
     cfg.in_dim       = 16;
@@ -108,7 +107,7 @@ int main() {
     PolicyValueNet net_gpu;
     net_cpu.init(cfg);
     net_gpu.init(cfg);
-    net_gpu.to(Device::GPU);
+    net_gpu.to(Device::CUDA);
 
     GenericReplayBuffer buf_cpu(256);
     GenericReplayBuffer buf_gpu(256);
@@ -133,7 +132,7 @@ int main() {
     GenericExItTrainer tr_gpu;
     tr_gpu.set_net(&net_gpu);
     tr_gpu.set_buffer(&buf_gpu);
-    GenericTrainerConfig tcfg_gpu = tcfg; tcfg_gpu.device = Device::GPU;
+    GenericTrainerConfig tcfg_gpu = tcfg; tcfg_gpu.device = Device::CUDA;
     tr_gpu.set_config(tcfg_gpu);
 
     constexpr int N = 50;

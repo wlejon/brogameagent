@@ -30,29 +30,29 @@ void run_dispatch_adam(int n, uint64_t seed, int n_steps) {
     seed_layer(cpu,    n, seed);
     seed_layer(gpu_ln, n, seed);
 
-    gpu_ln.to(Device::GPU);
-    BGA_CHECK(gpu_ln.device() == Device::GPU);
+    gpu_ln.to(Device::CUDA);
+    BGA_CHECK(gpu_ln.device() == Device::CUDA);
 
     const float lr = 1e-2f;
     const float b1 = 0.9f, b2 = 0.999f, eps = 1e-8f;
 
     for (int step = 1; step <= n_steps; ++step) {
         SplitMix64 rng(seed ^ (0xABCDull * static_cast<uint64_t>(step)));
-        Tensor x(n, 1), dY(n, 1);
+        Tensor x = Tensor::mat(n, 1), dY = Tensor::mat(n, 1);
         fill_random(x, rng);
         fill_random(dY, rng);
 
         // CPU path.
-        Tensor y_cpu(n, 1), dX_cpu(n, 1);
+        Tensor y_cpu = Tensor::mat(n, 1), dX_cpu = Tensor::mat(n, 1);
         cpu.zero_grad();
         cpu.forward(x, y_cpu);
         cpu.backward(dY, dX_cpu);
         cpu.adam_step(lr, b1, b2, eps, step);
 
         // GPU path.
-        brotensor::GpuTensor gx, gy, gdY, gdX;
-        brotensor::upload(x, gx); brotensor::upload(dY, gdY);
-        gy.resize(n, 1); gdX.resize(n, 1);
+        Tensor gx = x.to(Device::CUDA), gdY = dY.to(Device::CUDA);
+        Tensor gy = Tensor::zeros_on(Device::CUDA, n, 1);
+        Tensor gdX = Tensor::zeros_on(Device::CUDA, n, 1);
         gpu_ln.zero_grad();
         gpu_ln.forward(gx, gy);
         gpu_ln.backward(gdY, gdX);

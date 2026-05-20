@@ -155,7 +155,7 @@ PolicyValueNet make_net() {
     cfg.seed         = 0xCAFEDEEDull;
     PolicyValueNet net;
     net.init(cfg);
-    net.to(Device::GPU);
+    net.to(Device::CUDA);
     return net;
 }
 

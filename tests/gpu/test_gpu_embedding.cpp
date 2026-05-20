@@ -10,7 +10,7 @@
 
 using namespace bga_parity;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
+using brotensor::Device;
 
 namespace {
 
@@ -19,18 +19,18 @@ void run_embedding(int V, int D, const std::vector<int32_t>& idx,
     const int B = static_cast<int>(idx.size());
     SplitMix64 rng(seed);
 
-    Tensor table(V, D), dOut(B, D);
+    Tensor table = Tensor::mat(V, D), dOut = Tensor::mat(B, D);
     fill_random(table, rng);
     fill_random(dOut, rng);
 
     // CPU forward: gather rows.
-    Tensor out_cpu(B, D);
+    Tensor out_cpu = Tensor::mat(B, D);
     for (int b = 0; b < B; ++b) {
         const int row = idx[b];
         for (int j = 0; j < D; ++j) out_cpu(b, j) = table(row, j);
     }
     // CPU backward: scatter-accumulate. Pre-fill with non-zero to verify +=.
-    Tensor dTable_init(V, D);
+    Tensor dTable_init = Tensor::mat(V, D);
     fill_random(dTable_init, rng, 0.25f);
     Tensor dTable_cpu = dTable_init;
     for (int b = 0; b < B; ++b) {
@@ -39,16 +39,16 @@ void run_embedding(int V, int D, const std::vector<int32_t>& idx,
     }
 
     // GPU.
-    GpuTensor gtable, gdOut, gout, gdTable;
-    brotensor::upload(table, gtable);
-    brotensor::upload(dOut, gdOut);
-    brotensor::upload(dTable_init, gdTable);
+    Tensor gtable = table.to(Device::CUDA);
+    Tensor gdOut = dOut.to(Device::CUDA);
+    Tensor gout = Tensor::zeros_on(Device::CUDA, B, D);
+    Tensor gdTable = dTable_init.to(Device::CUDA);
 
-    auto d_idx_buf = upload_indices(idx);
-    int32_t* d_idx = d_idx_buf.device_ptr();
+    Tensor d_idx_buf = upload_indices(idx);
+    const int32_t* d_idx = static_cast<const int32_t*>(d_idx_buf.data);
 
-    brotensor::embedding_lookup_forward_gpu(gtable, d_idx, B, gout);
-    brotensor::embedding_lookup_backward_gpu(gdOut, d_idx, B, gdTable);
+    brotensor::embedding_lookup_forward(gtable, d_idx, B, gout);
+    brotensor::embedding_lookup_backward(gdOut, d_idx, B, gdTable);
 
     Tensor out_gpu = download_to_host(gout);
     Tensor dTable_gpu = download_to_host(gdTable);

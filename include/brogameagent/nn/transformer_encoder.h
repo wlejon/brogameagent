@@ -1,13 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include <brotensor/device.h>
 #include <brotensor/tensor.h>
 #include "transformer_block.h"
-
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/tensor.h>
-#endif
 
 #include <cstdint>
 #include <memory>
@@ -26,8 +21,8 @@ namespace brogameagent::nn {
 // Serialization: writes block count (int32) + each block's serialization,
 // then the optional final-LN serialization (only for pre-norm).
 //
-// GPU dispatch: composite layer. `to(brotensor::Device)` recurses to all blocks and
-// the final RowLN. The CPU code path is unchanged.
+// Device: composite layer. `to(brotensor::Device)` recurses to all blocks
+// and the final RowLN; brotensor ops dispatch on operand device at runtime.
 
 class TransformerEncoder : public ICircuit {
 public:
@@ -52,21 +47,6 @@ public:
     // X: (K, D); Y: (K, D); resized if mis-shaped.
     void forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& Y);
     void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
-
-#ifdef BROTENSOR_HAS_GPU
-    void forward(const brotensor::GpuTensor& X, const float* mask_dev,
-                 brotensor::GpuTensor& Y);
-    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
-
-    // Inference-only batched forward. (B*K, D) input → (B*K, D) output.
-    // Mask is (B*K,) or null. Stacks forward_inference_batched on each
-    // block, ping-ponging two scratch buffers, then applies the optional
-    // final LayerNorm (pre-norm only). No host syncs anywhere.
-    void forward_inference_batched(const brotensor::GpuTensor& X_RD,
-                                    const float* mask_R_dev,
-                                    brotensor::GpuTensor& Y_RD,
-                                    int B, int K);
-#endif
 
     brotensor::Device device() const { return device_; }
     void to(brotensor::Device d);
@@ -95,11 +75,6 @@ private:
     brotensor::Tensor pre_final_ln_;
 
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    // Inter-block activations on device.
-    std::vector<brotensor::GpuTensor> activations_g_;
-    brotensor::GpuTensor pre_final_ln_g_;
-#endif
 };
 
 } // namespace brogameagent::nn

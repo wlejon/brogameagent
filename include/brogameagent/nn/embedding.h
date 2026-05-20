@@ -4,6 +4,7 @@
 #include <brotensor/tensor.h>
 
 #include <cstdint>
+#include <vector>
 
 namespace brogameagent::nn {
 
@@ -11,6 +12,12 @@ namespace brogameagent::nn {
 //
 // (vocab, dim) weight table. Forward: copy row idx into out. Backward: sparse
 // — only row idx of dW accumulates the upstream gradient. Xavier init.
+//
+// The single-index forward/backward operate host-side (a row copy / a row
+// accumulate); the brotensor `embedding_lookup_*` ops are batched (device
+// index buffer + B rows) and do not match this single-index API, so the
+// host-side row math is kept. `to(brotensor::Device)` still migrates every
+// owned tensor for consistency with the other circuits.
 
 class Embedding : public ICircuit {
 public:
@@ -24,6 +31,9 @@ public:
 
     int vocab() const { return W_.rows; }
     int dim()   const { return W_.cols; }
+
+    brotensor::Device device() const { return device_; }
+    void to(brotensor::Device d);
 
     const char* name() const override { return "Embedding"; }
     int  num_params() const override { return W_.size(); }
@@ -43,6 +53,8 @@ private:
     brotensor::Tensor vW_;
     brotensor::Tensor mW_;
     brotensor::Tensor vAW_;
+
+    brotensor::Device device_ = brotensor::Device::CPU;
 };
 
 } // namespace brogameagent::nn

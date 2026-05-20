@@ -1,7 +1,7 @@
 // End-to-end GPU dispatch parity test for LayerNorm.
 //
 // Builds two LayerNorm instances seeded identically; migrates one to
-// Device::GPU; runs forward/backward and sgd_step on both; verifies that
+// Device::CUDA; runs forward/backward and sgd_step on both; verifies that
 // outputs, parameter grads and post-step parameters match within tolerance.
 // Also exercises save/load round-trip after a host↔device migration.
 
@@ -31,24 +31,24 @@ void run_dispatch(int n, uint64_t seed) {
     seed_layer(gpu_ln, n, seed);
 
     SplitMix64 rng(seed ^ 0xABCDull);
-    Tensor x(n, 1), dY(n, 1);
+    Tensor x = Tensor::mat(n, 1), dY = Tensor::mat(n, 1);
     fill_random(x, rng);
     fill_random(dY, rng);
 
     // CPU path.
-    Tensor y_cpu(n, 1), dX_cpu(n, 1);
+    Tensor y_cpu = Tensor::mat(n, 1), dX_cpu = Tensor::mat(n, 1);
     cpu.zero_grad();
     cpu.forward(x, y_cpu);
     cpu.backward(dY, dX_cpu);
     Tensor dGamma_cpu = cpu.dGamma();
     Tensor dBeta_cpu  = cpu.dBeta();
 
-    // GPU path: migrate, then run via the GpuTensor overloads.
-    gpu_ln.to(Device::GPU);
-    BGA_CHECK(gpu_ln.device() == Device::GPU);
-    brotensor::GpuTensor gx, gy, gdY, gdX;
-    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
-    gy.resize(n, 1); gdX.resize(n, 1);
+    // GPU path: migrate, then run with device-resident tensors.
+    gpu_ln.to(Device::CUDA);
+    BGA_CHECK(gpu_ln.device() == Device::CUDA);
+    Tensor gx = x.to(Device::CUDA), gdY = dY.to(Device::CUDA);
+    Tensor gy = Tensor::zeros_on(Device::CUDA, n, 1);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, n, 1);
     gpu_ln.zero_grad();
     gpu_ln.forward(gx, gy);
     gpu_ln.backward(gdY, gdX);
@@ -67,7 +67,7 @@ void run_dispatch(int n, uint64_t seed) {
     compare_tensors(cpu.beta(),  gpu_ln.beta(),  "ln.dispatch.beta_after_sgd");
 
     // Save/load round-trip after migrating to GPU and back.
-    gpu_ln.to(Device::GPU);
+    gpu_ln.to(Device::CUDA);
     std::vector<uint8_t> blob;
     gpu_ln.save_to(blob);
     LayerNorm restored;

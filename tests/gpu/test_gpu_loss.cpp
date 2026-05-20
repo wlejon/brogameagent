@@ -3,39 +3,38 @@
 #include "parity_helpers.h"
 
 #include <brotensor/ops.h>
-#include <brotensor/ops_cpu.h>
 
 #include <cmath>
 #include <vector>
 
 using namespace bga_parity;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
+using brotensor::Device;
 
 namespace {
 
 void run_mse(int n, uint64_t seed) {
     SplitMix64 rng(seed);
-    Tensor pred(n, 1), target(n, 1);
+    Tensor pred = Tensor::vec(n), target = Tensor::vec(n);
     fill_random(pred, rng);
     fill_random(target, rng);
 
     // CPU reference: mean of squared diffs.
     float loss_cpu = 0.0f;
-    Tensor dPred_cpu(n, 1);
+    Tensor dPred_cpu = Tensor::vec(n);
     for (int i = 0; i < n; ++i) {
-        const float d = pred.data[i] - target.data[i];
+        const float d = pred[i] - target[i];
         loss_cpu += d * d;
-        dPred_cpu.data[i] = (2.0f / static_cast<float>(n)) * d;
+        dPred_cpu[i] = (2.0f / static_cast<float>(n)) * d;
     }
     loss_cpu /= static_cast<float>(n);
 
-    GpuTensor gpred, gtarget, gdPred;
-    brotensor::upload(pred, gpred);
-    brotensor::upload(target, gtarget);
+    Tensor gpred = pred.to(Device::CUDA);
+    Tensor gtarget = target.to(Device::CUDA);
+    Tensor gdPred = Tensor::zeros_on(Device::CUDA, n, 1);
 
-    const float loss_gpu = brotensor::mse_vec_forward_gpu(gpred, gtarget);
-    brotensor::mse_vec_backward_gpu(gpred, gtarget, gdPred);
+    const float loss_gpu = brotensor::mse_vec_forward(gpred, gtarget);
+    brotensor::mse_vec_backward(gpred, gtarget, gdPred);
 
     Tensor dPred_gpu = download_to_host(gdPred);
     BGA_CHECK(std::fabs(loss_cpu - loss_gpu) < 1e-5f + 1e-4f * std::fabs(loss_cpu));
@@ -44,7 +43,7 @@ void run_mse(int n, uint64_t seed) {
 
 void run_xent(int n, uint64_t seed, const std::vector<float>* mask) {
     SplitMix64 rng(seed);
-    Tensor logits(n, 1), target(n, 1);
+    Tensor logits = Tensor::vec(n), target = Tensor::vec(n);
     fill_random(logits, rng);
 
     // Build a soft-target distribution that sums to 1 over valid entries.
@@ -53,27 +52,28 @@ void run_xent(int n, uint64_t seed, const std::vector<float>* mask) {
     for (int i = 0; i < n; ++i) {
         if (mask && (*mask)[i] == 0.0f) continue;
         const float v = rng.next_f01() + 0.05f;
-        target.data[i] = v;
+        target[i] = v;
         tsum += v;
     }
     if (tsum > 0.0f) {
-        for (int i = 0; i < n; ++i) target.data[i] /= tsum;
+        for (int i = 0; i < n; ++i) target[i] /= tsum;
     }
 
-    Tensor probs_cpu(n, 1), dLogits_cpu(n, 1);
-    const float loss_cpu = brotensor::softmax_xent_segment_cpu(
-        logits.data.data(), target.data.data(),
-        probs_cpu.data.data(), dLogits_cpu.data.data(),
+    Tensor probs_cpu = Tensor::vec(n), dLogits_cpu = Tensor::vec(n);
+    const float loss_cpu = brotensor::softmax_xent_segment(
+        logits.ptr(), target.ptr(),
+        probs_cpu.ptr(), dLogits_cpu.ptr(),
         n, mask ? mask->data() : nullptr);
 
-    GpuTensor glogits, gtarget, gprobs, gdLogits;
-    brotensor::upload(logits, glogits);
-    brotensor::upload(target, gtarget);
+    Tensor glogits = logits.to(Device::CUDA);
+    Tensor gtarget = target.to(Device::CUDA);
+    Tensor gprobs = Tensor::zeros_on(Device::CUDA, n, 1);
+    Tensor gdLogits = Tensor::zeros_on(Device::CUDA, n, 1);
 
-    auto d_mask_buf = upload_mask(mask);
-    float* d_mask = d_mask_buf.device_ptr();
+    Tensor d_mask_buf = upload_mask(mask);
+    const float* d_mask = static_cast<const float*>(d_mask_buf.data);
 
-    const float loss_gpu = brotensor::softmax_xent_fused_gpu(
+    const float loss_gpu = brotensor::softmax_xent_fused(
         glogits, gtarget, d_mask, gprobs, gdLogits);
     Tensor probs_gpu = download_to_host(gprobs);
     Tensor dLogits_gpu = download_to_host(gdLogits);

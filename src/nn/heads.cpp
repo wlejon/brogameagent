@@ -1,9 +1,6 @@
 #include "brogameagent/nn/heads.h"
 
-#ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
-#include <brotensor/runtime.h>
-#endif
 
 #include <cassert>
 #include <cmath>
@@ -23,60 +20,40 @@ void ValueHead::init(int embed_dim, int hidden, uint64_t& rng_state) {
 
 void ValueHead::forward(const brotensor::Tensor& embed, float& value) {
     fc1_.forward(embed, h_raw_);
-    brotensor::relu_forward_cpu(h_raw_, h_act_);
+    brotensor::relu_forward(h_raw_, h_act_);
     fc2_.forward(h_act_, out_raw_);
-    const float y = std::tanh(out_raw_[0]);
+    // out_raw_ is a 1-element tensor on the parameter device; stage it to host
+    // to read the scalar (host accessors throw on a device tensor).
+    const float pre = (device_ == brotensor::Device::CPU)
+                          ? out_raw_[0]
+                          : out_raw_.to(brotensor::Device::CPU)[0];
+    const float y = std::tanh(pre);
     y_cache_ = y;
     value = y;
 }
 
 void ValueHead::to(brotensor::Device d) {
     if (d == device_) return;
-    brotensor::device_require_gpu("ValueHead");
-#ifdef BROTENSOR_HAS_GPU
     fc1_.to(d);
     fc2_.to(d);
-    if (d == brotensor::Device::GPU) {
-        h_raw_g_.resize(h_raw_.rows, 1);
-        h_act_g_.resize(h_act_.rows, 1);
-        pre_tanh_g_.resize(1, 1);
-        post_tanh_g_.resize(1, 1);
-        dValue_g_.resize(1, 1);
-        dPre_g_.resize(1, 1);
-        dHact_g_.resize(h_act_.rows, 1);
-        dHraw_g_.resize(h_raw_.rows, 1);
-    }
-#endif
-    device_ = d;
+    h_raw_   = h_raw_.to(d);
+    h_act_   = h_act_.to(d);
+    out_raw_ = out_raw_.to(d);
+    device_  = d;
 }
-
-#ifdef BROTENSOR_HAS_GPU
-void ValueHead::forward(const brotensor::GpuTensor& embed) {
-    assert(device_ == brotensor::Device::GPU);
-    fc1_.forward(embed, h_raw_g_);
-    brotensor::relu_forward_gpu(h_raw_g_, h_act_g_);
-    fc2_.forward(h_act_g_, pre_tanh_g_);
-    brotensor::tanh_forward_gpu(pre_tanh_g_, post_tanh_g_);
-}
-
-void ValueHead::backward(brotensor::GpuTensor& dEmbed) {
-    assert(device_ == brotensor::Device::GPU);
-    brotensor::tanh_backward_gpu(post_tanh_g_, dValue_g_, dPre_g_);
-    fc2_.backward(dPre_g_, dHact_g_);
-    brotensor::relu_backward_gpu(h_raw_g_, dHact_g_, dHraw_g_);
-    fc1_.backward(dHraw_g_, dEmbed);
-}
-#endif
 
 void ValueHead::backward(float dValue, brotensor::Tensor& dEmbed) {
-    // d/dx tanh(x) = 1 - tanh(x)^2
+    // d/dx tanh(x) = 1 - tanh(x)^2. dOut is a host-staged 1-vector (the grad
+    // is a host scalar) migrated to the parameter device so the downstream
+    // Linear backward ops dispatch consistently.
     const float d_out_raw = dValue * (1.0f - y_cache_ * y_cache_);
     brotensor::Tensor dOut = brotensor::Tensor::vec(1);
     dOut[0] = d_out_raw;
-    brotensor::Tensor dHact = brotensor::Tensor::vec(h_act_.size());
+    dOut = dOut.to(device_);
+    brotensor::Tensor dHact = brotensor::Tensor::zeros_on(device_, h_act_.size(), 1);
     fc2_.backward(dOut, dHact);
-    brotensor::Tensor dHraw = brotensor::Tensor::vec(h_raw_.size());
-    brotensor::relu_backward_cpu(h_raw_, dHact, dHraw);
+    brotensor::Tensor dHraw = brotensor::Tensor::zeros_on(device_, h_raw_.size(), 1);
+    brotensor::relu_backward(h_raw_, dHact, dHraw);
     fc1_.backward(dHraw, dEmbed);
 }
 
@@ -90,77 +67,39 @@ void FactoredPolicyHead::init(int embed_dim, uint64_t& rng_state) {
 
 void FactoredPolicyHead::to(brotensor::Device d) {
     if (d == device_) return;
-    brotensor::device_require_gpu("FactoredPolicyHead");
-#ifdef BROTENSOR_HAS_GPU
     move_.to(d); atk_.to(d); abil_.to(d);
-    if (d == brotensor::Device::GPU) {
-        lm_g_.resize(N_MOVE,    1);
-        la_g_.resize(N_ATTACK,  1);
-        lb_g_.resize(N_ABILITY, 1);
-        dLm_g_.resize(N_MOVE,    1);
-        dLa_g_.resize(N_ATTACK,  1);
-        dLb_g_.resize(N_ABILITY, 1);
-        dEmbedTmp_g_.resize(move_.in_dim(), 1);
-    }
-#endif
     device_ = d;
 }
 
-#ifdef BROTENSOR_HAS_GPU
-void FactoredPolicyHead::forward(const brotensor::GpuTensor& embed, brotensor::GpuTensor& logits) {
-    assert(device_ == brotensor::Device::GPU);
-    move_.forward(embed, lm_g_);
-    atk_.forward(embed,  la_g_);
-    abil_.forward(embed, lb_g_);
-    std::vector<const brotensor::GpuTensor*> parts{&lm_g_, &la_g_, &lb_g_};
-    brotensor::concat_rows_gpu(parts, logits);
-}
-
-void FactoredPolicyHead::backward(const brotensor::GpuTensor& dLogits, brotensor::GpuTensor& dEmbed) {
-    assert(device_ == brotensor::Device::GPU);
-    std::vector<brotensor::GpuTensor*> parts{&dLm_g_, &dLa_g_, &dLb_g_};
-    brotensor::split_rows_gpu(dLogits, parts);
-
-    // dEmbed = move.backward + atk.backward + abil.backward
-    move_.backward(dLm_g_, dEmbed);
-    atk_.backward(dLa_g_, dEmbedTmp_g_);
-    brotensor::add_inplace_gpu(dEmbed, dEmbedTmp_g_);
-    abil_.backward(dLb_g_, dEmbedTmp_g_);
-    brotensor::add_inplace_gpu(dEmbed, dEmbedTmp_g_);
-}
-#endif
-
 void FactoredPolicyHead::forward(const brotensor::Tensor& embed, brotensor::Tensor& logits) {
     assert(logits.size() == total_logits());
-    brotensor::Tensor lm = brotensor::Tensor::vec(N_MOVE);
-    brotensor::Tensor la = brotensor::Tensor::vec(N_ATTACK);
-    brotensor::Tensor lb = brotensor::Tensor::vec(N_ABILITY);
+    brotensor::Tensor lm = brotensor::Tensor::vec(N_MOVE).to(device_);
+    brotensor::Tensor la = brotensor::Tensor::vec(N_ATTACK).to(device_);
+    brotensor::Tensor lb = brotensor::Tensor::vec(N_ABILITY).to(device_);
     move_.forward(embed, lm);
     atk_.forward(embed, la);
     abil_.forward(embed, lb);
-    std::memcpy(logits.ptr() + 0,                 lm.ptr(), N_MOVE    * sizeof(float));
-    std::memcpy(logits.ptr() + N_MOVE,            la.ptr(), N_ATTACK  * sizeof(float));
-    std::memcpy(logits.ptr() + N_MOVE + N_ATTACK, lb.ptr(), N_ABILITY * sizeof(float));
+    std::vector<const brotensor::Tensor*> parts{&lm, &la, &lb};
+    brotensor::concat_rows(parts, logits);
 }
 
 void FactoredPolicyHead::backward(const brotensor::Tensor& dLogits, brotensor::Tensor& dEmbed) {
     assert(dLogits.size() == total_logits());
     dEmbed.zero();
 
-    brotensor::Tensor dLm = brotensor::Tensor::vec(N_MOVE);
-    brotensor::Tensor dLa = brotensor::Tensor::vec(N_ATTACK);
-    brotensor::Tensor dLb = brotensor::Tensor::vec(N_ABILITY);
-    std::memcpy(dLm.ptr(), dLogits.ptr() + 0,                 N_MOVE    * sizeof(float));
-    std::memcpy(dLa.ptr(), dLogits.ptr() + N_MOVE,            N_ATTACK  * sizeof(float));
-    std::memcpy(dLb.ptr(), dLogits.ptr() + N_MOVE + N_ATTACK, N_ABILITY * sizeof(float));
+    brotensor::Tensor dLm = brotensor::Tensor::vec(N_MOVE).to(device_);
+    brotensor::Tensor dLa = brotensor::Tensor::vec(N_ATTACK).to(device_);
+    brotensor::Tensor dLb = brotensor::Tensor::vec(N_ABILITY).to(device_);
+    std::vector<brotensor::Tensor*> parts{&dLm, &dLa, &dLb};
+    brotensor::split_rows(dLogits, parts);
 
-    brotensor::Tensor de = brotensor::Tensor::vec(dEmbed.size());
-    move_.backward(dLm, de);
-    for (int i = 0; i < de.size(); ++i) dEmbed[i] += de[i];
+    // dEmbed = move.backward + atk.backward + abil.backward
+    brotensor::Tensor de = brotensor::Tensor::vec(dEmbed.size()).to(device_);
+    move_.backward(dLm, dEmbed);
     atk_.backward(dLa, de);
-    for (int i = 0; i < de.size(); ++i) dEmbed[i] += de[i];
+    brotensor::add_inplace(dEmbed, de);
     abil_.backward(dLb, de);
-    for (int i = 0; i < de.size(); ++i) dEmbed[i] += de[i];
+    brotensor::add_inplace(dEmbed, de);
 }
 
 static void softmax_slice(const float* logits, int n, float* probs, const float* mask) {

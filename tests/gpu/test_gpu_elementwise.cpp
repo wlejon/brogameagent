@@ -3,29 +3,28 @@
 #include "parity_helpers.h"
 
 #include <brotensor/ops.h>
-#include <brotensor/ops_cpu.h>
 
 using namespace bga_parity;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
+using brotensor::Device;
 
 namespace {
 
 void test_relu(int n, uint64_t seed) {
     SplitMix64 rng(seed);
-    Tensor x(n, 1), dY(n, 1);
+    Tensor x = Tensor::vec(n), dY = Tensor::vec(n);
     fill_random(x, rng);
     fill_random(dY, rng);
 
-    Tensor y_cpu(n, 1), dX_cpu(n, 1);
-    brotensor::relu_forward_cpu(x, y_cpu);
-    brotensor::relu_backward_cpu(x, dY, dX_cpu);
+    Tensor y_cpu = Tensor::vec(n), dX_cpu = Tensor::vec(n);
+    brotensor::relu_forward(x, y_cpu);
+    brotensor::relu_backward(x, dY, dX_cpu);
 
-    GpuTensor gx, gdY, gy, gdX;
-    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
-    gy.resize(n, 1); gdX.resize(n, 1);
-    brotensor::relu_forward_gpu(gx, gy);
-    brotensor::relu_backward_gpu(gx, gdY, gdX);
+    Tensor gx = x.to(Device::CUDA), gdY = dY.to(Device::CUDA);
+    Tensor gy = Tensor::zeros_on(Device::CUDA, n, 1);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, n, 1);
+    brotensor::relu_forward(gx, gy);
+    brotensor::relu_backward(gx, gdY, gdX);
 
     compare_tensors(y_cpu, download_to_host(gy), "relu_forward");
     compare_tensors(dX_cpu, download_to_host(gdX), "relu_backward");
@@ -33,20 +32,20 @@ void test_relu(int n, uint64_t seed) {
 
 void test_tanh(int n, uint64_t seed) {
     SplitMix64 rng(seed);
-    Tensor x(n, 1), dY(n, 1);
+    Tensor x = Tensor::vec(n), dY = Tensor::vec(n);
     fill_random(x, rng);
     fill_random(dY, rng);
 
-    Tensor y_cpu(n, 1), dX_cpu(n, 1);
-    brotensor::tanh_forward_cpu(x, y_cpu);
-    brotensor::tanh_backward_cpu(y_cpu, dY, dX_cpu);
+    Tensor y_cpu = Tensor::vec(n), dX_cpu = Tensor::vec(n);
+    brotensor::tanh_forward(x, y_cpu);
+    brotensor::tanh_backward(y_cpu, dY, dX_cpu);
 
-    GpuTensor gx, gy, gdY, gdX;
-    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
-    gy.resize(n, 1); gdX.resize(n, 1);
-    brotensor::tanh_forward_gpu(gx, gy);
+    Tensor gx = x.to(Device::CUDA), gdY = dY.to(Device::CUDA);
+    Tensor gy = Tensor::zeros_on(Device::CUDA, n, 1);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, n, 1);
+    brotensor::tanh_forward(gx, gy);
     Tensor y_gpu = download_to_host(gy);
-    brotensor::tanh_backward_gpu(gy, gdY, gdX);
+    brotensor::tanh_backward(gy, gdY, gdX);
 
     compare_tensors(y_cpu, y_gpu, "tanh_forward");
     compare_tensors(dX_cpu, download_to_host(gdX), "tanh_backward");
@@ -54,20 +53,20 @@ void test_tanh(int n, uint64_t seed) {
 
 void test_sigmoid(int n, uint64_t seed) {
     SplitMix64 rng(seed);
-    Tensor x(n, 1), dY(n, 1);
+    Tensor x = Tensor::vec(n), dY = Tensor::vec(n);
     fill_random(x, rng);
     fill_random(dY, rng);
 
-    Tensor y_cpu(n, 1), dX_cpu(n, 1);
-    brotensor::sigmoid_forward_cpu(x, y_cpu);
-    brotensor::sigmoid_backward_cpu(y_cpu, dY, dX_cpu);
+    Tensor y_cpu = Tensor::vec(n), dX_cpu = Tensor::vec(n);
+    brotensor::sigmoid_forward(x, y_cpu);
+    brotensor::sigmoid_backward(y_cpu, dY, dX_cpu);
 
-    GpuTensor gx, gy, gdY, gdX;
-    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
-    gy.resize(n, 1); gdX.resize(n, 1);
-    brotensor::sigmoid_forward_gpu(gx, gy);
+    Tensor gx = x.to(Device::CUDA), gdY = dY.to(Device::CUDA);
+    Tensor gy = Tensor::zeros_on(Device::CUDA, n, 1);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, n, 1);
+    brotensor::sigmoid_forward(gx, gy);
     Tensor y_gpu = download_to_host(gy);
-    brotensor::sigmoid_backward_gpu(gy, gdY, gdX);
+    brotensor::sigmoid_backward(gy, gdY, gdX);
 
     compare_tensors(y_cpu, y_gpu, "sigmoid_forward");
     compare_tensors(dX_cpu, download_to_host(gdX), "sigmoid_backward");
@@ -75,32 +74,30 @@ void test_sigmoid(int n, uint64_t seed) {
 
 void test_add_inplace(int n, uint64_t seed) {
     SplitMix64 rng(seed);
-    Tensor y(n, 1), x(n, 1);
+    Tensor y = Tensor::vec(n), x = Tensor::vec(n);
     fill_random(y, rng);
     fill_random(x, rng);
 
     Tensor y_cpu = y;
-    brotensor::add_inplace_cpu(y_cpu, x);
+    brotensor::add_inplace(y_cpu, x);
 
-    GpuTensor gy, gx;
-    brotensor::upload(y, gy); brotensor::upload(x, gx);
-    brotensor::add_inplace_gpu(gy, gx);
+    Tensor gy = y.to(Device::CUDA), gx = x.to(Device::CUDA);
+    brotensor::add_inplace(gy, gx);
 
     compare_tensors(y_cpu, download_to_host(gy), "add_inplace");
 }
 
 void test_add_scalar_inplace(int n, uint64_t seed) {
     SplitMix64 rng(seed);
-    Tensor y(n, 1);
+    Tensor y = Tensor::vec(n);
     fill_random(y, rng);
     const float s = 0.375f;
 
     Tensor y_cpu = y;
-    brotensor::add_scalar_inplace_cpu(y_cpu, s);
+    brotensor::add_scalar_inplace(y_cpu, s);
 
-    GpuTensor gy;
-    brotensor::upload(y, gy);
-    brotensor::add_scalar_inplace_gpu(gy, s);
+    Tensor gy = y.to(Device::CUDA);
+    brotensor::add_scalar_inplace(gy, s);
 
     compare_tensors(y_cpu, download_to_host(gy), "add_scalar_inplace");
 }

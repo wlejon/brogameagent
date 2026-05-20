@@ -9,7 +9,7 @@
 
 using namespace bga_parity;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
+using brotensor::Device;
 
 namespace {
 
@@ -50,28 +50,29 @@ void masked_mean_pool_backward_cpu(const Tensor& dY,
 
 void run_pool(int K, int D, uint64_t seed, const std::vector<float>& mask) {
     SplitMix64 rng(seed);
-    Tensor X(K, D), dY(D, 1);
+    Tensor X = Tensor::mat(K, D), dY = Tensor::vec(D);
     fill_random(X, rng);
     fill_random(dY, rng);
 
-    Tensor y_cpu, dX_cpu(K, D);
+    Tensor y_cpu, dX_cpu = Tensor::mat(K, D);
     masked_mean_pool_cpu(X, mask, y_cpu);
     masked_mean_pool_backward_cpu(dY, mask, dX_cpu);
 
-    GpuTensor gX, gdY, gy, gdX;
-    brotensor::upload(X, gX);
-    brotensor::upload(dY, gdY);
+    Tensor gX = X.to(Device::CUDA);
+    Tensor gdY = dY.to(Device::CUDA);
 
-    auto d_mask_buf = upload_mask(&mask);
-    float* d_mask = d_mask_buf.device_ptr();
+    Tensor d_mask_buf = upload_mask(&mask);
+    const float* d_mask = static_cast<const float*>(d_mask_buf.data);
+
+    Tensor gy = Tensor::zeros_on(Device::CUDA, D, 1);
 
     // Pre-fill dX with garbage to confirm overwrite semantics.
-    Tensor dX_garbage(K, D);
+    Tensor dX_garbage = Tensor::mat(K, D);
     fill_random(dX_garbage, rng);
-    brotensor::upload(dX_garbage, gdX);
+    Tensor gdX = dX_garbage.to(Device::CUDA);
 
-    brotensor::masked_mean_pool_forward_gpu(gX, d_mask, gy);
-    brotensor::masked_mean_pool_backward_gpu(gdY, d_mask, K, gdX);
+    brotensor::masked_mean_pool_forward(gX, d_mask, gy);
+    brotensor::masked_mean_pool_backward(gdY, d_mask, K, gdX);
 
     Tensor y_gpu = download_to_host(gy);
     Tensor dX_gpu = download_to_host(gdX);

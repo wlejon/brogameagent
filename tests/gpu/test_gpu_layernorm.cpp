@@ -8,25 +8,25 @@
 using namespace bga_parity;
 using brogameagent::nn::LayerNorm;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
+using brotensor::Device;
 
 namespace {
 
 void run_layernorm(int n, uint64_t seed) {
     SplitMix64 rng(seed);
-    Tensor x(n, 1), dY(n, 1);
+    Tensor x = Tensor::vec(n), dY = Tensor::vec(n);
     fill_random(x, rng);
     fill_random(dY, rng);
 
     // Random gamma/beta (non-trivial).
-    Tensor gamma(n, 1), beta(n, 1);
+    Tensor gamma = Tensor::vec(n), beta = Tensor::vec(n);
     for (int i = 0; i < n; ++i) {
-        gamma.data[i] = 0.5f + 0.5f * rng.next_f01();   // [0.5, 1.0)
-        beta.data[i]  = rng.next_unit() * 0.25f;
+        gamma[i] = 0.5f + 0.5f * rng.next_f01();   // [0.5, 1.0)
+        beta[i]  = rng.next_unit() * 0.25f;
     }
 
     // Pre-fill dGamma/dBeta to validate accumulation.
-    Tensor dGamma_init(n, 1), dBeta_init(n, 1);
+    Tensor dGamma_init = Tensor::vec(n), dBeta_init = Tensor::vec(n);
     fill_random(dGamma_init, rng, 0.25f);
     fill_random(dBeta_init, rng, 0.25f);
 
@@ -37,26 +37,27 @@ void run_layernorm(int n, uint64_t seed) {
     ln.beta()  = beta;
     ln.dGamma() = dGamma_init;
     ln.dBeta()  = dBeta_init;
-    Tensor y_cpu(n, 1), dX_cpu(n, 1);
+    Tensor y_cpu = Tensor::vec(n), dX_cpu = Tensor::vec(n);
     ln.forward(x, y_cpu);
     ln.backward(dY, dX_cpu);
     Tensor dGamma_cpu = ln.dGamma();
     Tensor dBeta_cpu  = ln.dBeta();
 
-    // GPU.
-    GpuTensor gx, ggamma, gbeta, gy, gxhat, gdY, gdX, gdGamma, gdBeta;
-    brotensor::upload(x, gx);
-    brotensor::upload(gamma, ggamma);
-    brotensor::upload(beta, gbeta);
-    brotensor::upload(dY, gdY);
-    gy.resize(n, 1); gxhat.resize(n, 1); gdX.resize(n, 1);
-    brotensor::upload(dGamma_init, gdGamma);
-    brotensor::upload(dBeta_init,  gdBeta);
+    // GPU — run the same ops directly on CUDA-resident tensors.
+    Tensor gx = x.to(Device::CUDA);
+    Tensor ggamma = gamma.to(Device::CUDA);
+    Tensor gbeta = beta.to(Device::CUDA);
+    Tensor gdY = dY.to(Device::CUDA);
+    Tensor gy = Tensor::zeros_on(Device::CUDA, n, 1);
+    Tensor gxhat = Tensor::zeros_on(Device::CUDA, n, 1);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, n, 1);
+    Tensor gdGamma = dGamma_init.to(Device::CUDA);
+    Tensor gdBeta = dBeta_init.to(Device::CUDA);
     float mean_out = 0.0f, rstd_out = 0.0f;
-    brotensor::layernorm_forward_gpu(
+    brotensor::layernorm_forward(
         gx, ggamma, gbeta, gy, gxhat, mean_out, rstd_out, 1e-5f);
     Tensor y_gpu = download_to_host(gy);
-    brotensor::layernorm_backward_gpu(
+    brotensor::layernorm_backward(
         gdY, gxhat, ggamma, rstd_out, gdX, gdGamma, gdBeta);
 
     compare_tensors(y_cpu, y_gpu, "layernorm.y");

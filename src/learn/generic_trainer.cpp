@@ -1,11 +1,7 @@
 #include "brogameagent/learn/generic_trainer.h"
-#include <brotensor/ops_cpu.h>
 
-#ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
-#include <brotensor/device_buffer.h>
-#endif
 
 #include <cassert>
 #include <cstring>
@@ -14,9 +10,15 @@ namespace brogameagent::learn {
 
 // ─── INetForExIt adapters ──────────────────────────────────────────────────
 //
-// Thin per-net wrappers so step_cpu_/step_gpu_ can call into either net via
-// a single virtual interface without templating the trainer.
+// Thin per-net wrappers so the step paths can call into either net via a
+// single virtual interface without templating the trainer.
 namespace {
+
+// Row-base pointer into a (B, W) row-major FP32 tensor.
+inline void* row_ptr(const brotensor::Tensor& t, int row, int width) {
+    return static_cast<char*>(t.data) +
+           static_cast<size_t>(row) * width * sizeof(float);
+}
 
 class PolicyValueNetAdapter final : public INetForExIt {
 public:
@@ -30,20 +32,22 @@ public:
     std::vector<uint8_t> save() const override { return n_->save(); }
     void forward(const brotensor::Tensor& x, float& v, brotensor::Tensor& l) override { n_->forward(x, v, l); }
     void backward(float dV, const brotensor::Tensor& dL) override { n_->backward(dV, dL); }
-#ifdef BROTENSOR_HAS_GPU
-    void forward_batched_train(const brotensor::GpuTensor& X, brotensor::GpuTensor& L,
-                               brotensor::GpuTensor& V) override {
+    void forward_batched_train(const brotensor::Tensor& X, brotensor::Tensor& L,
+                               brotensor::Tensor& V) override {
         n_->forward_batched_train(X, L, V);
     }
-    void backward_batched(const brotensor::GpuTensor& dL,
-                          const brotensor::GpuTensor& dV) override {
+    void backward_batched(const brotensor::Tensor& dL,
+                          const brotensor::Tensor& dV) override {
         n_->backward_batched(dL, dV);
     }
-#endif
 private:
     nn::PolicyValueNet* n_;
 };
 
+// SingleHeroNetTX has no native batched kernels — its batched-train API is a
+// per-sample loop over the single-sample forward/backward, holding row views
+// of the (B, *) staging tensors. forward()/backward() dispatch by device, so
+// the loop is device-neutral.
 class SingleHeroNetTXAdapter final : public INetForExIt {
 public:
     explicit SingleHeroNetTXAdapter(nn::SingleHeroNetTX* n) : n_(n) {}
@@ -56,18 +60,46 @@ public:
     std::vector<uint8_t> save() const override { return n_->save(); }
     void forward(const brotensor::Tensor& x, float& v, brotensor::Tensor& l) override { n_->forward(x, v, l); }
     void backward(float dV, const brotensor::Tensor& dL) override { n_->backward(dV, dL); }
-#ifdef BROTENSOR_HAS_GPU
-    void forward_batched_train(const brotensor::GpuTensor& X, brotensor::GpuTensor& L,
-                               brotensor::GpuTensor& V) override {
-        n_->forward_batched_train(X, L, V);
+
+    void forward_batched_train(const brotensor::Tensor& X, brotensor::Tensor& L,
+                               brotensor::Tensor& V) override {
+        const int B    = X.rows;
+        const int din  = X.cols;
+        const int lw   = n_->num_actions();
+        if (L.rows != B || L.cols != lw) L.resize(B, lw);
+        brotensor::Tensor Vh = brotensor::Tensor::mat(B, 1);
+        last_X_ = &X;
+        for (int b = 0; b < B; ++b) {
+            brotensor::Tensor xv = brotensor::Tensor::view(X.device, row_ptr(X, b, din), din, 1);
+            brotensor::Tensor lv = brotensor::Tensor::view(L.device, row_ptr(L, b, lw), lw, 1);
+            float v = 0.0f;
+            n_->forward(xv, v, lv);
+            Vh.ptr()[b] = v;
+        }
+        V = Vh.to(V.device);
     }
-    void backward_batched(const brotensor::GpuTensor& dL,
-                          const brotensor::GpuTensor& dV) override {
-        n_->backward_batched(dL, dV);
+
+    void backward_batched(const brotensor::Tensor& dL,
+                          const brotensor::Tensor& dV) override {
+        assert(last_X_ != nullptr &&
+               "forward_batched_train must precede backward_batched");
+        const brotensor::Tensor& X = *last_X_;
+        const int B   = X.rows;
+        const int din = X.cols;
+        const int lw  = n_->num_actions();
+        const brotensor::Tensor dVh = dV.to(brotensor::Device::CPU);
+        brotensor::Tensor scratch;  // re-forward logits output, unused
+        for (int b = 0; b < B; ++b) {
+            brotensor::Tensor xv = brotensor::Tensor::view(X.device, row_ptr(X, b, din), din, 1);
+            float v = 0.0f;
+            n_->forward(xv, v, scratch);   // re-prime per-sample caches
+            brotensor::Tensor dlv = brotensor::Tensor::view(dL.device, row_ptr(dL, b, lw), lw, 1);
+            n_->backward(dVh.ptr()[b], dlv);
+        }
     }
-#endif
 private:
-    nn::SingleHeroNetTX* n_;
+    nn::SingleHeroNetTX*     n_;
+    const brotensor::Tensor* last_X_ = nullptr;
 };
 
 } // namespace
@@ -84,15 +116,10 @@ void GenericExItTrainer::set_net(nn::SingleHeroNetTX* net) {
     net_ = net_owned_.get();
 }
 
-
 GenericTrainStep GenericExItTrainer::step() {
     if (!net_ || !buf_ || buf_->size() == 0) return {};
-#ifdef BROTENSOR_HAS_GPU
-    if (cfg_.device == brotensor::Device::GPU) {
-        return step_gpu_();
-    }
-#endif
-    return step_cpu_();
+    if (cfg_.device == brotensor::Device::CPU) return step_cpu_();
+    return step_batched_();
 }
 
 GenericTrainStep GenericExItTrainer::step_cpu_() {
@@ -128,13 +155,12 @@ GenericTrainStep GenericExItTrainer::step_cpu_() {
 
         // Value loss.
         float dv = 0.0f;
-        const float lv = brotensor::mse_scalar_cpu(v_pred, sit.value_target, dv);
+        const float lv = brotensor::mse_scalar(v_pred, sit.value_target, dv);
         tot_lv += lv;
 
         // Policy loss with optional mask. For multi-head nets, run an
         // independent softmax-xent per head segment and mean-reduce across
-        // heads so loss magnitude is invariant to head count. For single-
-        // head nets the loop runs once and is equivalent to the old call.
+        // heads so loss magnitude is invariant to head count.
         const float* mask_ptr = nullptr;
         if (!sit.action_mask.empty() &&
             static_cast<int>(sit.action_mask.size()) == n_act) {
@@ -147,7 +173,7 @@ GenericTrainStep GenericExItTrainer::step_cpu_() {
             const int off = offsets[h];
             const int len = offsets[h + 1] - off;
             const float* head_mask = mask_ptr ? mask_ptr + off : nullptr;
-            const float lh = brotensor::softmax_xent_segment_cpu(
+            const float lh = brotensor::softmax_xent_segment(
                 logits.ptr() + off, target.ptr() + off,
                 probs.ptr()  + off, dLog.ptr()   + off,
                 len, head_mask);
@@ -195,48 +221,50 @@ void GenericExItTrainer::maybe_publish() {
     ++publishes_;
 }
 
-#ifdef BROTENSOR_HAS_GPU
-void GenericExItTrainer::ensure_gpu_staging_() {
-    if (gpu_ready_) return;
+void GenericExItTrainer::ensure_staging_() {
+    if (staging_ready_) return;
     const int B      = cfg_.batch;
     const int in_dim = net_->in_dim();
     const int n_act  = net_->num_actions();
-    X_BD_g_.resize(B, in_dim);
-    T_BL_g_.resize(B, n_act);
-    M_BL_g_.resize(B, n_act);
-    V_B1_g_.resize(B, 1);
-    logits_BL_g_.resize(B, n_act);
-    values_B1_g_.resize(B, 1);
-    probs_BL_g_.resize(B, n_act);
-    dLog_BL_g_.resize(B, n_act);
-    dV_B1_g_.resize(B, 1);
-    lp_per_sample_g_.resize(B, 1);
-    lv_per_sample_g_.resize(B, 1);
+    const brotensor::Device d = cfg_.device;
+    X_BD_         = brotensor::Tensor::zeros_on(d, B, in_dim);
+    T_BL_         = brotensor::Tensor::zeros_on(d, B, n_act);
+    M_BL_         = brotensor::Tensor::zeros_on(d, B, n_act);
+    V_B1_         = brotensor::Tensor::zeros_on(d, B, 1);
+    logits_BL_    = brotensor::Tensor::zeros_on(d, B, n_act);
+    values_B1_    = brotensor::Tensor::zeros_on(d, B, 1);
+    probs_BL_     = brotensor::Tensor::zeros_on(d, B, n_act);
+    dLog_BL_      = brotensor::Tensor::zeros_on(d, B, n_act);
+    dV_B1_        = brotensor::Tensor::zeros_on(d, B, 1);
+    lp_per_sample_ = brotensor::Tensor::zeros_on(d, B, 1);
+    lv_per_sample_ = brotensor::Tensor::zeros_on(d, B, 1);
 
-    // Upload head_offsets into a small device int buffer (owned by the
-    // trainer; backend-neutral via DeviceBuffer<int>).
+    // Upload head_offsets into a small device int buffer (INT32 carrier).
     const auto& offsets = net_->head_offsets();
-    const std::size_t n = offsets.size();
-    head_offsets_dev_.upload(offsets.data(), n);
+    const int n = static_cast<int>(offsets.size());
+    brotensor::Tensor offs_h =
+        brotensor::Tensor::zeros_on(brotensor::Device::CPU, n, 1, brotensor::Dtype::INT32);
+    int* op = static_cast<int*>(offs_h.host_raw_mut());
+    for (int i = 0; i < n; ++i) op[i] = offsets[i];
+    head_offsets_dev_ = offs_h.to(d);
 
-    gpu_ready_ = true;
+    staging_ready_ = true;
 }
 
-GenericTrainStep GenericExItTrainer::step_gpu_() {
+GenericTrainStep GenericExItTrainer::step_batched_() {
     GenericTrainStep s;
     auto batch = buf_->sample(cfg_.batch, rng_);
     if (batch.empty()) return s;
 
-    const int B      = cfg_.batch;
-    const int in_dim = net_->in_dim();
-    const int n_act  = net_->num_actions();
+    const int B       = cfg_.batch;
+    const int in_dim  = net_->in_dim();
+    const int n_act   = net_->num_actions();
     const int n_heads = net_->num_heads();
-    ensure_gpu_staging_();
+    ensure_staging_();
 
     // Stage minibatch on host into contiguous (B, *) buffers. Defensive: any
     // shape-mismatched situation contributes zeros (target = uniform, mask
-    // = 1s, value = 0) so we always have exactly B rows. CPU path skips
-    // such samples; we accept a small parity deviation in that edge case.
+    // = 1s, value = 0) so we always have exactly B rows.
     brotensor::Tensor X_h = brotensor::Tensor::mat(B, in_dim);
     brotensor::Tensor T_h = brotensor::Tensor::mat(B, n_act);
     brotensor::Tensor M_h = brotensor::Tensor::mat(B, n_act);
@@ -267,49 +295,46 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
     }
     if (valid == 0) return s;
 
-    brotensor::upload(X_h, X_BD_g_);
-    brotensor::upload(T_h, T_BL_g_);
-    brotensor::upload(V_h, V_B1_g_);
+    X_BD_ = X_h.to(cfg_.device);
+    T_BL_ = T_h.to(cfg_.device);
+    V_B1_ = V_h.to(cfg_.device);
     const float* mask_dev = nullptr;
     if (any_mask) {
-        brotensor::upload(M_h, M_BL_g_);
-        mask_dev = M_BL_g_.data;
+        M_BL_ = M_h.to(cfg_.device);
+        mask_dev = static_cast<const float*>(M_BL_.data);
     }
 
     net_->zero_grad();
 
     // Forward (training) — caches every layer's batched activation.
-    net_->forward_batched_train(X_BD_g_, logits_BL_g_, values_B1_g_);
+    net_->forward_batched_train(X_BD_, logits_BL_, values_B1_);
 
-    // Per-sample value MSE: writes dV_B1_g_ = (pred - target),
-    // lv_per_sample_g_ = 0.5 * d^2.
-    brotensor::mse_vec_per_sample_gpu(values_B1_g_, V_B1_g_,
-                                    dV_B1_g_, lv_per_sample_g_);
+    // Per-sample value MSE: dV_B1_ = (pred - target), lv_per_sample_ = 0.5*d^2.
+    brotensor::mse_vec_per_sample(values_B1_, V_B1_, dV_B1_, lv_per_sample_);
 
-    // Per-(sample, head) softmax-xent: writes probs, dLog = (p - t) on valid,
+    // Per-(sample, head) softmax-xent: probs, dLog = (p - t) on valid,
     // lp_per_sample = sum-over-heads of head xent.
-    brotensor::softmax_xent_fused_batched_gpu(
-        logits_BL_g_, T_BL_g_, mask_dev,
-        head_offsets_dev_.device_ptr(), n_heads,
-        probs_BL_g_, dLog_BL_g_, lp_per_sample_g_);
+    brotensor::softmax_xent_fused_batched(
+        logits_BL_, T_BL_, mask_dev,
+        static_cast<const int*>(head_offsets_dev_.data), n_heads,
+        probs_BL_, dLog_BL_, lp_per_sample_);
 
-    // Scale gradients on device. Match CPU exactly:
-    //   dV  *= value_weight / B
+    // Scale gradients. Match the CPU path exactly:
+    //   dV   *= value_weight  / B
     //   dLog *= policy_weight / B / n_heads
     const float B_f = static_cast<float>(B);
-    brotensor::scale_inplace_gpu(dV_B1_g_, cfg_.value_weight / B_f);
-    brotensor::scale_inplace_gpu(dLog_BL_g_,
-                               cfg_.policy_weight / B_f / static_cast<float>(n_heads));
+    brotensor::scale_inplace(dV_B1_, cfg_.value_weight / B_f);
+    brotensor::scale_inplace(dLog_BL_,
+                             cfg_.policy_weight / B_f / static_cast<float>(n_heads));
 
-    // Backward + optimizer (all on device).
-    net_->backward_batched(dLog_BL_g_, dV_B1_g_);
+    // Backward + optimizer.
+    net_->backward_batched(dLog_BL_, dV_B1_);
     net_->sgd_step(cfg_.lr, cfg_.momentum);
 
-    // Single sync + downloads of the two per-sample loss vectors.
-    brotensor::Tensor lv_h, lp_h;
-    brotensor::download(lv_per_sample_g_, lv_h);
-    brotensor::download(lp_per_sample_g_, lp_h);
-    brotensor::cuda_sync();
+    // Drain the device queue, then read the two per-sample loss vectors back.
+    brotensor::sync(cfg_.device);
+    const brotensor::Tensor lv_h = lv_per_sample_.to(brotensor::Device::CPU);
+    const brotensor::Tensor lp_h = lp_per_sample_.to(brotensor::Device::CPU);
 
     float tot_lv = 0.0f, tot_lp = 0.0f;
     for (int b = 0; b < B; ++b) tot_lv += lv_h[b];
@@ -326,6 +351,5 @@ GenericTrainStep GenericExItTrainer::step_gpu_() {
     if (cfg_.publish_every > 0 && (steps_ % cfg_.publish_every) == 0) maybe_publish();
     return s;
 }
-#endif
 
 } // namespace brogameagent::learn

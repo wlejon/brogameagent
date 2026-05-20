@@ -1,5 +1,7 @@
 #include "brogameagent/nn/forward_model.h"
 
+#include <brotensor/ops.h>
+
 #include <cassert>
 #include <cstring>
 
@@ -22,7 +24,7 @@ void ForwardModelHead::forward(const brotensor::Tensor& embed, const brotensor::
     std::memcpy(input_cat_.ptr(),                embed.ptr(),  embed_dim_ * sizeof(float));
     std::memcpy(input_cat_.ptr() + embed_dim_,   action.ptr(), ACTION_DIM * sizeof(float));
     fc1_.forward(input_cat_, h_raw_);
-    brotensor::relu_forward_cpu(h_raw_, h_act_);
+    brotensor::relu_forward(h_raw_, h_act_);
     fc2_.forward(h_act_, pred_next);
 }
 
@@ -32,7 +34,7 @@ void ForwardModelHead::backward(const brotensor::Tensor& dPred, brotensor::Tenso
     brotensor::Tensor dHact = brotensor::Tensor::vec(h_act_.size());
     fc2_.backward(dPred, dHact);
     brotensor::Tensor dHraw = brotensor::Tensor::vec(h_raw_.size());
-    brotensor::relu_backward_cpu(h_raw_, dHact, dHraw);
+    brotensor::relu_backward(h_raw_, dHact, dHraw);
     brotensor::Tensor dInput = brotensor::Tensor::vec(input_cat_.size());
     fc1_.backward(dHraw, dInput);
     // Split: first embed_dim_ to dEmbed, remainder (action) is discarded.

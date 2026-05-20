@@ -1,14 +1,9 @@
 #pragma once
 
 #include "decoder.h"
-#include <brotensor/device.h>
 #include "encoder.h"
 #include "net.h"
 #include <brotensor/tensor.h>
-
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/tensor.h>
-#endif
 
 #include <cstdint>
 #include <vector>
@@ -21,9 +16,9 @@ namespace brogameagent::nn {
 // Observation in, observation reconstruction out. Loss is masked MSE
 // (see reconstruction_loss in autoencoder.cpp).
 //
-// GPU dispatch: to(brotensor::Device) recurses into encoder/decoder. The GPU
-// forward/backward route through the children's GPU overloads and use a
-// device-resident `embed` cache between them.
+// Device: to(brotensor::Device) recurses into encoder/decoder and migrates the
+// `embed`/`dEmbed` caches. forward/backward run on whatever device the
+// tensors live on — brotensor ops dispatch at runtime.
 
 class DeepSetsAutoencoder {
 public:
@@ -40,11 +35,6 @@ public:
     // Single-sample forward/backward.
     void forward(const brotensor::Tensor& x, brotensor::Tensor& x_hat);
     void backward(const brotensor::Tensor& dX_hat);
-
-#ifdef BROTENSOR_HAS_GPU
-    void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& x_hat);
-    void backward(const brotensor::GpuTensor& dX_hat);
-#endif
 
     brotensor::Device device() const { return device_; }
     void to(brotensor::Device d);
@@ -76,11 +66,6 @@ private:
     brotensor::Tensor dEmbed_;      // scratch for backward
 
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    brotensor::GpuTensor embed_g_;
-    brotensor::GpuTensor dEmbed_g_;
-    brotensor::GpuTensor dX_obs_g_;   // discarded grad wrt observation; allocated once.
-#endif
 };
 
 // Compute masked reconstruction loss and gradient wrt the reconstruction.

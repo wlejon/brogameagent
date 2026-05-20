@@ -9,7 +9,6 @@ using namespace bga_parity;
 using brotensor::Device;
 using brogameagent::nn::MultiHeadAttention;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
 
 namespace {
 
@@ -18,10 +17,10 @@ void seed_layer(MultiHeadAttention& m, int K, int D, int H, uint64_t seed) {
     m.init(K, D, H, s);
     SplitMix64 rng(seed ^ 0xF00Dull);
     for (int i = 0; i < D * D; ++i) {
-        m.Wq().data[i] = rng.next_unit() * 0.5f;
-        m.Wk().data[i] = rng.next_unit() * 0.5f;
-        m.Wv().data[i] = rng.next_unit() * 0.5f;
-        m.Wo().data[i] = rng.next_unit() * 0.5f;
+        m.Wq()[i] = rng.next_unit() * 0.5f;
+        m.Wk()[i] = rng.next_unit() * 0.5f;
+        m.Wv()[i] = rng.next_unit() * 0.5f;
+        m.Wo()[i] = rng.next_unit() * 0.5f;
     }
 }
 
@@ -31,20 +30,20 @@ void run_dispatch(int K, int D, int H, uint64_t seed) {
     seed_layer(gpu_a, K, D, H, seed);
 
     SplitMix64 rng(seed ^ 0xBEEFull);
-    Tensor X(K, D), dO(K, D);
+    Tensor X = Tensor::mat(K, D), dO = Tensor::mat(K, D);
     fill_random(X, rng);
     fill_random(dO, rng);
 
-    Tensor O_cpu(K, D), dX_cpu(K, D);
+    Tensor O_cpu = Tensor::mat(K, D), dX_cpu = Tensor::mat(K, D);
     cpu.zero_grad();
     cpu.forward(X, nullptr, O_cpu);
     cpu.backward(dO, dX_cpu);
 
-    gpu_a.to(Device::GPU);
-    BGA_CHECK(gpu_a.device() == Device::GPU);
-    GpuTensor gX, gO, gdO, gdX;
-    brotensor::upload(X, gX); brotensor::upload(dO, gdO);
-    gO.resize(K, D); gdX.resize(K, D);
+    gpu_a.to(Device::CUDA);
+    BGA_CHECK(gpu_a.device() == Device::CUDA);
+    Tensor gX = X.to(Device::CUDA), gdO = dO.to(Device::CUDA);
+    Tensor gO = Tensor::zeros_on(Device::CUDA, K, D);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, K, D);
     gpu_a.zero_grad();
     gpu_a.forward(gX, nullptr, gO);
     gpu_a.backward(gdO, gdX);
@@ -61,7 +60,7 @@ void run_dispatch(int K, int D, int H, uint64_t seed) {
     compare_tensors(cpu.Wo(), gpu_a.Wo(), "mha.dispatch.Wo_after_sgd");
 
     // Save/load round-trip after GPU migration.
-    gpu_a.to(Device::GPU);
+    gpu_a.to(Device::CUDA);
     std::vector<uint8_t> blob;
     gpu_a.save_to(blob);
     MultiHeadAttention restored;

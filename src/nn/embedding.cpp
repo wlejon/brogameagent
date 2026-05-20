@@ -1,5 +1,6 @@
 #include "brogameagent/nn/embedding.h"
-#include <brotensor/ops_cpu.h>
+
+#include <brotensor/ops.h>
 
 #include <cassert>
 #include <cstring>
@@ -12,8 +13,9 @@ void Embedding::init(int vocab, int dim, uint64_t& rng_state) {
     vW_.resize(vocab, dim);
     mW_.resize(vocab, dim);
     vAW_.resize(vocab, dim);
-    mW_.zero(); vAW_.zero();
-    brotensor::xavier_init_cpu(W_, rng_state);
+    // resize() leaves contents undefined — zero every accumulator explicitly.
+    dW_.zero(); vW_.zero(); mW_.zero(); vAW_.zero();
+    brotensor::xavier_init(W_, rng_state);
 }
 
 void Embedding::forward(int idx, brotensor::Tensor& out) {
@@ -32,19 +34,24 @@ void Embedding::backward(int idx, const brotensor::Tensor& dY) {
     for (int j = 0; j < d; ++j) row[j] += g[j];
 }
 
+void Embedding::to(brotensor::Device d) {
+    if (d == device_) return;
+    W_   = W_.to(d);
+    dW_  = dW_.to(d);
+    vW_  = vW_.to(d);
+    mW_  = mW_.to(d);
+    vAW_ = vAW_.to(d);
+    device_ = d;
+}
+
 void Embedding::zero_grad() { dW_.zero(); }
 
 void Embedding::sgd_step(float lr, float momentum) {
-    const int n = W_.size();
-    float* w = W_.ptr(); float* vw = vW_.ptr(); const float* gw = dW_.ptr();
-    for (int i = 0; i < n; ++i) {
-        vw[i] = momentum * vw[i] + gw[i];
-        w[i] -= lr * vw[i];
-    }
+    brotensor::sgd_step(W_, dW_, vW_, lr, momentum);
 }
 
 void Embedding::adam_step(float lr, float beta1, float beta2, float eps, int step) {
-    adam_step_cpu(W_, dW_, mW_, vAW_, lr, beta1, beta2, eps, step);
+    brotensor::adam_step(W_, dW_, mW_, vAW_, lr, beta1, beta2, eps, step);
 }
 
 void Embedding::save_to(std::vector<uint8_t>& out) const {
@@ -53,11 +60,13 @@ void Embedding::save_to(std::vector<uint8_t>& out) const {
 
 void Embedding::load_from(const uint8_t* data, size_t& offset, size_t size) {
     tensor_read(W_, data, offset, size);
+    // Reset optimizer state and grad buffers to match loaded shapes. resize()
+    // leaves contents undefined, so each buffer is explicitly zeroed.
     dW_.resize(W_.rows, W_.cols);
     vW_.resize(W_.rows, W_.cols);
     mW_.resize(W_.rows, W_.cols);
     vAW_.resize(W_.rows, W_.cols);
-    mW_.zero(); vAW_.zero();
+    dW_.zero(); vW_.zero(); mW_.zero(); vAW_.zero();
 }
 
 } // namespace brogameagent::nn

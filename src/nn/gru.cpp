@@ -1,5 +1,6 @@
 #include "brogameagent/nn/gru.h"
-#include <brotensor/ops_cpu.h>
+
+#include <brotensor/ops.h>
 
 #include <cassert>
 #include <cmath>
@@ -22,8 +23,8 @@ void GRUCell::init(int in_dim, int hidden, uint64_t& rng_state) {
     W_ir_.resize(H, I); W_iz_.resize(H, I); W_in_.resize(H, I);
     W_hr_.resize(H, H); W_hz_.resize(H, H); W_hn_.resize(H, H);
     b_r_.resize(H, 1); b_z_.resize(H, 1); b_in_.resize(H, 1); b_hn_.resize(H, 1);
-    brotensor::xavier_init_cpu(W_ir_, rng_state); brotensor::xavier_init_cpu(W_iz_, rng_state); brotensor::xavier_init_cpu(W_in_, rng_state);
-    brotensor::xavier_init_cpu(W_hr_, rng_state); brotensor::xavier_init_cpu(W_hz_, rng_state); brotensor::xavier_init_cpu(W_hn_, rng_state);
+    brotensor::xavier_init(W_ir_, rng_state); brotensor::xavier_init(W_iz_, rng_state); brotensor::xavier_init(W_in_, rng_state);
+    brotensor::xavier_init(W_hr_, rng_state); brotensor::xavier_init(W_hz_, rng_state); brotensor::xavier_init(W_hn_, rng_state);
 
     dW_ir_.resize(H, I); dW_iz_.resize(H, I); dW_in_.resize(H, I);
     dW_hr_.resize(H, H); dW_hz_.resize(H, H); dW_hn_.resize(H, H);
@@ -39,6 +40,13 @@ void GRUCell::init(int in_dim, int hidden, uint64_t& rng_state) {
     vAW_ir_.resize(H, I); vAW_iz_.resize(H, I); vAW_in_.resize(H, I);
     vAW_hr_.resize(H, H); vAW_hz_.resize(H, H); vAW_hn_.resize(H, H);
     vAb_r_.resize(H, 1); vAb_z_.resize(H, 1); vAb_in_.resize(H, 1); vAb_hn_.resize(H, 1);
+    // resize() leaves contents undefined — zero every accumulator explicitly.
+    dW_ir_.zero(); dW_iz_.zero(); dW_in_.zero();
+    dW_hr_.zero(); dW_hz_.zero(); dW_hn_.zero();
+    db_r_.zero(); db_z_.zero(); db_in_.zero(); db_hn_.zero();
+    vW_ir_.zero(); vW_iz_.zero(); vW_in_.zero();
+    vW_hr_.zero(); vW_hz_.zero(); vW_hn_.zero();
+    vb_r_.zero(); vb_z_.zero(); vb_in_.zero(); vb_hn_.zero();
     mW_ir_.zero(); mW_iz_.zero(); mW_in_.zero();
     mW_hr_.zero(); mW_hz_.zero(); mW_hn_.zero();
     mb_r_.zero(); mb_z_.zero(); mb_in_.zero(); mb_hn_.zero();
@@ -64,26 +72,27 @@ void GRUCell::forward(const brotensor::Tensor& x, const brotensor::Tensor& h_pre
     x_cache_ = x;
     h_prev_cache_ = h_prev;
 
-    brotensor::Tensor tmp_i(H, 1), tmp_h(H, 1);
+    brotensor::Tensor tmp_i = brotensor::Tensor::vec(H);
+    brotensor::Tensor tmp_h = brotensor::Tensor::vec(H);
 
     // r
     mat_vec(W_ir_, x, tmp_i);
     mat_vec(W_hr_, h_prev, tmp_h);
     for (int i = 0; i < H; ++i) r_[i] = tmp_i[i] + tmp_h[i] + b_r_[i];
-    brotensor::sigmoid_forward_cpu(r_, r_);
+    brotensor::sigmoid_forward(r_, r_);
 
     // z
     mat_vec(W_iz_, x, tmp_i);
     mat_vec(W_hz_, h_prev, tmp_h);
     for (int i = 0; i < H; ++i) z_[i] = tmp_i[i] + tmp_h[i] + b_z_[i];
-    brotensor::sigmoid_forward_cpu(z_, z_);
+    brotensor::sigmoid_forward(z_, z_);
 
     // n: tanh( W_in x + b_in + r * (W_hn h_prev + b_hn) )
     mat_vec(W_in_, x, tmp_i);
     mat_vec(W_hn_, h_prev, tmp_h);
     for (int i = 0; i < H; ++i) hn_pre_[i] = tmp_h[i] + b_hn_[i];
     for (int i = 0; i < H; ++i) n_[i] = tmp_i[i] + b_in_[i] + r_[i] * hn_pre_[i];
-    brotensor::tanh_forward_cpu(n_, n_);
+    brotensor::tanh_forward(n_, n_);
 
     // h = (1 - z) * n + z * h_prev
     for (int i = 0; i < H; ++i) h[i] = (1.0f - z_[i]) * n_[i] + z_[i] * h_prev[i];
@@ -94,8 +103,9 @@ void GRUCell::backward(const brotensor::Tensor& dH, brotensor::Tensor& dX, brote
     assert(dH.size() == H);
 
     // h = (1 - z) * n + z * h_prev
-    brotensor::Tensor dz(H, 1), dn(H, 1);
-    brotensor::Tensor dh_prev_direct(H, 1);
+    brotensor::Tensor dz = brotensor::Tensor::vec(H);
+    brotensor::Tensor dn = brotensor::Tensor::vec(H);
+    brotensor::Tensor dh_prev_direct = brotensor::Tensor::vec(H);
     for (int i = 0; i < H; ++i) {
         dn[i] = dH[i] * (1.0f - z_[i]);
         dz[i] = dH[i] * (h_prev_cache_[i] - n_[i]);
@@ -103,23 +113,25 @@ void GRUCell::backward(const brotensor::Tensor& dH, brotensor::Tensor& dX, brote
     }
 
     // n = tanh(n_pre) where n_pre = W_in x + b_in + r * hn_pre
-    brotensor::Tensor dn_pre(H, 1);
-    brotensor::tanh_backward_cpu(n_, dn, dn_pre);
+    brotensor::Tensor dn_pre = brotensor::Tensor::vec(H);
+    brotensor::tanh_backward(n_, dn, dn_pre);
 
     // Contribution paths from n_pre:
     //   d(W_in x + b_in) = dn_pre
     //   d r = dn_pre * hn_pre
     //   d hn_pre = dn_pre * r   (hn_pre = W_hn h_prev + b_hn)
-    brotensor::Tensor dr(H, 1), d_hn_pre(H, 1);
+    brotensor::Tensor dr = brotensor::Tensor::vec(H);
+    brotensor::Tensor d_hn_pre = brotensor::Tensor::vec(H);
     for (int i = 0; i < H; ++i) {
         dr[i]       = dn_pre[i] * hn_pre_[i];
         d_hn_pre[i] = dn_pre[i] * r_[i];
     }
 
     // Sigmoid backprop for r and z (r_ and z_ are post-sigmoid).
-    brotensor::Tensor dr_pre(H, 1), dz_pre(H, 1);
-    brotensor::sigmoid_backward_cpu(r_, dr, dr_pre);
-    brotensor::sigmoid_backward_cpu(z_, dz, dz_pre);
+    brotensor::Tensor dr_pre = brotensor::Tensor::vec(H);
+    brotensor::Tensor dz_pre = brotensor::Tensor::vec(H);
+    brotensor::sigmoid_backward(r_, dr, dr_pre);
+    brotensor::sigmoid_backward(z_, dz, dz_pre);
 
     // Now we have grads on the pre-activation "inputs" for r, z, n:
     //   r_pre = W_ir x + W_hr h_prev + b_r     -> dr_pre
@@ -228,6 +240,13 @@ void GRUCell::load_from(const uint8_t* data, size_t& offset, size_t size) {
     vAW_ir_.resize(H, I); vAW_iz_.resize(H, I); vAW_in_.resize(H, I);
     vAW_hr_.resize(H, H); vAW_hz_.resize(H, H); vAW_hn_.resize(H, H);
     vAb_r_.resize(H, 1); vAb_z_.resize(H, 1); vAb_in_.resize(H, 1); vAb_hn_.resize(H, 1);
+    // resize() leaves contents undefined — zero every accumulator explicitly.
+    dW_ir_.zero(); dW_iz_.zero(); dW_in_.zero();
+    dW_hr_.zero(); dW_hz_.zero(); dW_hn_.zero();
+    db_r_.zero(); db_z_.zero(); db_in_.zero(); db_hn_.zero();
+    vW_ir_.zero(); vW_iz_.zero(); vW_in_.zero();
+    vW_hr_.zero(); vW_hz_.zero(); vW_hn_.zero();
+    vb_r_.zero(); vb_z_.zero(); vb_in_.zero(); vb_hn_.zero();
     mW_ir_.zero(); mW_iz_.zero(); mW_in_.zero();
     mW_hr_.zero(); mW_hz_.zero(); mW_hn_.zero();
     mb_r_.zero(); mb_z_.zero(); mb_in_.zero(); mb_hn_.zero();

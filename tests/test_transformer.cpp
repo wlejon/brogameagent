@@ -55,13 +55,13 @@ struct SplitMix64 {
 };
 
 void fill_random(Tensor& t, SplitMix64& rng, float scale = 1.0f) {
-    for (int i = 0; i < t.size(); ++i) t.data[i] = rng.next_unit() * scale;
+    for (int i = 0; i < t.size(); ++i) t[i] = rng.next_unit() * scale;
 }
 
 // Compute scalar loss = sum(O * upstream) so dL/dO = upstream.
 float dot_loss(const Tensor& O, const Tensor& upstream) {
     float s = 0.0f;
-    for (int i = 0; i < O.size(); ++i) s += O.data[i] * upstream.data[i];
+    for (int i = 0; i < O.size(); ++i) s += O[i] * upstream[i];
     return s;
 }
 
@@ -76,14 +76,14 @@ void check_grad_param(Tensor& param, const Tensor& analytic_grad,
     int step = (n + max_idx - 1) / max_idx;
     if (step < 1) step = 1;
     for (int i = 0; i < n; i += step) {
-        const float orig = param.data[i];
-        param.data[i] = orig + h;
+        const float orig = param[i];
+        param[i] = orig + h;
         float l_plus = forward_loss();
-        param.data[i] = orig - h;
+        param[i] = orig - h;
         float l_minus = forward_loss();
-        param.data[i] = orig;
+        param[i] = orig;
         const float fd = (l_plus - l_minus) / (2.0f * h);
-        const float an = analytic_grad.data[i];
+        const float an = analytic_grad[i];
         const float diff = std::fabs(fd - an);
         const float tol = atol + rtol * std::fabs(an);
         if (diff > tol) {
@@ -103,14 +103,14 @@ void check_grad_input(Tensor& X, const Tensor& analytic_grad,
     int step = (n + max_idx - 1) / max_idx;
     if (step < 1) step = 1;
     for (int i = 0; i < n; i += step) {
-        const float orig = X.data[i];
-        X.data[i] = orig + h;
+        const float orig = X[i];
+        X[i] = orig + h;
         float l_plus = forward_loss();
-        X.data[i] = orig - h;
+        X[i] = orig - h;
         float l_minus = forward_loss();
-        X.data[i] = orig;
+        X[i] = orig;
         const float fd = (l_plus - l_minus) / (2.0f * h);
-        const float an = analytic_grad.data[i];
+        const float an = analytic_grad[i];
         const float diff = std::fabs(fd - an);
         const float tol = atol + rtol * std::fabs(an);
         if (diff > tol) {
@@ -138,9 +138,9 @@ TEST(mha_forward_invalid_rows_zero) {
     uint64_t s = 0x222ull;
     mha.init(4, 8, 2, s);
     SplitMix64 rng(0xAA);
-    Tensor X(4, 8); fill_random(X, rng);
+    Tensor X = Tensor::mat(4, 8); fill_random(X, rng);
     std::vector<float> mask = {1, 0, 1, 0};
-    Tensor O(4, 8);
+    Tensor O = Tensor::mat(4, 8);
     mha.forward(X, mask.data(), O);
     for (int i = 0; i < 4; ++i) {
         if (mask[i] == 0.0f) {
@@ -155,19 +155,20 @@ TEST(mha_grad_check_unmasked) {
     MultiHeadAttention mha;
     uint64_t s = 0x999ull;
     mha.init(K, D, H, s);
-    Tensor X(K, D), upstream(K, D), O(K, D);
+    Tensor X = Tensor::mat(K, D), upstream = Tensor::mat(K, D),
+           O = Tensor::mat(K, D);
     fill_random(X, rng);
     fill_random(upstream, rng);
 
     auto fwd_loss = [&]() {
-        Tensor Otmp(K, D);
+        Tensor Otmp = Tensor::mat(K, D);
         mha.forward(X, nullptr, Otmp);
         return dot_loss(Otmp, upstream);
     };
 
     mha.zero_grad();
     mha.forward(X, nullptr, O);
-    Tensor dX(K, D);
+    Tensor dX = Tensor::mat(K, D);
     mha.backward(upstream, dX);
 
     check_grad_input(X, dX, fwd_loss, "mha.dX");
@@ -183,20 +184,21 @@ TEST(mha_grad_check_masked) {
     MultiHeadAttention mha;
     uint64_t s = 0xABCull;
     mha.init(K, D, H, s);
-    Tensor X(K, D), upstream(K, D), O(K, D);
+    Tensor X = Tensor::mat(K, D), upstream = Tensor::mat(K, D),
+           O = Tensor::mat(K, D);
     fill_random(X, rng);
     fill_random(upstream, rng);
     std::vector<float> mask = {1, 1, 0, 1};
 
     auto fwd_loss = [&]() {
-        Tensor Otmp(K, D);
+        Tensor Otmp = Tensor::mat(K, D);
         mha.forward(X, mask.data(), Otmp);
         return dot_loss(Otmp, upstream);
     };
 
     mha.zero_grad();
     mha.forward(X, mask.data(), O);
-    Tensor dX(K, D);
+    Tensor dX = Tensor::mat(K, D);
     mha.backward(upstream, dX);
 
     check_grad_param(mha.Wq(), mha.dWq(), fwd_loss, "mha.dWq.mask");
@@ -212,8 +214,8 @@ TEST(mha_save_load_roundtrip) {
     MultiHeadAttention a;
     uint64_t s = 0x101ull;
     a.init(3, 8, 2, s);
-    Tensor X(3, 8); fill_random(X, rng);
-    Tensor Oa(3, 8); a.forward(X, nullptr, Oa);
+    Tensor X = Tensor::mat(3, 8); fill_random(X, rng);
+    Tensor Oa = Tensor::mat(3, 8); a.forward(X, nullptr, Oa);
 
     std::vector<uint8_t> buf;
     a.save_to(buf);
@@ -222,8 +224,8 @@ TEST(mha_save_load_roundtrip) {
     b.init(3, 8, 2, s2);  // different rng → different weights
     size_t off = 0;
     b.load_from(buf.data(), off, buf.size());
-    Tensor Ob(3, 8); b.forward(X, nullptr, Ob);
-    for (int i = 0; i < Oa.size(); ++i) CHECK(std::fabs(Oa.data[i] - Ob.data[i]) < 1e-6f);
+    Tensor Ob = Tensor::mat(3, 8); b.forward(X, nullptr, Ob);
+    for (int i = 0; i < Oa.size(); ++i) CHECK(std::fabs(Oa[i] - Ob[i]) < 1e-6f);
 }
 
 TEST(ff_param_count) {
@@ -239,19 +241,20 @@ TEST(ff_grad_check) {
     FeedForward ff;
     uint64_t s = 0xFEull;
     ff.init(D, DF, s);
-    Tensor X(K, D), upstream(K, D), O(K, D);
+    Tensor X = Tensor::mat(K, D), upstream = Tensor::mat(K, D),
+           O = Tensor::mat(K, D);
     fill_random(X, rng);
     fill_random(upstream, rng);
 
     auto fwd_loss = [&]() {
-        Tensor Otmp(K, D);
+        Tensor Otmp = Tensor::mat(K, D);
         ff.forward(X, Otmp);
         return dot_loss(Otmp, upstream);
     };
 
     ff.zero_grad();
     ff.forward(X, O);
-    Tensor dX(K, D);
+    Tensor dX = Tensor::mat(K, D);
     ff.backward(upstream, dX);
 
     check_grad_input(X, dX, fwd_loss, "ff.dX");
@@ -266,16 +269,16 @@ TEST(ff_save_load_roundtrip) {
     FeedForward a;
     uint64_t s = 0x10ull;
     a.init(8, 12, s);
-    Tensor X(3, 8); fill_random(X, rng);
-    Tensor Oa(3, 8); a.forward(X, Oa);
+    Tensor X = Tensor::mat(3, 8); fill_random(X, rng);
+    Tensor Oa = Tensor::mat(3, 8); a.forward(X, Oa);
     std::vector<uint8_t> buf; a.save_to(buf);
     FeedForward b;
     uint64_t s2 = 0x20ull;
     b.init(8, 12, s2);
     size_t off = 0;
     b.load_from(buf.data(), off, buf.size());
-    Tensor Ob(3, 8); b.forward(X, Ob);
-    for (int i = 0; i < Oa.size(); ++i) CHECK(std::fabs(Oa.data[i] - Ob.data[i]) < 1e-6f);
+    Tensor Ob = Tensor::mat(3, 8); b.forward(X, Ob);
+    for (int i = 0; i < Oa.size(); ++i) CHECK(std::fabs(Oa[i] - Ob[i]) < 1e-6f);
 }
 
 TEST(transformer_block_pre_norm_grad_check) {
@@ -287,19 +290,20 @@ TEST(transformer_block_pre_norm_grad_check) {
     cfg.norm = NormPlacement::PreNorm;
     uint64_t s = 0x55ull; blk.init(cfg, s);
 
-    Tensor X(K, D), upstream(K, D), Y(K, D);
+    Tensor X = Tensor::mat(K, D), upstream = Tensor::mat(K, D),
+           Y = Tensor::mat(K, D);
     fill_random(X, rng);
     fill_random(upstream, rng);
 
     auto fwd_loss = [&]() {
-        Tensor Ytmp(K, D);
+        Tensor Ytmp = Tensor::mat(K, D);
         blk.forward(X, nullptr, Ytmp);
         return dot_loss(Ytmp, upstream);
     };
 
     blk.zero_grad();
     blk.forward(X, nullptr, Y);
-    Tensor dX(K, D);
+    Tensor dX = Tensor::mat(K, D);
     blk.backward(upstream, dX);
     check_grad_input(X, dX, fwd_loss, "tblk.pre.dX", 1e-3f, 1e-2f, 1e-2f, 8);
 }
@@ -313,19 +317,20 @@ TEST(transformer_block_post_norm_grad_check) {
     cfg.norm = NormPlacement::PostNorm;
     uint64_t s = 0x66ull; blk.init(cfg, s);
 
-    Tensor X(K, D), upstream(K, D), Y(K, D);
+    Tensor X = Tensor::mat(K, D), upstream = Tensor::mat(K, D),
+           Y = Tensor::mat(K, D);
     fill_random(X, rng);
     fill_random(upstream, rng);
 
     auto fwd_loss = [&]() {
-        Tensor Ytmp(K, D);
+        Tensor Ytmp = Tensor::mat(K, D);
         blk.forward(X, nullptr, Ytmp);
         return dot_loss(Ytmp, upstream);
     };
 
     blk.zero_grad();
     blk.forward(X, nullptr, Y);
-    Tensor dX(K, D);
+    Tensor dX = Tensor::mat(K, D);
     blk.backward(upstream, dX);
     check_grad_input(X, dX, fwd_loss, "tblk.post.dX", 1e-3f, 1e-2f, 1e-2f, 8);
 }
@@ -336,15 +341,15 @@ TEST(transformer_block_save_load_roundtrip) {
     TransformerBlock a;
     TransformerBlock::Config cfg{}; cfg.dim = D; cfg.num_heads = H; cfg.d_ff = DF; cfg.n_slots = K;
     uint64_t s = 0x77ull; a.init(cfg, s);
-    Tensor X(K, D); fill_random(X, rng);
-    Tensor Ya(K, D); a.forward(X, nullptr, Ya);
+    Tensor X = Tensor::mat(K, D); fill_random(X, rng);
+    Tensor Ya = Tensor::mat(K, D); a.forward(X, nullptr, Ya);
     std::vector<uint8_t> buf; a.save_to(buf);
 
     TransformerBlock b;
     uint64_t s2 = 0x88ull; b.init(cfg, s2);
     size_t off = 0; b.load_from(buf.data(), off, buf.size());
-    Tensor Yb(K, D); b.forward(X, nullptr, Yb);
-    for (int i = 0; i < Ya.size(); ++i) CHECK(std::fabs(Ya.data[i] - Yb.data[i]) < 1e-5f);
+    Tensor Yb = Tensor::mat(K, D); b.forward(X, nullptr, Yb);
+    for (int i = 0; i < Ya.size(); ++i) CHECK(std::fabs(Ya[i] - Yb[i]) < 1e-5f);
 }
 
 TEST(transformer_encoder_smoke_and_save_load) {
@@ -356,9 +361,9 @@ TEST(transformer_encoder_smoke_and_save_load) {
     cfg.norm = NormPlacement::PreNorm;
     uint64_t s = 0x11ull; enc.init(cfg, s);
 
-    Tensor X(K, D); fill_random(X, rng);
+    Tensor X = Tensor::mat(K, D); fill_random(X, rng);
     std::vector<float> mask = {1, 1, 0, 1};
-    Tensor Y(K, D); enc.forward(X, mask.data(), Y);
+    Tensor Y = Tensor::mat(K, D); enc.forward(X, mask.data(), Y);
 
     // num_params sanity: each block has 4*D*D + (D + D*DF + DF + DF*D + D)
     // and there are 2 LNs (each 2D) — just check it's positive.
@@ -369,17 +374,17 @@ TEST(transformer_encoder_smoke_and_save_load) {
     TransformerEncoder enc2;
     uint64_t s2 = 0x22ull; enc2.init(cfg, s2);
     size_t off = 0; enc2.load_from(buf.data(), off, buf.size());
-    Tensor Y2(K, D); enc2.forward(X, mask.data(), Y2);
-    for (int i = 0; i < Y.size(); ++i) CHECK(std::fabs(Y.data[i] - Y2.data[i]) < 1e-5f);
+    Tensor Y2 = Tensor::mat(K, D); enc2.forward(X, mask.data(), Y2);
+    for (int i = 0; i < Y.size(); ++i) CHECK(std::fabs(Y[i] - Y2[i]) < 1e-5f);
 
     // backward smoke.
-    Tensor upstream(K, D); fill_random(upstream, rng);
-    Tensor dX(K, D);
+    Tensor upstream = Tensor::mat(K, D); fill_random(upstream, rng);
+    Tensor dX = Tensor::mat(K, D);
     enc.zero_grad();
     enc.forward(X, mask.data(), Y);
     enc.backward(upstream, dX);
     // Just check finite values.
-    for (int i = 0; i < dX.size(); ++i) CHECK(std::isfinite(dX.data[i]));
+    for (int i = 0; i < dX.size(); ++i) CHECK(std::isfinite(dX[i]));
 }
 
 TEST(transformer_encoder_grad_check_pre_norm) {
@@ -390,17 +395,18 @@ TEST(transformer_encoder_grad_check_pre_norm) {
     cfg.n_layers = N; cfg.dim = D; cfg.num_heads = H; cfg.d_ff = DF; cfg.n_slots = K;
     cfg.norm = NormPlacement::PreNorm;
     uint64_t s = 0x33ull; enc.init(cfg, s);
-    Tensor X(K, D), upstream(K, D), Y(K, D);
+    Tensor X = Tensor::mat(K, D), upstream = Tensor::mat(K, D),
+           Y = Tensor::mat(K, D);
     fill_random(X, rng); fill_random(upstream, rng);
 
     auto fwd_loss = [&]() {
-        Tensor Ytmp(K, D);
+        Tensor Ytmp = Tensor::mat(K, D);
         enc.forward(X, nullptr, Ytmp);
         return dot_loss(Ytmp, upstream);
     };
     enc.zero_grad();
     enc.forward(X, nullptr, Y);
-    Tensor dX(K, D);
+    Tensor dX = Tensor::mat(K, D);
     enc.backward(upstream, dX);
     check_grad_input(X, dX, fwd_loss, "enc.dX", 1e-3f, 2e-2f, 2e-2f, 8);
 }

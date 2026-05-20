@@ -1,14 +1,9 @@
 #pragma once
 
 #include "circuits.h"
-#include <brotensor/device.h>
 #include <brotensor/tensor.h>
 #include "brogameagent/action_mask.h"
 #include "brogameagent/observation.h"
-
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/tensor.h>
-#endif
 
 #include <cstdint>
 
@@ -27,18 +22,6 @@ public:
 
     void forward(const brotensor::Tensor& embed, float& value);
     void backward(float dValue, brotensor::Tensor& dEmbed);
-
-#ifdef BROTENSOR_HAS_GPU
-    // GPU code path. Internal Linears must be on GPU (call to(GPU)).
-    //   embed: (embed_dim, 1). Post-tanh value is cached in value_gpu().
-    void forward(const brotensor::GpuTensor& embed);
-    // dValue must point to a (1,1) device tensor with d(loss)/d(value).
-    // Caller writes via dValue_gpu().
-    void backward(brotensor::GpuTensor& dEmbed);
-
-    const brotensor::GpuTensor& value_gpu() const { return post_tanh_g_; }
-    brotensor::GpuTensor&       dValue_gpu()      { return dValue_g_; }
-#endif
 
     brotensor::Device device() const { return device_; }
     void to(brotensor::Device d);
@@ -62,15 +45,6 @@ private:
     float  y_cache_ = 0.0f;       // post-tanh scalar
 
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    // GPU forward caches (sized at to(GPU)).
-    brotensor::GpuTensor h_raw_g_, h_act_g_;
-    brotensor::GpuTensor pre_tanh_g_;        // (1,1) pre-tanh scalar
-    brotensor::GpuTensor post_tanh_g_;       // (1,1) cached post-tanh, used in backward
-    brotensor::GpuTensor dValue_g_;          // (1,1) caller-written grad slot
-    brotensor::GpuTensor dPre_g_;            // (1,1) backward scratch
-    brotensor::GpuTensor dHact_g_, dHraw_g_; // (hidden,1) backward scratch
-#endif
 };
 
 // ─── FactoredPolicyHead ────────────────────────────────────────────────────
@@ -106,14 +80,6 @@ public:
     // Backward: dLogits is size total_logits(), dEmbed is size embed_dim.
     void backward(const brotensor::Tensor& dLogits, brotensor::Tensor& dEmbed);
 
-#ifdef BROTENSOR_HAS_GPU
-    // GPU code path. Internal Linears must be on GPU.
-    //   embed:  (embed_dim, 1)
-    //   logits: (total_logits, 1) — concatenated [move | atk | abil].
-    void forward(const brotensor::GpuTensor& embed, brotensor::GpuTensor& logits);
-    void backward(const brotensor::GpuTensor& dLogits, brotensor::GpuTensor& dEmbed);
-#endif
-
     brotensor::Device device() const { return device_; }
     void to(brotensor::Device d);
 
@@ -138,12 +104,6 @@ public:
 private:
     Linear move_, atk_, abil_;
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    // GPU per-segment buffers (allocated at to(GPU); reused).
-    brotensor::GpuTensor lm_g_, la_g_, lb_g_;     // forward outputs per segment
-    brotensor::GpuTensor dLm_g_, dLa_g_, dLb_g_;  // sliced gradients per segment
-    brotensor::GpuTensor dEmbedTmp_g_;            // (embed_dim,1) scratch
-#endif
 };
 
 // ─── OpponentPolicyHead ───────────────────────────────────────────────────

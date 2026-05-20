@@ -1,13 +1,8 @@
 #pragma once
 
 #include "circuits.h"
-#include <brotensor/device.h>
 #include <brotensor/tensor.h>
 #include "brogameagent/observation.h"
-
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/tensor.h>
-#endif
 
 #include <cstdint>
 
@@ -35,9 +30,9 @@ namespace brogameagent::nn {
 // is distributed from the pool, scaled by 1/n_valid, and invalid slots
 // receive zero gradient.
 //
-// GPU dispatch: device_ tracks where parameters live. `to(brotensor::Device)` migrates
-// host↔device. CPU forward/backward are unchanged. GPU overloads call
-// linear_*_gpu / relu_*_gpu / masked_mean_pool_*_gpu / concat_rows_gpu.
+// Device: device_ tracks where parameters live. `to(brotensor::Device)`
+// migrates every owned tensor (and sub-Linear); brotensor ops dispatch on
+// operand device at runtime, so a single forward/backward path suffices.
 
 class DeepSetsEncoder : public ICircuit {
 public:
@@ -55,11 +50,6 @@ public:
     // x: size observation::TOTAL. y: size out_dim().
     void forward(const brotensor::Tensor& x, brotensor::Tensor& y);
     void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
-
-#ifdef BROTENSOR_HAS_GPU
-    void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y);
-    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
-#endif
 
     brotensor::Device device() const { return device_; }
     void to(brotensor::Device d);
@@ -81,64 +71,27 @@ private:
     Linear self_fc1_, self_fc2_;
     Relu   self_act_;
     brotensor::Tensor self_h_, self_z_;     // hidden after fc1+relu, embed after fc2
+    brotensor::Tensor self_in_;             // sliced self input (device-resident)
+    brotensor::Tensor self_h_pre_;          // pre-relu hidden cache for backward
 
     // Enemy stream: ENEMY_FEATURES -> hidden -> embed (applied per slot)
     Linear enemy_fc1_, enemy_fc2_;
     // Ally stream
     Linear ally_fc1_, ally_fc2_;
 
-    // Per-slot caches. Sized by init().
-    std::vector<brotensor::Tensor> e_h_, e_z_;
-    std::vector<brotensor::Tensor> a_h_, a_z_;
-    std::vector<uint8_t> e_valid_, a_valid_;
+    // Batched per-slot caches (device-resident). Shapes:
+    //   *_in_   (K, FEATURES)   sliced slot inputs
+    //   *_hpre_ (K, hidden)     pre-relu hidden
+    //   *_h_    (K, hidden)     post-relu hidden
+    //   *_z_    (K, embed)      per-slot embeddings
+    //   *_mask_ (K, 1)          slot-validity mask
+    brotensor::Tensor e_in_, e_hpre_, e_h_, e_z_, e_mask_;
+    brotensor::Tensor a_in_, a_hpre_, a_h_, a_z_, a_mask_;
     int e_n_valid_ = 0, a_n_valid_ = 0;
 
     brotensor::Tensor x_cache_;  // copy of input for backward shape
 
-    // scratch for per-slot backward (input grad for an entire slot row)
-    brotensor::Tensor slot_grad_in_;
-
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    // ── GPU mirrors ────────────────────────────────────────────────────────
-    // Per-Linear weights/grads/velocities.
-    brotensor::GpuTensor self_W1_g_, self_b1_g_, self_W2_g_, self_b2_g_;
-    brotensor::GpuTensor self_dW1_g_, self_db1_g_, self_dW2_g_, self_db2_g_;
-    brotensor::GpuTensor self_vW1_g_, self_vb1_g_, self_vW2_g_, self_vb2_g_;
-
-    brotensor::GpuTensor enemy_W1_g_, enemy_b1_g_, enemy_W2_g_, enemy_b2_g_;
-    brotensor::GpuTensor enemy_dW1_g_, enemy_db1_g_, enemy_dW2_g_, enemy_db2_g_;
-    brotensor::GpuTensor enemy_vW1_g_, enemy_vb1_g_, enemy_vW2_g_, enemy_vb2_g_;
-
-    brotensor::GpuTensor ally_W1_g_, ally_b1_g_, ally_W2_g_, ally_b2_g_;
-    brotensor::GpuTensor ally_dW1_g_, ally_db1_g_, ally_dW2_g_, ally_db2_g_;
-    brotensor::GpuTensor ally_vW1_g_, ally_vb1_g_, ally_vW2_g_, ally_vb2_g_;
-
-    // Forward caches on GPU.
-    brotensor::GpuTensor x_g_cache_;        // (TOTAL, 1) — clone of forward x
-    brotensor::GpuTensor self_h_raw_g_;     // (hidden, 1) — pre-relu
-    brotensor::GpuTensor self_h_g_;         // (hidden, 1) — post-relu
-    brotensor::GpuTensor self_z_g_;         // (embed_dim, 1)
-
-    // Per-slot caches: each stored as a (K, hidden) and (K, embed_dim) matrix
-    // packed by row (slot k occupies row k). Per-slot Linear forward writes
-    // into row-views of these matrices.
-    brotensor::GpuTensor e_h_raw_g_;        // (K_ENEMIES, hidden)
-    brotensor::GpuTensor e_h_g_;            // (K_ENEMIES, hidden)
-    brotensor::GpuTensor e_z_g_;            // (K_ENEMIES, embed_dim)
-
-    brotensor::GpuTensor a_h_raw_g_;        // (K_ALLIES, hidden)
-    brotensor::GpuTensor a_h_g_;            // (K_ALLIES, hidden)
-    brotensor::GpuTensor a_z_g_;            // (K_ALLIES, embed_dim)
-
-    // Pool inputs / outputs.
-    brotensor::GpuTensor pooled_e_g_;       // (embed_dim, 1)
-    brotensor::GpuTensor pooled_a_g_;       // (embed_dim, 1)
-
-    // Mask buffers on device (one float per slot).
-    brotensor::GpuTensor e_mask_g_;         // (K_ENEMIES, 1)
-    brotensor::GpuTensor a_mask_g_;         // (K_ALLIES, 1)
-#endif
 };
 
 } // namespace brogameagent::nn

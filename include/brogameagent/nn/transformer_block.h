@@ -1,14 +1,9 @@
 #pragma once
 
 #include "circuits.h"
-#include <brotensor/device.h>
 #include "feedforward.h"
 #include "multi_head_attention.h"
 #include <brotensor/tensor.h>
-
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/tensor.h>
-#endif
 
 #include <cstdint>
 #include <vector>
@@ -30,11 +25,10 @@ namespace brogameagent::nn {
 //     a = LN1(x + MHA(x, mask))
 //     y = LN2(a + FF(a))
 //
-// GPU dispatch: composite layer. `to(brotensor::Device)` recurses into children
-// (mha, ff) and the two RowLN sublayers. The GPU forward/backward
-// overloads for RowLN loop the per-vector layernorm_*_gpu kernel over the
-// K rows — simpler than introducing a batched-LN primitive. Per-row
-// elementwise add residuals on GPU are done via small launches.
+// Device: composite layer. `to(brotensor::Device)` recurses into children
+// (mha, ff) and the two RowLN sublayers. brotensor ops dispatch on the
+// device their operand tensors live on, so a single forward/backward path
+// covers every backend.
 
 enum class NormPlacement { PreNorm, PostNorm };
 
@@ -63,21 +57,6 @@ public:
     void forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& Y);
     void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
 
-#ifdef BROTENSOR_HAS_GPU
-    void forward(const brotensor::GpuTensor& X, const float* mask_dev,
-                 brotensor::GpuTensor& Y);
-    void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
-
-    // Inference-only batched forward. Input/output is (B*K, D) flat (each
-    // contiguous K-row chunk is one batch element's tokens). mask_R_dev
-    // is (B*K,) or null. Composes the inference-batched RowLN, MHA, and
-    // FF forwards with full elementwise residual adds — no host syncs.
-    void forward_inference_batched(const brotensor::GpuTensor& X_RD,
-                                    const float* mask_R_dev,
-                                    brotensor::GpuTensor& Y_RD,
-                                    int B, int K);
-#endif
-
     brotensor::Device device() const { return device_; }
     void to(brotensor::Device d);
 
@@ -98,13 +77,8 @@ public:
     // Exposed publicly so TransformerEncoder can reuse the same primitive
     // for its optional final-LN.
     //
-    // GPU dispatch: device_ tracks where parameters live. The GPU forward
-    // loops the per-vector layernorm_forward_gpu kernel over the K rows
-    // (one cudaMemcpy of mean/rstd per row — fine for typical K). Backward
-    // mirrors that loop. The per-row mean/rstd cache stays host-side; this
-    // keeps the implementation simple at the cost of one host↔device sync
-    // per row in forward. A batched LN kernel can replace this without
-    // changing the public API.
+    // Device: device_ tracks where parameters live. The per-row mean/rstd
+    // cache stays host-side; xhat is a device tensor migrated by to().
     struct RowLN {
         brotensor::Tensor gamma, beta;
         brotensor::Tensor dGamma, dBeta;
@@ -118,14 +92,6 @@ public:
         float eps = 1e-5f;
 
         brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-        brotensor::GpuTensor gamma_g, beta_g;
-        brotensor::GpuTensor dGamma_g, dBeta_g;
-        brotensor::GpuTensor vGamma_g, vBeta_g;
-        brotensor::GpuTensor mGamma_g, mBeta_g;
-        brotensor::GpuTensor vAGamma_g, vABeta_g;
-        brotensor::GpuTensor xhat_g;  // (K, D)
-#endif
 
         void init(int D, float eps);
         void to(brotensor::Device d);
@@ -135,16 +101,6 @@ public:
         // X, Y both (K, D).
         void forward(const brotensor::Tensor& X, brotensor::Tensor& Y);
         void backward(const brotensor::Tensor& dY, brotensor::Tensor& dX);
-#ifdef BROTENSOR_HAS_GPU
-        void forward(const brotensor::GpuTensor& X, brotensor::GpuTensor& Y);
-        void backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX);
-
-        // Inference-only batched forward over R independent rows of length D
-        // (R = X_RD.rows). Uses layernorm_forward_inference_batched_gpu —
-        // no host syncs, no caches.
-        void forward_inference_batched(const brotensor::GpuTensor& X_RD,
-                                        brotensor::GpuTensor& Y_RD);
-#endif
         void save_to(std::vector<uint8_t>& out) const;
         void load_from(const uint8_t* data, size_t& offset, size_t size);
         int num_params() const { return gamma.size() + beta.size(); }
@@ -165,15 +121,8 @@ private:
     brotensor::Tensor A_cache_;     // x + MHA_out (pre)   or  LN1(x + MHA(x)) (post)
     brotensor::Tensor LN2_out_;     // LN2(A) (pre)        or  A (post)
     brotensor::Tensor FF_out_;      // FF(LN2_out) (pre)   or  FF(A) (post)
-    std::vector<uint8_t> mask_cache_;
-    bool has_mask_ = false;
 
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    // GPU-side scratch tensors mirroring the host caches above. Only the
-    // ones actually consulted by backward are kept around.
-    brotensor::GpuTensor LN1_out_g_, MHA_out_g_, A_cache_g_, LN2_out_g_, FF_out_g_;
-#endif
 };
 
 } // namespace brogameagent::nn

@@ -9,7 +9,6 @@ using namespace bga_parity;
 using brotensor::Device;
 using brogameagent::nn::ScaledDotProductAttention;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
 
 namespace {
 
@@ -19,10 +18,10 @@ void seed_layer(ScaledDotProductAttention& a, int N, int D, uint64_t seed) {
     // Replace xavier weights with deterministic random for clean parity.
     SplitMix64 rng(seed ^ 0xF00Dull);
     for (int i = 0; i < D * D; ++i) {
-        a.Wq().data[i] = rng.next_unit() * 0.5f;
-        a.Wk().data[i] = rng.next_unit() * 0.5f;
-        a.Wv().data[i] = rng.next_unit() * 0.5f;
-        a.Wo().data[i] = rng.next_unit() * 0.5f;
+        a.Wq()[i] = rng.next_unit() * 0.5f;
+        a.Wk()[i] = rng.next_unit() * 0.5f;
+        a.Wv()[i] = rng.next_unit() * 0.5f;
+        a.Wo()[i] = rng.next_unit() * 0.5f;
     }
 }
 
@@ -32,12 +31,12 @@ void run_dispatch(int N, int D, uint64_t seed) {
     seed_layer(gpu_a, N, D, seed);
 
     SplitMix64 rng(seed ^ 0xBEEFull);
-    Tensor X(N, D), dO(N, D);
+    Tensor X = Tensor::mat(N, D), dO = Tensor::mat(N, D);
     fill_random(X, rng);
     fill_random(dO, rng);
 
     // CPU.
-    Tensor O_cpu(N, D), dX_cpu(N, D);
+    Tensor O_cpu = Tensor::mat(N, D), dX_cpu = Tensor::mat(N, D);
     cpu.zero_grad();
     cpu.forward(X, nullptr, O_cpu);
     cpu.backward(dO, dX_cpu);
@@ -45,11 +44,11 @@ void run_dispatch(int N, int D, uint64_t seed) {
     Tensor dWv_cpu = cpu.dWv(), dWo_cpu = cpu.dWo();
 
     // GPU.
-    gpu_a.to(Device::GPU);
-    BGA_CHECK(gpu_a.device() == Device::GPU);
-    GpuTensor gX, gO, gdO, gdX;
-    brotensor::upload(X, gX); brotensor::upload(dO, gdO);
-    gO.resize(N, D); gdX.resize(N, D);
+    gpu_a.to(Device::CUDA);
+    BGA_CHECK(gpu_a.device() == Device::CUDA);
+    Tensor gX = X.to(Device::CUDA), gdO = dO.to(Device::CUDA);
+    Tensor gO = Tensor::zeros_on(Device::CUDA, N, D);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, N, D);
     gpu_a.zero_grad();
     gpu_a.forward(gX, nullptr, gO);
     gpu_a.backward(gdO, gdX);
@@ -66,7 +65,7 @@ void run_dispatch(int N, int D, uint64_t seed) {
     compare_tensors(cpu.Wo(), gpu_a.Wo(), "att.dispatch.Wo_after_sgd");
 
     // Save/load round-trip after GPU migration.
-    gpu_a.to(Device::GPU);
+    gpu_a.to(Device::CUDA);
     std::vector<uint8_t> blob;
     gpu_a.save_to(blob);
     ScaledDotProductAttention restored;

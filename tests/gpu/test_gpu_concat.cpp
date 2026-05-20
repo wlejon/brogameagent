@@ -1,4 +1,4 @@
-// CPU↔GPU parity tests for concat_rows_gpu / split_rows_gpu (round-trip).
+// CPU↔GPU parity tests for concat_rows / split_rows (round-trip).
 
 #include "parity_helpers.h"
 
@@ -9,7 +9,7 @@
 
 using namespace bga_parity;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
+using brotensor::Device;
 
 namespace {
 
@@ -20,42 +20,42 @@ void run_concat(const std::vector<int>& sizes, uint64_t seed) {
     std::vector<Tensor> parts_cpu;
     int total = 0;
     for (int s : sizes) {
-        Tensor t(s, 1);
+        Tensor t = Tensor::vec(s);
         fill_random(t, rng);
         total += s;
         parts_cpu.push_back(std::move(t));
     }
-    Tensor cat_cpu(total, 1);
+    Tensor cat_cpu = Tensor::vec(total);
     int off = 0;
     for (const auto& p : parts_cpu) {
-        for (int i = 0; i < p.size(); ++i) cat_cpu.data[off + i] = p.data[i];
+        for (int i = 0; i < p.size(); ++i) cat_cpu[off + i] = p[i];
         off += p.size();
     }
 
-    // Upload parts.
-    std::vector<GpuTensor> g_parts(sizes.size());
-    std::vector<const GpuTensor*> g_parts_ptr;
+    // Upload parts to CUDA.
+    std::vector<Tensor> g_parts(sizes.size());
+    std::vector<const Tensor*> g_parts_ptr;
     for (size_t i = 0; i < sizes.size(); ++i) {
-        brotensor::upload(parts_cpu[i], g_parts[i]);
+        g_parts[i] = parts_cpu[i].to(Device::CUDA);
         g_parts_ptr.push_back(&g_parts[i]);
     }
-    GpuTensor gcat;
-    brotensor::concat_rows_gpu(g_parts_ptr, gcat);
-    cuda_sync();
+    Tensor gcat;
+    brotensor::concat_rows(g_parts_ptr, gcat);
+    brotensor::sync_all();
 
     Tensor cat_gpu = download_to_host(gcat);
     compare_tensors(cat_cpu, cat_gpu, "concat");
 
     // Round-trip: split into fresh tensors of the right shapes and check
     // each segment recovers exactly.
-    std::vector<GpuTensor> g_split(sizes.size());
-    std::vector<GpuTensor*> g_split_ptr;
+    std::vector<Tensor> g_split(sizes.size());
+    std::vector<Tensor*> g_split_ptr;
     for (size_t i = 0; i < sizes.size(); ++i) {
-        g_split[i].resize(sizes[i], 1);
+        g_split[i] = Tensor::zeros_on(Device::CUDA, sizes[i], 1);
         g_split_ptr.push_back(&g_split[i]);
     }
-    brotensor::split_rows_gpu(gcat, g_split_ptr);
-    cuda_sync();
+    brotensor::split_rows(gcat, g_split_ptr);
+    brotensor::sync_all();
 
     for (size_t i = 0; i < sizes.size(); ++i) {
         Tensor seg = download_to_host(g_split[i]);

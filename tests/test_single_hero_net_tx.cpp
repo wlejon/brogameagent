@@ -150,23 +150,23 @@ void test_finite_difference_gradient() {
     float max_rel = 0.0f, max_abs_anal = 0.0f, max_abs_num = 0.0f;
     for (int p = 0; p < probe_count; ++p) {
         const int idx = (int)(rng.next_u64() % (uint64_t)n);
-        const float orig = W.data[idx];
-        W.data[idx] = orig + h;
+        const float orig = W[idx];
+        W[idx] = orig + h;
         float v1; Tensor lo1 = Tensor::vec(net.policy_logits());
         net.forward(x, v1, lo1);
         float lp = dValue * v1;
         for (int i = 0; i < lo1.size(); ++i) lp += dLogits[i] * lo1[i];
 
-        W.data[idx] = orig - h;
+        W[idx] = orig - h;
         float v2; Tensor lo2 = Tensor::vec(net.policy_logits());
         net.forward(x, v2, lo2);
         float lm = dValue * v2;
         for (int i = 0; i < lo2.size(); ++i) lm += dLogits[i] * lo2[i];
 
-        W.data[idx] = orig;
+        W[idx] = orig;
 
         const float num = (lp - lm) / (2.0f * h);
-        const float anal = dW.data[idx];
+        const float anal = dW[idx];
         const float diff = std::fabs(num - anal);
         const float denom = std::fabs(num) + std::fabs(anal) + 1e-6f;
         const float rel = diff / denom;

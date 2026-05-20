@@ -1,18 +1,14 @@
 #pragma once
 
 #include "circuits.h"
-#include <brotensor/device.h>
 #include "heads.h"
 #include "layernorm.h"
+#include "brogameagent/learn/batched_net.h"
+#include <brotensor/ops.h>
 #include <brotensor/tensor.h>
 #include "transformer_block.h"
 #include "transformer_encoder.h"
 #include "brogameagent/observation.h"
-
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/tensor.h>
-#include "brogameagent/learn/batched_net.h"
-#endif
 
 #include <cstdint>
 #include <vector>
@@ -40,18 +36,12 @@ namespace brogameagent::nn {
 //        ── Linear(3D → trunk_hidden) ── ReLU                              │
 //        ── { ValueHead, FactoredPolicyHead }
 //
-// GPU dispatch: when to(brotensor::Device::GPU) is called every Linear, the two
-// TransformerEncoder stacks, and the heads migrate to device. The pipeline is
-// fully GPU-resident — no host↔device shuttling per forward/backward beyond
-// the unavoidable upload of `x` (CPU API entrypoint) and download of value /
-// logits at the boundary. The native GPU overloads (taking GpuTensor) avoid
-// even those.
+// Device dispatch: when to(d) is called every Linear, the two
+// TransformerEncoder stacks, and the heads migrate to device. The brotensor
+// ops dispatch on operand device at runtime, so one forward/backward path
+// runs on whatever device the tensors live on.
 
-class SingleHeroNetTX : public ICircuit
-#ifdef BROTENSOR_HAS_GPU
-    , public brogameagent::learn::BatchedNet
-#endif
-{
+class SingleHeroNetTX : public ICircuit, public learn::BatchedNet {
 public:
     struct Config {
         int self_hidden = 32;
@@ -84,55 +74,16 @@ public:
     void forward(const brotensor::Tensor& x, float& value, brotensor::Tensor& logits);
     void backward(float dValue, const brotensor::Tensor& dLogits);
 
-#ifdef BROTENSOR_HAS_GPU
-    // GPU-native forward/backward. Net must be on brotensor::Device::GPU.
-    //   x:      (TOTAL, 1) device tensor — caller keeps alive until backward.
-    //   logits: (policy_logits, 1) — overwritten.
-    // Value is cached in value_gpu(). For backward, the caller writes
-    // d(loss)/d(value) into dValue_gpu() and supplies dLogits.
-    void forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& logits);
-    void backward(const brotensor::GpuTensor& dLogits);
-
-    const brotensor::GpuTensor& value_gpu() const { return value_head_.value_gpu(); }
-    brotensor::GpuTensor&       dValue_gpu()      { return value_head_.dValue_gpu(); }
-
-    // Batched-inference forward. The whole input is downloaded once,
-    // staging buffers are built in a single host pass, and the network
-    // runs end-to-end on device: self stream and per-slot projections are
-    // truly batched (one Linear launch each); the encoder + masked
-    // mean-pool and the heads are still looped per batch element but
-    // queue into the default stream without host blocks. Outputs are
-    // gathered into logits_BL / values_B1 via stream-ordered D2D copies.
-    // Further speedups require batched (B, K, D) MHA / LayerNorm / FF
-    // kernels and a batched value+policy head.
-    void forward_batched(const brotensor::GpuTensor& X_BD,
-                         brotensor::GpuTensor& logits_BL,
-                         brotensor::GpuTensor& values_B1) override;
-
-    // ─── Training-time batched API ────────────────────────────────────────
-    //
-    // Training-time variants for GenericExItTrainer. These are correctness-
-    // first per-batch-element loops over the existing single-sample GPU
-    // forward/backward — NOT yet a true (B, K, D) batched dispatch. Each
-    // backward re-runs forward(x_b) before backward(dLogits_b) to rebuild
-    // the per-element layer caches the single-sample backward depends on.
-    // That doubles forward FLOPs per training step; accepting the cost in
-    // v2 because every layer cache (slot validity masks, encoder activations,
-    // per-slot Linear inputs) is sized for one sample.
-    //
-    // A future optimization adds per-sample state arrays so forward and
-    // backward run once each, or — better — true (B, K, D) attention/FF
-    // kernels.
-    void forward_batched_train(const brotensor::GpuTensor& X_BD,
-                               brotensor::GpuTensor& logits_BL,
-                               brotensor::GpuTensor& values_B1);
-    void backward_batched(const brotensor::GpuTensor& dLogits_BL,
-                          const brotensor::GpuTensor& dValues_B1);
-
-    // BatchedNet interface accessors.
     int input_dim()  const override { return observation::TOTAL; }
     int logits_dim() const override { return head_.total_logits(); }
-#endif
+
+    // BatchedNet: inference-only batched forward. SingleHeroNetTX has no true
+    // batched kernels — this loops the single-sample forward over row views of
+    // the (B, *) staging tensors. Ops dispatch by device, so it is device-
+    // neutral. logits_BL / values_B1 are (re)allocated on X_BD's device.
+    void forward_batched(const brotensor::Tensor& X_BD,
+                         brotensor::Tensor& logits_BL,
+                         brotensor::Tensor& values_B1) override;
 
     int embed_dim()      const { return 3 * cfg_.d_model; }
     int trunk_dim()      const { return cfg_.trunk_hidden; }
@@ -151,9 +102,9 @@ public:
     std::vector<uint8_t> save() const;
     void load(const std::vector<uint8_t>& blob);
 
-    // GPU dispatch — migrates the two TransformerEncoder stacks. CPU pieces
-    // stay on host.
-    brotensor::Device device() const { return device_; }
+    // Device migration — migrates every Linear, both TransformerEncoder
+    // stacks, the heads, and the directly-owned activation caches.
+    brotensor::Device device() const override { return device_; }
     void to(brotensor::Device d);
 
     // Inspection (tests).
@@ -174,25 +125,26 @@ private:
     Linear self_fc1_, self_fc2_;
     Relu   self_act_;
     brotensor::Tensor self_h_raw_, self_h_act_, self_z_;
+    brotensor::Tensor self_in_;        // sliced self input (device-resident)
 
-    // Enemy stream.
+    // Enemy stream. enemy_slotin_ holds the (K, ENEMY_FEATURES) sliced slot
+    // inputs; e_mask_ is a device-resident (K, 1) validity mask built by
+    // brotensor::build_slot_mask and consumed by the transformer + pool.
     Linear enemy_proj_;
     TransformerEncoder enemy_enc_;
+    brotensor::Tensor enemy_slotin_;   // (K_ENEMIES, ENEMY_FEATURES)
     brotensor::Tensor enemy_in_;       // (K_ENEMIES, d_model) post per-slot proj
     brotensor::Tensor enemy_out_;      // (K_ENEMIES, d_model) post encoder
-    std::vector<float> e_mask_;
-    std::vector<uint8_t> e_valid_;
-    int e_n_valid_ = 0;
+    brotensor::Tensor e_mask_;         // (K_ENEMIES, 1) device-resident mask
     brotensor::Tensor enemy_pooled_;   // (d_model)
 
     // Ally stream.
     Linear ally_proj_;
     TransformerEncoder ally_enc_;
+    brotensor::Tensor ally_slotin_;    // (K_ALLIES, ALLY_FEATURES)
     brotensor::Tensor ally_in_;
     brotensor::Tensor ally_out_;
-    std::vector<float> a_mask_;
-    std::vector<uint8_t> a_valid_;
-    int a_n_valid_ = 0;
+    brotensor::Tensor a_mask_;         // (K_ALLIES, 1) device-resident mask
     brotensor::Tensor ally_pooled_;
 
     // Trunk + heads.
@@ -214,49 +166,6 @@ private:
     std::vector<int> head_offsets_;
 
     brotensor::Device device_ = brotensor::Device::CPU;
-#ifdef BROTENSOR_HAS_GPU
-    // GPU staging / activation buffers, allocated at to(GPU).
-    // These are sized to fixed observation constants and reused.
-    brotensor::GpuTensor x_g_;                 // (TOTAL, 1) input copy (forward owns it for CPU-API path)
-    brotensor::GpuTensor self_in_g_;           // (SELF_FEATURES, 1)
-    brotensor::GpuTensor self_h_raw_g_, self_h_act_g_, self_z_g_;
-    brotensor::GpuTensor enemy_in_g_, enemy_out_g_;
-    brotensor::GpuTensor ally_in_g_,  ally_out_g_;
-    brotensor::GpuTensor e_mask_g_, a_mask_g_;     // (K_ENEMIES,1) / (K_ALLIES,1) device masks
-    brotensor::GpuTensor enemy_pooled_g_;          // (D, 1)
-    brotensor::GpuTensor ally_pooled_g_;           // (D, 1)
-    brotensor::GpuTensor concat_g_;                // (3D, 1)
-    brotensor::GpuTensor trunk_raw_g_, trunk_act_g_;
-    // Per-slot projection scratch (one slot at a time).
-    brotensor::GpuTensor slot_in_e_g_;             // (ENEMY_FEATURES, 1)
-    brotensor::GpuTensor slot_in_a_g_;             // (ALLY_FEATURES, 1)
-    brotensor::GpuTensor slot_proj_g_;             // (D, 1)
-    // Backward scratch.
-    brotensor::GpuTensor dTrunkAct_g_;
-    brotensor::GpuTensor dTrunkRaw_g_;
-    brotensor::GpuTensor dTrunkFromV_g_;
-    brotensor::GpuTensor dTrunkFromP_g_;
-    brotensor::GpuTensor dConcat_g_;
-    brotensor::GpuTensor dSelfZ_g_;
-    brotensor::GpuTensor dSelfHact_g_, dSelfHraw_g_, dSelfIn_g_;
-    brotensor::GpuTensor dEnemyOut_g_, dEnemyIn_g_;
-    brotensor::GpuTensor dAllyOut_g_,  dAllyIn_g_;
-    brotensor::GpuTensor dSlotProj_g_;
-    brotensor::GpuTensor dSlotInE_g_;
-    brotensor::GpuTensor dSlotInA_g_;
-
-    // External input view used by the GPU-native forward path. Non-owning;
-    // the caller's lifetime guarantees apply to it.
-    const brotensor::GpuTensor* x_external_ = nullptr;
-
-    // Training-time batched scratch. Holds the last X_BD pointer that
-    // forward_batched_train was called with so backward_batched can re-run
-    // forward(x_b) per element.
-    const brotensor::GpuTensor* last_train_X_BD_ = nullptr;
-    brotensor::GpuTensor x_row_g_;          // (TOTAL, 1) per-element view buffer
-    brotensor::GpuTensor logits_row_g_;     // (L, 1)     per-element logits scratch
-    brotensor::GpuTensor dLogits_row_g_;    // (L, 1)     per-element dLogits scratch
-#endif
 };
 
 } // namespace brogameagent::nn

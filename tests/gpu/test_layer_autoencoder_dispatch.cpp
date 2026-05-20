@@ -1,6 +1,6 @@
 // End-to-end GPU dispatch parity test for DeepSetsEncoder, DeepSetsDecoder
 // and the composite DeepSetsAutoencoder. Builds two instances seeded
-// identically; migrates one to Device::GPU; runs forward/backward/sgd_step
+// identically; migrates one to Device::CUDA; runs forward/backward/sgd_step
 // on both; verifies outputs and updated parameters match within tolerance.
 //
 // Also runs a tiny smoke training loop on the GPU autoencoder and verifies
@@ -34,7 +34,7 @@ namespace {
 Tensor make_obs(SplitMix64& rng,
                 const std::vector<int>& enemy_valid,
                 const std::vector<int>& ally_valid) {
-    Tensor x(obs::TOTAL, 1);
+    Tensor x = Tensor::mat(obs::TOTAL, 1);
     fill_random(x, rng);
     // Self block: leave random.
     const int off_e = obs::SELF_FEATURES;
@@ -66,21 +66,21 @@ void run_encoder_parity(uint64_t seed,
 
     SplitMix64 rng(seed ^ 0xDEAD);
     Tensor x = make_obs(rng, e_valid, a_valid);
-    Tensor dY(cpu.out_dim(), 1);
+    Tensor dY = Tensor::mat(cpu.out_dim(), 1);
     fill_random(dY, rng);
 
     // CPU.
-    Tensor y_cpu(cpu.out_dim(), 1), dX_cpu(obs::TOTAL, 1);
+    Tensor y_cpu = Tensor::mat(cpu.out_dim(), 1), dX_cpu = Tensor::mat(obs::TOTAL, 1);
     cpu.zero_grad();
     cpu.forward(x, y_cpu);
     cpu.backward(dY, dX_cpu);
 
     // GPU.
-    gpu_enc.to(Device::GPU);
-    BGA_CHECK(gpu_enc.device() == Device::GPU);
-    brotensor::GpuTensor gx, gy, gdY, gdX;
-    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
-    gy.resize(cpu.out_dim(), 1); gdX.resize(obs::TOTAL, 1);
+    gpu_enc.to(Device::CUDA);
+    BGA_CHECK(gpu_enc.device() == Device::CUDA);
+    Tensor gx = x.to(Device::CUDA), gdY = dY.to(Device::CUDA);
+    Tensor gy = Tensor::zeros_on(Device::CUDA, cpu.out_dim(), 1);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, obs::TOTAL, 1);
     gpu_enc.zero_grad();
     gpu_enc.forward(gx, gy);
     gpu_enc.backward(gdY, gdX);
@@ -117,7 +117,7 @@ void run_encoder_parity(uint64_t seed,
         restored_gpu.load_from(blob_gpu.data(), off, blob_gpu.size());
     }
     // Run another forward and compare to confirm params line up.
-    Tensor y_cpu2(cpu.out_dim(), 1), y_gpu2(cpu.out_dim(), 1);
+    Tensor y_cpu2 = Tensor::mat(cpu.out_dim(), 1), y_gpu2 = Tensor::mat(cpu.out_dim(), 1);
     restored_cpu.forward(x, y_cpu2);
     restored_gpu.forward(x, y_gpu2);
     compare_tensors(y_cpu2, y_gpu2, "enc.dispatch.params_after_sgd");
@@ -136,20 +136,20 @@ void run_decoder_parity(uint64_t seed) {
     gpu_dec.init(cfg, s2);
 
     SplitMix64 rng(seed ^ 0xBEEF);
-    Tensor x(cpu.in_dim(), 1);
+    Tensor x = Tensor::mat(cpu.in_dim(), 1);
     fill_random(x, rng);
-    Tensor dY(obs::TOTAL, 1);
+    Tensor dY = Tensor::mat(obs::TOTAL, 1);
     fill_random(dY, rng);
 
-    Tensor y_cpu(obs::TOTAL, 1), dX_cpu(cpu.in_dim(), 1);
+    Tensor y_cpu = Tensor::mat(obs::TOTAL, 1), dX_cpu = Tensor::mat(cpu.in_dim(), 1);
     cpu.zero_grad();
     cpu.forward(x, y_cpu);
     cpu.backward(dY, dX_cpu);
 
-    gpu_dec.to(Device::GPU);
-    brotensor::GpuTensor gx, gy, gdY, gdX;
-    brotensor::upload(x, gx); brotensor::upload(dY, gdY);
-    gy.resize(obs::TOTAL, 1); gdX.resize(cpu.in_dim(), 1);
+    gpu_dec.to(Device::CUDA);
+    Tensor gx = x.to(Device::CUDA), gdY = dY.to(Device::CUDA);
+    Tensor gy = Tensor::zeros_on(Device::CUDA, obs::TOTAL, 1);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, cpu.in_dim(), 1);
     gpu_dec.zero_grad();
     gpu_dec.forward(gx, gy);
     gpu_dec.backward(gdY, gdX);
@@ -179,7 +179,7 @@ void run_decoder_parity(uint64_t seed) {
         size_t off = 0;
         restored_gpu.load_from(blob_gpu.data(), off, blob_gpu.size());
     }
-    Tensor y_cpu2(obs::TOTAL, 1), y_gpu2(obs::TOTAL, 1);
+    Tensor y_cpu2 = Tensor::mat(obs::TOTAL, 1), y_gpu2 = Tensor::mat(obs::TOTAL, 1);
     restored_cpu.forward(x, y_cpu2);
     restored_gpu.forward(x, y_gpu2);
     compare_tensors(y_cpu2, y_gpu2, "dec.dispatch.params_after_sgd");
@@ -202,19 +202,18 @@ void run_autoencoder_parity(uint64_t seed) {
     Tensor x = make_obs(rng,
                         {1, 1, 0, 1, 0},
                         {1, 0, 1, 1});
-    Tensor dXh(obs::TOTAL, 1);
+    Tensor dXh = Tensor::mat(obs::TOTAL, 1);
     fill_random(dXh, rng);
 
-    Tensor x_hat_cpu(obs::TOTAL, 1);
+    Tensor x_hat_cpu = Tensor::mat(obs::TOTAL, 1);
     cpu.zero_grad();
     cpu.forward(x, x_hat_cpu);
     cpu.backward(dXh);
 
-    gpu_ae.to(Device::GPU);
-    BGA_CHECK(gpu_ae.device() == Device::GPU);
-    brotensor::GpuTensor gx, gxhat, gdXh;
-    brotensor::upload(x, gx); brotensor::upload(dXh, gdXh);
-    gxhat.resize(obs::TOTAL, 1);
+    gpu_ae.to(Device::CUDA);
+    BGA_CHECK(gpu_ae.device() == Device::CUDA);
+    Tensor gx = x.to(Device::CUDA), gdXh = dXh.to(Device::CUDA);
+    Tensor gxhat = Tensor::zeros_on(Device::CUDA, obs::TOTAL, 1);
     gpu_ae.zero_grad();
     gpu_ae.forward(gx, gxhat);
     gpu_ae.backward(gdXh);
@@ -226,10 +225,9 @@ void run_autoencoder_parity(uint64_t seed) {
     gpu_ae.sgd_step(0.01f, 0.9f);
 
     // After stepping: forward again and compare reconstructions.
-    Tensor x_hat_cpu2(obs::TOTAL, 1);
+    Tensor x_hat_cpu2 = Tensor::mat(obs::TOTAL, 1);
     cpu.forward(x, x_hat_cpu2);
-    brotensor::GpuTensor gxhat2;
-    gxhat2.resize(obs::TOTAL, 1);
+    Tensor gxhat2 = Tensor::zeros_on(Device::CUDA, obs::TOTAL, 1);
     gpu_ae.forward(gx, gxhat2);
     Tensor x_hat_gpu2 = download_to_host(gxhat2);
     compare_tensors(x_hat_cpu2, x_hat_gpu2, "ae.dispatch.x_hat_after_sgd");
@@ -246,7 +244,7 @@ void run_gpu_smoke_training() {
 
     DeepSetsAutoencoder ae;
     ae.init(cfg);
-    ae.to(Device::GPU);
+    ae.to(Device::CUDA);
 
     SplitMix64 rng(0x5C0FE);
     // Single fixed observation — easy target for memorization.
@@ -254,22 +252,21 @@ void run_gpu_smoke_training() {
                         {1, 1, 1, 0, 0},
                         {1, 1, 0, 0});
 
-    brotensor::GpuTensor gx, target_g, gxhat, gdXh;
-    brotensor::upload(x, gx);
-    brotensor::upload(x, target_g);
-    gxhat.resize(obs::TOTAL, 1);
-    gdXh.resize(obs::TOTAL, 1);
+    Tensor gx = x.to(Device::CUDA);
+    Tensor target_g = x.to(Device::CUDA);
+    Tensor gxhat = Tensor::zeros_on(Device::CUDA, obs::TOTAL, 1);
+    Tensor gdXh  = Tensor::zeros_on(Device::CUDA, obs::TOTAL, 1);
 
     const int steps = 20;
     float loss_first = 0.0f, loss_last = 0.0f;
     for (int s = 0; s < steps; ++s) {
         ae.zero_grad();
         ae.forward(gx, gxhat);
-        const float loss = brotensor::mse_vec_forward_gpu(gxhat, target_g);
+        const float loss = brotensor::mse_vec_forward(gxhat, target_g);
         BGA_CHECK(std::isfinite(loss));
         if (s == 0) loss_first = loss;
         if (s == steps - 1) loss_last = loss;
-        brotensor::mse_vec_backward_gpu(gxhat, target_g, gdXh);
+        brotensor::mse_vec_backward(gxhat, target_g, gdXh);
         ae.backward(gdXh);
         ae.sgd_step(0.05f, 0.9f);
     }

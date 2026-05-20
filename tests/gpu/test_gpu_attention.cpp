@@ -8,27 +8,29 @@
 using namespace bga_parity;
 using brogameagent::nn::ScaledDotProductAttention;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
+using brotensor::Device;
 
 namespace {
 
 void run_attention(int N, int D, uint64_t seed, const std::vector<float>* mask) {
     SplitMix64 rng(seed);
-    Tensor X(N, D), dO(N, D);
+    Tensor X = Tensor::mat(N, D), dO = Tensor::mat(N, D);
     fill_random(X, rng);
     fill_random(dO, rng);
 
     // Build the four projection weights with the same RNG used by xavier
     // would not match host/device — we just use random weights and feed them
     // identically to both CPU and GPU paths.
-    Tensor Wq(D, D), Wk(D, D), Wv(D, D), Wo(D, D);
+    Tensor Wq = Tensor::mat(D, D), Wk = Tensor::mat(D, D),
+           Wv = Tensor::mat(D, D), Wo = Tensor::mat(D, D);
     fill_random(Wq, rng, 0.5f);
     fill_random(Wk, rng, 0.5f);
     fill_random(Wv, rng, 0.5f);
     fill_random(Wo, rng, 0.5f);
 
     // Pre-fill dW* to validate accumulation behavior.
-    Tensor dWq_init(D, D), dWk_init(D, D), dWv_init(D, D), dWo_init(D, D);
+    Tensor dWq_init = Tensor::mat(D, D), dWk_init = Tensor::mat(D, D),
+           dWv_init = Tensor::mat(D, D), dWo_init = Tensor::mat(D, D);
     fill_random(dWq_init, rng, 0.1f);
     fill_random(dWk_init, rng, 0.1f);
     fill_random(dWv_init, rng, 0.1f);
@@ -42,35 +44,39 @@ void run_attention(int N, int D, uint64_t seed, const std::vector<float>* mask) 
     att.dWq() = dWq_init; att.dWk() = dWk_init;
     att.dWv() = dWv_init; att.dWo() = dWo_init;
 
-    Tensor O_cpu(N, D), dX_cpu(N, D);
+    Tensor O_cpu = Tensor::mat(N, D), dX_cpu = Tensor::mat(N, D);
     att.forward(X, mask ? mask->data() : nullptr, O_cpu);
     att.backward(dO, dX_cpu);
     Tensor dWq_cpu = att.dWq(); Tensor dWk_cpu = att.dWk();
     Tensor dWv_cpu = att.dWv(); Tensor dWo_cpu = att.dWo();
 
-    // GPU path.
-    GpuTensor gX, gWq, gWk, gWv, gWo;
-    brotensor::upload(X, gX);
-    brotensor::upload(Wq, gWq); brotensor::upload(Wk, gWk); brotensor::upload(Wv, gWv); brotensor::upload(Wo, gWo);
+    // GPU path — run the same ops on CUDA-resident tensors.
+    Tensor gX = X.to(Device::CUDA);
+    Tensor gWq = Wq.to(Device::CUDA), gWk = Wk.to(Device::CUDA),
+           gWv = Wv.to(Device::CUDA), gWo = Wo.to(Device::CUDA);
 
-    GpuTensor gQ, gK, gV, gAttn, gYpre, gO;
-    gQ.resize(N, D); gK.resize(N, D); gV.resize(N, D);
-    gAttn.resize(N, N); gYpre.resize(N, D); gO.resize(N, D);
+    Tensor gQ = Tensor::zeros_on(Device::CUDA, N, D);
+    Tensor gK = Tensor::zeros_on(Device::CUDA, N, D);
+    Tensor gV = Tensor::zeros_on(Device::CUDA, N, D);
+    Tensor gAttn = Tensor::zeros_on(Device::CUDA, N, N);
+    Tensor gYpre = Tensor::zeros_on(Device::CUDA, N, D);
+    Tensor gO = Tensor::zeros_on(Device::CUDA, N, D);
 
-    auto d_mask_buf = upload_mask(mask);
-    float* d_mask = d_mask_buf.device_ptr();
-    brotensor::attention_forward_gpu(
+    Tensor d_mask_buf = upload_mask(mask);
+    const float* d_mask = static_cast<const float*>(d_mask_buf.data);
+    brotensor::attention_forward(
         gX, gWq, gWk, gWv, gWo, d_mask, gQ, gK, gV, gAttn, gYpre, gO);
 
     Tensor O_gpu = download_to_host(gO);
 
-    GpuTensor gdO, gdX, gdWq, gdWk, gdWv, gdWo;
-    brotensor::upload(dO, gdO);
-    gdX.resize(N, D);
-    brotensor::upload(dWq_init, gdWq); brotensor::upload(dWk_init, gdWk);
-    brotensor::upload(dWv_init, gdWv); brotensor::upload(dWo_init, gdWo);
+    Tensor gdO = dO.to(Device::CUDA);
+    Tensor gdX = Tensor::zeros_on(Device::CUDA, N, D);
+    Tensor gdWq = dWq_init.to(Device::CUDA);
+    Tensor gdWk = dWk_init.to(Device::CUDA);
+    Tensor gdWv = dWv_init.to(Device::CUDA);
+    Tensor gdWo = dWo_init.to(Device::CUDA);
 
-    brotensor::attention_backward_gpu(
+    brotensor::attention_backward(
         gdO, gX, gQ, gK, gV, gAttn, gYpre,
         gWq, gWk, gWv, gWo, d_mask,
         gdX, gdWq, gdWk, gdWv, gdWo);

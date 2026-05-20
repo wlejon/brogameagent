@@ -7,7 +7,7 @@
 
 using namespace bga_parity;
 using brotensor::Tensor;
-using brotensor::GpuTensor;
+using brotensor::Device;
 
 namespace {
 
@@ -15,14 +15,14 @@ namespace {
 void cpu_sgd_step(Tensor& W, Tensor& vW, const Tensor& dW, float lr, float momentum) {
     const int n = W.size();
     for (int i = 0; i < n; ++i) {
-        vW.data[i] = momentum * vW.data[i] + dW.data[i];
-        W.data[i] -= lr * vW.data[i];
+        vW[i] = momentum * vW[i] + dW[i];
+        W[i] -= lr * vW[i];
     }
 }
 
 void run_sgd(int n, uint64_t seed, float lr, float momentum) {
     SplitMix64 rng(seed);
-    Tensor param(n, 1), grad(n, 1), vel(n, 1);
+    Tensor param = Tensor::vec(n), grad = Tensor::vec(n), vel = Tensor::vec(n);
     fill_random(param, rng);
     fill_random(grad, rng);
     fill_random(vel, rng, 0.25f);
@@ -31,11 +31,10 @@ void run_sgd(int n, uint64_t seed, float lr, float momentum) {
     Tensor vel_cpu   = vel;
     cpu_sgd_step(param_cpu, vel_cpu, grad, lr, momentum);
 
-    GpuTensor gparam, ggrad, gvel;
-    brotensor::upload(param, gparam);
-    brotensor::upload(grad, ggrad);
-    brotensor::upload(vel, gvel);
-    brotensor::sgd_step_gpu(gparam, ggrad, gvel, lr, momentum);
+    Tensor gparam = param.to(Device::CUDA);
+    Tensor ggrad = grad.to(Device::CUDA);
+    Tensor gvel = vel.to(Device::CUDA);
+    brotensor::sgd_step(gparam, ggrad, gvel, lr, momentum);
 
     compare_tensors(param_cpu, download_to_host(gparam), "sgd.param");
     compare_tensors(vel_cpu,   download_to_host(gvel),   "sgd.velocity");

@@ -75,7 +75,8 @@ void check(bool cond, const char* msg, const char* file, int line) {
 // step early on (bias correction kills the slow start that vanilla EMA would
 // produce). Use this as the spec-pin reference.
 void test_adam_bias_correction_reference() {
-    Tensor w(1, 1), g(1, 1), m(1, 1), v(1, 1);
+    Tensor w = Tensor::mat(1, 1), g = Tensor::mat(1, 1),
+           m = Tensor::mat(1, 1), v = Tensor::mat(1, 1);
     w.ptr()[0] = 1.0f;
     g.ptr()[0] = 0.5f;
     m.zero(); v.zero();
@@ -102,7 +103,8 @@ void test_adam_bias_correction_reference() {
 
 // Convergence: minimize (w - 3)^2 starting at w=0, gradient = 2*(w - 3).
 void test_adam_convergence_quadratic() {
-    Tensor w(1, 1), g(1, 1), m(1, 1), v(1, 1);
+    Tensor w = Tensor::mat(1, 1), g = Tensor::mat(1, 1),
+           m = Tensor::mat(1, 1), v = Tensor::mat(1, 1);
     w.ptr()[0] = 0.0f;
     m.zero(); v.zero();
 
@@ -127,7 +129,9 @@ void test_linear_adam_step() {
     Linear L;
     L.init(3, 4, rng);
 
-    Tensor x(3, 1), y(4, 1), target(4, 1), dY(4, 1), dX(3, 1);
+    Tensor x = Tensor::mat(3, 1), y = Tensor::mat(4, 1),
+           target = Tensor::mat(4, 1), dY = Tensor::mat(4, 1),
+           dX = Tensor::mat(3, 1);
     for (int i = 0; i < 3; ++i) x.ptr()[i] = static_cast<float>(i + 1);
     for (int i = 0; i < 4; ++i) target.ptr()[i] = 0.5f * static_cast<float>(i);
 

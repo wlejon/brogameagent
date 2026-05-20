@@ -13,7 +13,7 @@
 #include "brogameagent/grid/obs_window.h"
 #include "brogameagent/grid/bc_ingest.h"
 #include "brogameagent/learn/generic_replay_buffer.h"
-#include <brotensor/ops_cpu.h>
+#include <brotensor/ops.h>
 #include "brogameagent/nn/policy_value_net.h"
 #include <brotensor/tensor.h>
 
@@ -116,7 +116,7 @@ struct NetEval {
         for (int a : legal)
             if (a >= 0 && a < net.num_actions()) mask[static_cast<size_t>(a)] = 1.0f;
         brotensor::Tensor probs_t = brotensor::Tensor::vec(net.num_actions());
-        brotensor::softmax_forward_cpu(logits, probs_t, mask.empty() ? nullptr : mask.data());
+        brotensor::softmax_forward(logits, probs_t, mask.empty() ? nullptr : mask.data());
         probs.resize(static_cast<size_t>(net.num_actions()));
         for (int i = 0; i < net.num_actions(); ++i) probs[static_cast<size_t>(i)] = probs_t[i];
     }

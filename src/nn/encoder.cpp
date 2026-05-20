@@ -1,9 +1,6 @@
 #include "brogameagent/nn/encoder.h"
 
-#ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
-#include <brotensor/runtime.h>
-#endif
 
 #include <algorithm>
 #include <cassert>
@@ -21,20 +18,25 @@ void DeepSetsEncoder::init(const Config& cfg, uint64_t& rng_state) {
     ally_fc1_.init(observation::ALLY_FEATURES,  cfg.hidden,   rng_state);
     ally_fc2_.init(cfg.hidden,                  cfg.embed_dim, rng_state);
 
+    self_in_.resize(observation::SELF_FEATURES, 1);
+    self_h_pre_.resize(cfg.hidden, 1);
     self_h_.resize(cfg.hidden, 1);
     self_z_.resize(cfg.embed_dim, 1);
 
-    e_h_.assign(observation::K_ENEMIES, brotensor::Tensor::vec(cfg.hidden));
-    e_z_.assign(observation::K_ENEMIES, brotensor::Tensor::vec(cfg.embed_dim));
-    a_h_.assign(observation::K_ALLIES,  brotensor::Tensor::vec(cfg.hidden));
-    a_z_.assign(observation::K_ALLIES,  brotensor::Tensor::vec(cfg.embed_dim));
-    e_valid_.assign(observation::K_ENEMIES, 0);
-    a_valid_.assign(observation::K_ALLIES,  0);
+    // Batched per-slot caches: (K, FEATURES) / (K, hidden) / (K, embed).
+    e_in_.resize(observation::K_ENEMIES, observation::ENEMY_FEATURES);
+    e_hpre_.resize(observation::K_ENEMIES, cfg.hidden);
+    e_h_.resize(observation::K_ENEMIES, cfg.hidden);
+    e_z_.resize(observation::K_ENEMIES, cfg.embed_dim);
+    e_mask_.resize(observation::K_ENEMIES, 1);
+
+    a_in_.resize(observation::K_ALLIES, observation::ALLY_FEATURES);
+    a_hpre_.resize(observation::K_ALLIES, cfg.hidden);
+    a_h_.resize(observation::K_ALLIES, cfg.hidden);
+    a_z_.resize(observation::K_ALLIES, cfg.embed_dim);
+    a_mask_.resize(observation::K_ALLIES, 1);
 
     x_cache_.resize(observation::TOTAL, 1);
-    slot_grad_in_.resize(std::max({observation::SELF_FEATURES,
-                                   observation::ENEMY_FEATURES,
-                                   observation::ALLY_FEATURES}), 1);
 }
 
 int DeepSetsEncoder::num_params() const {
@@ -44,79 +46,24 @@ int DeepSetsEncoder::num_params() const {
 }
 
 void DeepSetsEncoder::zero_grad() {
-#ifdef BROTENSOR_HAS_GPU
-    if (device_ == brotensor::Device::GPU) {
-        self_dW1_g_.zero(); self_db1_g_.zero();
-        self_dW2_g_.zero(); self_db2_g_.zero();
-        enemy_dW1_g_.zero(); enemy_db1_g_.zero();
-        enemy_dW2_g_.zero(); enemy_db2_g_.zero();
-        ally_dW1_g_.zero(); ally_db1_g_.zero();
-        ally_dW2_g_.zero(); ally_db2_g_.zero();
-        return;
-    }
-#endif
     self_fc1_.zero_grad(); self_fc2_.zero_grad();
     enemy_fc1_.zero_grad(); enemy_fc2_.zero_grad();
     ally_fc1_.zero_grad();  ally_fc2_.zero_grad();
 }
 
 void DeepSetsEncoder::sgd_step(float lr, float momentum) {
-#ifdef BROTENSOR_HAS_GPU
-    if (device_ == brotensor::Device::GPU) {
-        brotensor::sgd_step_gpu(self_W1_g_, self_dW1_g_, self_vW1_g_, lr, momentum);
-        brotensor::sgd_step_gpu(self_b1_g_, self_db1_g_, self_vb1_g_, lr, momentum);
-        brotensor::sgd_step_gpu(self_W2_g_, self_dW2_g_, self_vW2_g_, lr, momentum);
-        brotensor::sgd_step_gpu(self_b2_g_, self_db2_g_, self_vb2_g_, lr, momentum);
-        brotensor::sgd_step_gpu(enemy_W1_g_, enemy_dW1_g_, enemy_vW1_g_, lr, momentum);
-        brotensor::sgd_step_gpu(enemy_b1_g_, enemy_db1_g_, enemy_vb1_g_, lr, momentum);
-        brotensor::sgd_step_gpu(enemy_W2_g_, enemy_dW2_g_, enemy_vW2_g_, lr, momentum);
-        brotensor::sgd_step_gpu(enemy_b2_g_, enemy_db2_g_, enemy_vb2_g_, lr, momentum);
-        brotensor::sgd_step_gpu(ally_W1_g_, ally_dW1_g_, ally_vW1_g_, lr, momentum);
-        brotensor::sgd_step_gpu(ally_b1_g_, ally_db1_g_, ally_vb1_g_, lr, momentum);
-        brotensor::sgd_step_gpu(ally_W2_g_, ally_dW2_g_, ally_vW2_g_, lr, momentum);
-        brotensor::sgd_step_gpu(ally_b2_g_, ally_db2_g_, ally_vb2_g_, lr, momentum);
-        return;
-    }
-#endif
     self_fc1_.sgd_step(lr, momentum); self_fc2_.sgd_step(lr, momentum);
     enemy_fc1_.sgd_step(lr, momentum); enemy_fc2_.sgd_step(lr, momentum);
     ally_fc1_.sgd_step(lr, momentum);  ally_fc2_.sgd_step(lr, momentum);
 }
 
 void DeepSetsEncoder::adam_step(float lr, float b1, float b2, float eps, int step) {
-    // Adam path operates on the host Linear members. Layers using the GPU
-    // dispatch with separate mirror tensors don't yet have Adam mirrors;
-    // callers training on GPU should fall back to sgd_step. This delegates
-    // to Linear::adam_step which uses the host m/v buffers.
     self_fc1_.adam_step(lr, b1, b2, eps, step); self_fc2_.adam_step(lr, b1, b2, eps, step);
     enemy_fc1_.adam_step(lr, b1, b2, eps, step); enemy_fc2_.adam_step(lr, b1, b2, eps, step);
     ally_fc1_.adam_step(lr, b1, b2, eps, step);  ally_fc2_.adam_step(lr, b1, b2, eps, step);
 }
 
-#ifdef BROTENSOR_HAS_GPU
-// Helper: sync a Linear's W/b from GPU mirror back into the host Linear so
-// save_to / Linear::W() observers see fresh values.
-static void sync_linear_to_host(Linear& L,
-                                const brotensor::GpuTensor& W_g,
-                                const brotensor::GpuTensor& b_g) {
-    brotensor::download(W_g, L.W());
-    brotensor::download(b_g, L.b());
-}
-#endif
-
 void DeepSetsEncoder::save_to(std::vector<uint8_t>& out) const {
-#ifdef BROTENSOR_HAS_GPU
-    if (device_ == brotensor::Device::GPU) {
-        auto* self = const_cast<DeepSetsEncoder*>(this);
-        sync_linear_to_host(self->self_fc1_, self_W1_g_, self_b1_g_);
-        sync_linear_to_host(self->self_fc2_, self_W2_g_, self_b2_g_);
-        sync_linear_to_host(self->enemy_fc1_, enemy_W1_g_, enemy_b1_g_);
-        sync_linear_to_host(self->enemy_fc2_, enemy_W2_g_, enemy_b2_g_);
-        sync_linear_to_host(self->ally_fc1_, ally_W1_g_, ally_b1_g_);
-        sync_linear_to_host(self->ally_fc2_, ally_W2_g_, ally_b2_g_);
-        brotensor::cuda_sync();
-    }
-#endif
     self_fc1_.save_to(out); self_fc2_.save_to(out);
     enemy_fc1_.save_to(out); enemy_fc2_.save_to(out);
     ally_fc1_.save_to(out);  ally_fc2_.save_to(out);
@@ -126,414 +73,149 @@ void DeepSetsEncoder::load_from(const uint8_t* data, size_t& offset, size_t size
     self_fc1_.load_from(data, offset, size);  self_fc2_.load_from(data, offset, size);
     enemy_fc1_.load_from(data, offset, size); enemy_fc2_.load_from(data, offset, size);
     ally_fc1_.load_from(data, offset, size);  ally_fc2_.load_from(data, offset, size);
-#ifdef BROTENSOR_HAS_GPU
-    if (device_ == brotensor::Device::GPU) {
-        // Re-upload weights so GPU mirror matches loaded host values.
-        brotensor::upload(self_fc1_.W(), self_W1_g_);
-        brotensor::upload(self_fc1_.b(), self_b1_g_);
-        brotensor::upload(self_fc2_.W(), self_W2_g_);
-        brotensor::upload(self_fc2_.b(), self_b2_g_);
-        brotensor::upload(enemy_fc1_.W(), enemy_W1_g_);
-        brotensor::upload(enemy_fc1_.b(), enemy_b1_g_);
-        brotensor::upload(enemy_fc2_.W(), enemy_W2_g_);
-        brotensor::upload(enemy_fc2_.b(), enemy_b2_g_);
-        brotensor::upload(ally_fc1_.W(), ally_W1_g_);
-        brotensor::upload(ally_fc1_.b(), ally_b1_g_);
-        brotensor::upload(ally_fc2_.W(), ally_W2_g_);
-        brotensor::upload(ally_fc2_.b(), ally_b2_g_);
-    }
-#endif
 }
 
-#ifdef BROTENSOR_HAS_GPU
 void DeepSetsEncoder::to(brotensor::Device d) {
     if (d == device_) return;
-    brotensor::device_require_gpu("DeepSetsEncoder");
-    if (d == brotensor::Device::GPU) {
-        const int H = cfg_.hidden;
-        const int E = cfg_.embed_dim;
-        // Upload weights/biases.
-        brotensor::upload(self_fc1_.W(), self_W1_g_);
-        brotensor::upload(self_fc1_.b(), self_b1_g_);
-        brotensor::upload(self_fc2_.W(), self_W2_g_);
-        brotensor::upload(self_fc2_.b(), self_b2_g_);
-        brotensor::upload(enemy_fc1_.W(), enemy_W1_g_);
-        brotensor::upload(enemy_fc1_.b(), enemy_b1_g_);
-        brotensor::upload(enemy_fc2_.W(), enemy_W2_g_);
-        brotensor::upload(enemy_fc2_.b(), enemy_b2_g_);
-        brotensor::upload(ally_fc1_.W(), ally_W1_g_);
-        brotensor::upload(ally_fc1_.b(), ally_b1_g_);
-        brotensor::upload(ally_fc2_.W(), ally_W2_g_);
-        brotensor::upload(ally_fc2_.b(), ally_b2_g_);
-        // Allocate grad mirrors (zeroed).
-        self_dW1_g_.resize(H, observation::SELF_FEATURES); self_dW1_g_.zero();
-        self_db1_g_.resize(H, 1);                          self_db1_g_.zero();
-        self_dW2_g_.resize(E, H);                          self_dW2_g_.zero();
-        self_db2_g_.resize(E, 1);                          self_db2_g_.zero();
-        enemy_dW1_g_.resize(H, observation::ENEMY_FEATURES); enemy_dW1_g_.zero();
-        enemy_db1_g_.resize(H, 1);                            enemy_db1_g_.zero();
-        enemy_dW2_g_.resize(E, H);                            enemy_dW2_g_.zero();
-        enemy_db2_g_.resize(E, 1);                            enemy_db2_g_.zero();
-        ally_dW1_g_.resize(H, observation::ALLY_FEATURES); ally_dW1_g_.zero();
-        ally_db1_g_.resize(H, 1);                           ally_db1_g_.zero();
-        ally_dW2_g_.resize(E, H);                           ally_dW2_g_.zero();
-        ally_db2_g_.resize(E, 1);                           ally_db2_g_.zero();
-        // Velocities (zeroed).
-        self_vW1_g_.resize(H, observation::SELF_FEATURES); self_vW1_g_.zero();
-        self_vb1_g_.resize(H, 1);                          self_vb1_g_.zero();
-        self_vW2_g_.resize(E, H);                          self_vW2_g_.zero();
-        self_vb2_g_.resize(E, 1);                          self_vb2_g_.zero();
-        enemy_vW1_g_.resize(H, observation::ENEMY_FEATURES); enemy_vW1_g_.zero();
-        enemy_vb1_g_.resize(H, 1);                            enemy_vb1_g_.zero();
-        enemy_vW2_g_.resize(E, H);                            enemy_vW2_g_.zero();
-        enemy_vb2_g_.resize(E, 1);                            enemy_vb2_g_.zero();
-        ally_vW1_g_.resize(H, observation::ALLY_FEATURES); ally_vW1_g_.zero();
-        ally_vb1_g_.resize(H, 1);                           ally_vb1_g_.zero();
-        ally_vW2_g_.resize(E, H);                           ally_vW2_g_.zero();
-        ally_vb2_g_.resize(E, 1);                           ally_vb2_g_.zero();
-        // Activation/cache mirrors.
-        x_g_cache_.resize(observation::TOTAL, 1);
-        self_h_raw_g_.resize(H, 1);
-        self_h_g_.resize(H, 1);
-        self_z_g_.resize(E, 1);
-        e_h_raw_g_.resize(observation::K_ENEMIES, H);
-        e_h_g_.resize(observation::K_ENEMIES, H);
-        e_z_g_.resize(observation::K_ENEMIES, E);
-        a_h_raw_g_.resize(observation::K_ALLIES, H);
-        a_h_g_.resize(observation::K_ALLIES, H);
-        a_z_g_.resize(observation::K_ALLIES, E);
-        pooled_e_g_.resize(E, 1);
-        pooled_a_g_.resize(E, 1);
-        e_mask_g_.resize(observation::K_ENEMIES, 1);
-        a_mask_g_.resize(observation::K_ALLIES, 1);
-        device_ = brotensor::Device::GPU;
-    } else {
-        // Download W/b back to host Linears; keep grads/velocities GPU-only.
-        brotensor::download(self_W1_g_, self_fc1_.W()); brotensor::download(self_b1_g_, self_fc1_.b());
-        brotensor::download(self_W2_g_, self_fc2_.W()); brotensor::download(self_b2_g_, self_fc2_.b());
-        brotensor::download(enemy_W1_g_, enemy_fc1_.W()); brotensor::download(enemy_b1_g_, enemy_fc1_.b());
-        brotensor::download(enemy_W2_g_, enemy_fc2_.W()); brotensor::download(enemy_b2_g_, enemy_fc2_.b());
-        brotensor::download(ally_W1_g_, ally_fc1_.W()); brotensor::download(ally_b1_g_, ally_fc1_.b());
-        brotensor::download(ally_W2_g_, ally_fc2_.W()); brotensor::download(ally_b2_g_, ally_fc2_.b());
-        brotensor::cuda_sync();
-        device_ = brotensor::Device::CPU;
-    }
-}
-#else
-void DeepSetsEncoder::to(brotensor::Device d) {
-    if (d == device_) return;
-    brotensor::device_require_gpu("DeepSetsEncoder");
-}
-#endif
-
-static inline void copy_slice(const brotensor::Tensor& src, int off, int n, brotensor::Tensor& dst) {
-    std::memcpy(dst.ptr(), src.ptr() + off, n * sizeof(float));
-}
-static inline void accum_slice(brotensor::Tensor& dst_full, int off, const brotensor::Tensor& slot_grad, int n) {
-    float* d = dst_full.ptr() + off;
-    const float* s = slot_grad.ptr();
-    for (int i = 0; i < n; ++i) d[i] += s[i];
+    self_fc1_.to(d);  self_fc2_.to(d);
+    enemy_fc1_.to(d); enemy_fc2_.to(d);
+    ally_fc1_.to(d);  ally_fc2_.to(d);
+    self_in_     = self_in_.to(d);
+    self_h_pre_  = self_h_pre_.to(d);
+    self_h_      = self_h_.to(d);
+    self_z_      = self_z_.to(d);
+    e_in_   = e_in_.to(d);   e_hpre_ = e_hpre_.to(d);
+    e_h_    = e_h_.to(d);    e_z_    = e_z_.to(d);    e_mask_ = e_mask_.to(d);
+    a_in_   = a_in_.to(d);   a_hpre_ = a_hpre_.to(d);
+    a_h_    = a_h_.to(d);    a_z_    = a_z_.to(d);    a_mask_ = a_mask_.to(d);
+    if (x_cache_.size() > 0) x_cache_ = x_cache_.to(d);
+    device_ = d;
 }
 
+// ─── forward ───────────────────────────────────────────────────────────────
+//
+// Device-neutral: every op below dispatches on operand device. Per-slot
+// streams are processed as a single (K_slots, FEATURES) minibatch through a
+// shared-weight Linear + ReLU + Linear, then masked-mean-pooled. No host
+// reads of tensor values — slot slicing uses copy_d2d, mask construction uses
+// build_slot_mask, both device-dispatched.
 void DeepSetsEncoder::forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
     assert(x.size() == observation::TOTAL);
     assert(y.size() == out_dim());
     x_cache_ = x;
+    const int E = cfg_.embed_dim;
 
-    // Self stream.
-    brotensor::Tensor self_in = brotensor::Tensor::vec(observation::SELF_FEATURES);
-    copy_slice(x, 0, observation::SELF_FEATURES, self_in);
-    brotensor::Tensor tmp_h = brotensor::Tensor::vec(cfg_.hidden);
-    self_fc1_.forward(self_in, tmp_h);
-    self_act_.forward(tmp_h, self_h_);
+    // ── Self stream ──
+    brotensor::copy_d2d(x, 0, self_in_, 0, observation::SELF_FEATURES);
+    self_fc1_.forward(self_in_, self_h_pre_);
+    self_act_.forward(self_h_pre_, self_h_);
     self_fc2_.forward(self_h_, self_z_);
 
-    // Enemy stream (per slot, masked pool).
+    // ── Enemy stream (per-slot shared MLP + masked mean-pool) ──
     const int off_e = observation::SELF_FEATURES;
-    e_n_valid_ = 0;
-    brotensor::Tensor pooled_e = brotensor::Tensor::vec(cfg_.embed_dim);
-    pooled_e.zero();
-    brotensor::Tensor slot_in = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
     for (int k = 0; k < observation::K_ENEMIES; ++k) {
-        const int base = off_e + k * observation::ENEMY_FEATURES;
-        const bool valid = x[base] > 0.5f;   // [0] = valid flag
-        e_valid_[k] = valid ? 1 : 0;
-        if (!valid) continue;
-        copy_slice(x, base, observation::ENEMY_FEATURES, slot_in);
-        brotensor::Tensor h_raw = brotensor::Tensor::vec(cfg_.hidden);
-        enemy_fc1_.forward(slot_in, h_raw);
-        Relu act; act.forward(h_raw, e_h_[k]);    // ephemeral Relu — ok, stateless
-        enemy_fc2_.forward(e_h_[k], e_z_[k]);
-        for (int j = 0; j < cfg_.embed_dim; ++j) pooled_e[j] += e_z_[k][j];
-        ++e_n_valid_;
+        brotensor::copy_d2d(x, off_e + k * observation::ENEMY_FEATURES,
+                            e_in_, k * observation::ENEMY_FEATURES,
+                            observation::ENEMY_FEATURES);
     }
-    if (e_n_valid_ > 0) {
-        const float inv = 1.0f / static_cast<float>(e_n_valid_);
-        for (int j = 0; j < cfg_.embed_dim; ++j) pooled_e[j] *= inv;
-    }
+    brotensor::build_slot_mask(x, off_e, observation::K_ENEMIES,
+                               observation::ENEMY_FEATURES, e_mask_);
+    enemy_fc1_.forward_batched_train(e_in_, e_hpre_);
+    brotensor::relu_forward_batched(e_hpre_, e_h_);
+    enemy_fc2_.forward_batched_train(e_h_, e_z_);
+    brotensor::Tensor pooled_e = brotensor::Tensor::zeros_on(x.device, E, 1);
+    brotensor::masked_mean_pool_forward(
+        e_z_, static_cast<const float*>(e_mask_.data), pooled_e);
 
-    // Ally stream.
+    // ── Ally stream ──
     const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
-    a_n_valid_ = 0;
-    brotensor::Tensor pooled_a = brotensor::Tensor::vec(cfg_.embed_dim);
-    pooled_a.zero();
-    brotensor::Tensor slot_in_a = brotensor::Tensor::vec(observation::ALLY_FEATURES);
     for (int k = 0; k < observation::K_ALLIES; ++k) {
-        const int base = off_a + k * observation::ALLY_FEATURES;
-        const bool valid = x[base] > 0.5f;
-        a_valid_[k] = valid ? 1 : 0;
-        if (!valid) continue;
-        copy_slice(x, base, observation::ALLY_FEATURES, slot_in_a);
-        brotensor::Tensor h_raw = brotensor::Tensor::vec(cfg_.hidden);
-        ally_fc1_.forward(slot_in_a, h_raw);
-        Relu act; act.forward(h_raw, a_h_[k]);
-        ally_fc2_.forward(a_h_[k], a_z_[k]);
-        for (int j = 0; j < cfg_.embed_dim; ++j) pooled_a[j] += a_z_[k][j];
-        ++a_n_valid_;
+        brotensor::copy_d2d(x, off_a + k * observation::ALLY_FEATURES,
+                            a_in_, k * observation::ALLY_FEATURES,
+                            observation::ALLY_FEATURES);
     }
-    if (a_n_valid_ > 0) {
-        const float inv = 1.0f / static_cast<float>(a_n_valid_);
-        for (int j = 0; j < cfg_.embed_dim; ++j) pooled_a[j] *= inv;
-    }
+    brotensor::build_slot_mask(x, off_a, observation::K_ALLIES,
+                               observation::ALLY_FEATURES, a_mask_);
+    ally_fc1_.forward_batched_train(a_in_, a_hpre_);
+    brotensor::relu_forward_batched(a_hpre_, a_h_);
+    ally_fc2_.forward_batched_train(a_h_, a_z_);
+    brotensor::Tensor pooled_a = brotensor::Tensor::zeros_on(x.device, E, 1);
+    brotensor::masked_mean_pool_forward(
+        a_z_, static_cast<const float*>(a_mask_.data), pooled_a);
 
-    // Concat y = [self_z, pooled_e, pooled_a].
-    const int E = cfg_.embed_dim;
-    for (int j = 0; j < E; ++j) y[0*E + j] = self_z_[j];
-    for (int j = 0; j < E; ++j) y[1*E + j] = pooled_e[j];
-    for (int j = 0; j < E; ++j) y[2*E + j] = pooled_a[j];
+    // ── Concat y = [self_z, pooled_e, pooled_a] ──
+    brotensor::copy_d2d(self_z_,  0, y, 0 * E, E);
+    brotensor::copy_d2d(pooled_e, 0, y, 1 * E, E);
+    brotensor::copy_d2d(pooled_a, 0, y, 2 * E, E);
 }
 
-// Because forward uses ephemeral Relu activations for the per-slot streams,
-// backward re-derives activation mask from cached h via the per-slot z/h.
-// We cached e_h_ / a_h_ (post-relu), so a feature is active iff h[i] > 0.
-// This makes backward correct without stashing a separate mask.
+// ─── backward ──────────────────────────────────────────────────────────────
 void DeepSetsEncoder::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
     assert(dY.size() == out_dim());
     assert(dX.size() == observation::TOTAL);
-    dX.zero();
+    if (dX.rows != observation::TOTAL || dX.cols != 1 || dX.device != dY.device) {
+        dX = brotensor::Tensor::zeros_on(dY.device, observation::TOTAL, 1);
+    } else {
+        dX.zero();
+    }
     const int E = cfg_.embed_dim;
 
-    // Self backward.
-    brotensor::Tensor dSelfZ = brotensor::Tensor::vec(E);
-    for (int j = 0; j < E; ++j) dSelfZ[j] = dY[0*E + j];
-    brotensor::Tensor dSelfH = brotensor::Tensor::vec(cfg_.hidden);
-    self_fc2_.backward(dSelfZ, dSelfH);
-    // derive relu mask from self_h_ (post-relu): active iff value > 0
-    for (int i = 0; i < cfg_.hidden; ++i) if (self_h_[i] <= 0.0f) dSelfH[i] = 0.0f;
-    brotensor::Tensor dSelfIn = brotensor::Tensor::vec(observation::SELF_FEATURES);
-    self_fc1_.backward(dSelfH, dSelfIn);
-    accum_slice(dX, 0, dSelfIn, observation::SELF_FEATURES);
+    // ── Self backward ──
+    brotensor::Tensor dSelfZ = brotensor::Tensor::zeros_on(dY.device, E, 1);
+    brotensor::copy_d2d(dY, 0 * E, dSelfZ, 0, E);
+    brotensor::Tensor dSelfH  = brotensor::Tensor::zeros_on(dY.device, cfg_.hidden, 1);
+    brotensor::Tensor dSelfHp = brotensor::Tensor::zeros_on(dY.device, cfg_.hidden, 1);
+    self_fc2_.backward(self_h_, dSelfZ, dSelfH);
+    self_act_.backward(dSelfH, dSelfHp);
+    brotensor::Tensor dSelfIn = brotensor::Tensor::zeros_on(
+        dY.device, observation::SELF_FEATURES, 1);
+    self_fc1_.backward(self_in_, dSelfHp, dSelfIn);
+    brotensor::copy_d2d(dSelfIn, 0, dX, 0, observation::SELF_FEATURES);
 
-    // Enemy backward. Per-slot weight grads are accumulated using each slot's
-    // own cached input (via Linear's explicit-input backward overload), not
-    // the last-forwarded slot's stomped cache — gradients are correct and
-    // CPU↔GPU parity holds.
+    // ── Enemy backward ──
+    // dY for the enemy embedding is the pooled grad; masked_mean_pool_backward
+    // broadcasts it across valid slot rows (1/n_valid each, 0 on invalid).
     const int off_e = observation::SELF_FEATURES;
-    if (e_n_valid_ > 0) {
-        const float inv = 1.0f / static_cast<float>(e_n_valid_);
-        brotensor::Tensor dZk = brotensor::Tensor::vec(E);
-        brotensor::Tensor dHk = brotensor::Tensor::vec(cfg_.hidden);
-        brotensor::Tensor dSlot = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
-        brotensor::Tensor slot_in = brotensor::Tensor::vec(observation::ENEMY_FEATURES);
-        for (int k = 0; k < observation::K_ENEMIES; ++k) {
-            if (!e_valid_[k]) continue;
-            const int base = off_e + k * observation::ENEMY_FEATURES;
-            copy_slice(x_cache_, base, observation::ENEMY_FEATURES, slot_in);
-            for (int j = 0; j < E; ++j) dZk[j] = dY[1*E + j] * inv;
-            enemy_fc2_.backward(e_h_[k], dZk, dHk);
-            for (int i = 0; i < cfg_.hidden; ++i) if (e_h_[k][i] <= 0.0f) dHk[i] = 0.0f;
-            enemy_fc1_.backward(slot_in, dHk, dSlot);
-            accum_slice(dX, base, dSlot, observation::ENEMY_FEATURES);
-        }
-    }
+    brotensor::Tensor dPoolE = brotensor::Tensor::zeros_on(dY.device, E, 1);
+    brotensor::copy_d2d(dY, 1 * E, dPoolE, 0, E);
+    brotensor::Tensor dEz = brotensor::Tensor::zeros_on(
+        dY.device, observation::K_ENEMIES, E);
+    brotensor::masked_mean_pool_backward(
+        dPoolE, static_cast<const float*>(e_mask_.data),
+        observation::K_ENEMIES, dEz);
+    brotensor::Tensor dEh  = brotensor::Tensor::zeros_on(
+        dY.device, observation::K_ENEMIES, cfg_.hidden);
+    brotensor::Tensor dEhp = brotensor::Tensor::zeros_on(
+        dY.device, observation::K_ENEMIES, cfg_.hidden);
+    enemy_fc2_.backward_batched(dEz, dEh);
+    brotensor::relu_backward_batched(e_hpre_, dEh, dEhp);
+    brotensor::Tensor dEin = brotensor::Tensor::zeros_on(
+        dY.device, observation::K_ENEMIES, observation::ENEMY_FEATURES);
+    enemy_fc1_.backward_batched(dEhp, dEin);
+    // dEin is (K, ENEMY_FEATURES) row-major == TOTAL-block contiguous layout.
+    brotensor::copy_d2d(dEin, 0, dX, off_e,
+                        observation::K_ENEMIES * observation::ENEMY_FEATURES);
 
-    // Ally backward.
+    // ── Ally backward ──
     const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
-    if (a_n_valid_ > 0) {
-        const float inv = 1.0f / static_cast<float>(a_n_valid_);
-        brotensor::Tensor dZk = brotensor::Tensor::vec(E);
-        brotensor::Tensor dHk = brotensor::Tensor::vec(cfg_.hidden);
-        brotensor::Tensor dSlot = brotensor::Tensor::vec(observation::ALLY_FEATURES);
-        brotensor::Tensor slot_in = brotensor::Tensor::vec(observation::ALLY_FEATURES);
-        for (int k = 0; k < observation::K_ALLIES; ++k) {
-            if (!a_valid_[k]) continue;
-            const int base = off_a + k * observation::ALLY_FEATURES;
-            copy_slice(x_cache_, base, observation::ALLY_FEATURES, slot_in);
-            for (int j = 0; j < E; ++j) dZk[j] = dY[2*E + j] * inv;
-            ally_fc2_.backward(a_h_[k], dZk, dHk);
-            for (int i = 0; i < cfg_.hidden; ++i) if (a_h_[k][i] <= 0.0f) dHk[i] = 0.0f;
-            ally_fc1_.backward(slot_in, dHk, dSlot);
-            accum_slice(dX, base, dSlot, observation::ALLY_FEATURES);
-        }
-    }
+    brotensor::Tensor dPoolA = brotensor::Tensor::zeros_on(dY.device, E, 1);
+    brotensor::copy_d2d(dY, 2 * E, dPoolA, 0, E);
+    brotensor::Tensor dAz = brotensor::Tensor::zeros_on(
+        dY.device, observation::K_ALLIES, E);
+    brotensor::masked_mean_pool_backward(
+        dPoolA, static_cast<const float*>(a_mask_.data),
+        observation::K_ALLIES, dAz);
+    brotensor::Tensor dAh  = brotensor::Tensor::zeros_on(
+        dY.device, observation::K_ALLIES, cfg_.hidden);
+    brotensor::Tensor dAhp = brotensor::Tensor::zeros_on(
+        dY.device, observation::K_ALLIES, cfg_.hidden);
+    ally_fc2_.backward_batched(dAz, dAh);
+    brotensor::relu_backward_batched(a_hpre_, dAh, dAhp);
+    brotensor::Tensor dAin = brotensor::Tensor::zeros_on(
+        dY.device, observation::K_ALLIES, observation::ALLY_FEATURES);
+    ally_fc1_.backward_batched(dAhp, dAin);
+    brotensor::copy_d2d(dAin, 0, dX, off_a,
+                        observation::K_ALLIES * observation::ALLY_FEATURES);
 }
-
-#ifdef BROTENSOR_HAS_GPU
-
-// GPU forward: per-slot Linear (linear_*_gpu), masked mean-pool over slots,
-// concat[self_z | pooled_e | pooled_a] via concat_rows_gpu.
-void DeepSetsEncoder::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& y) {
-    assert(device_ == brotensor::Device::GPU);
-    assert(x.size() == observation::TOTAL);
-    if (y.rows != out_dim() || y.cols != 1) y.resize(out_dim(), 1);
-    const int H = cfg_.hidden;
-    const int E = cfg_.embed_dim;
-
-    // Cache x (clone) for backward — we'll view slot rows out of it.
-    x_g_cache_ = x.clone();
-
-    // ── Self stream ────────────────────────────────────────────────────────
-    // Use a non-owning view over the first SELF_FEATURES of the cached x for
-    // both forward and backward (linear_backward needs the same buffer).
-    brotensor::GpuTensor self_in_view = brotensor::GpuTensor::view(
-        x_g_cache_.data, observation::SELF_FEATURES, 1);
-    brotensor::linear_forward_gpu(self_W1_g_, self_b1_g_, self_in_view, self_h_raw_g_);
-    brotensor::relu_forward_gpu(self_h_raw_g_, self_h_g_);
-    brotensor::linear_forward_gpu(self_W2_g_, self_b2_g_, self_h_g_, self_z_g_);
-
-    // ── Enemy stream ───────────────────────────────────────────────────────
-    // Build the slot-validity mask entirely on-device (no host sync). The
-    // backward path runs all K slots and relies on masked_mean_pool_backward
-    // to zero invalid-slot rows of dE_z, so no host-side validity array is
-    // needed.
-    const int off_e = observation::SELF_FEATURES;
-    brotensor::build_slot_mask_gpu(x, off_e, observation::K_ENEMIES,
-                             observation::ENEMY_FEATURES, e_mask_g_);
-    // Per-slot Linear forward into rows of e_h_raw_g_ / e_h_g_ / e_z_g_.
-    // Slot input view points into x_g_cache_ — backward reuses it.
-    for (int k = 0; k < observation::K_ENEMIES; ++k) {
-        const int base = off_e + k * observation::ENEMY_FEATURES;
-        brotensor::GpuTensor x_slot_view = brotensor::GpuTensor::view(
-            x_g_cache_.data + base, observation::ENEMY_FEATURES, 1);
-        brotensor::GpuTensor h_raw_row = brotensor::GpuTensor::view(
-            e_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
-        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
-            e_h_g_.data + static_cast<size_t>(k) * H, H, 1);
-        brotensor::GpuTensor z_row = brotensor::GpuTensor::view(
-            e_z_g_.data + static_cast<size_t>(k) * E, E, 1);
-        // Always run forward (kernels are cheap; mask zeros pool contribution
-        // for invalid slots). Only valid-slot caches are consumed in backward.
-        brotensor::linear_forward_gpu(enemy_W1_g_, enemy_b1_g_, x_slot_view, h_raw_row);
-        brotensor::relu_forward_gpu(h_raw_row, h_row);
-        brotensor::linear_forward_gpu(enemy_W2_g_, enemy_b2_g_, h_row, z_row);
-    }
-    // Pool: pooled_e = masked_mean_pool(e_z_g_, e_mask_g_).
-    brotensor::masked_mean_pool_forward_gpu(e_z_g_, e_mask_g_.data, pooled_e_g_);
-
-    // ── Ally stream ────────────────────────────────────────────────────────
-    const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
-    brotensor::build_slot_mask_gpu(x, off_a, observation::K_ALLIES,
-                             observation::ALLY_FEATURES, a_mask_g_);
-    for (int k = 0; k < observation::K_ALLIES; ++k) {
-        const int base = off_a + k * observation::ALLY_FEATURES;
-        brotensor::GpuTensor x_slot_view = brotensor::GpuTensor::view(
-            x_g_cache_.data + base, observation::ALLY_FEATURES, 1);
-        brotensor::GpuTensor h_raw_row = brotensor::GpuTensor::view(
-            a_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
-        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
-            a_h_g_.data + static_cast<size_t>(k) * H, H, 1);
-        brotensor::GpuTensor z_row = brotensor::GpuTensor::view(
-            a_z_g_.data + static_cast<size_t>(k) * E, E, 1);
-        brotensor::linear_forward_gpu(ally_W1_g_, ally_b1_g_, x_slot_view, h_raw_row);
-        brotensor::relu_forward_gpu(h_raw_row, h_row);
-        brotensor::linear_forward_gpu(ally_W2_g_, ally_b2_g_, h_row, z_row);
-    }
-    brotensor::masked_mean_pool_forward_gpu(a_z_g_, a_mask_g_.data, pooled_a_g_);
-
-    // ── Concat into y = [self_z | pooled_e | pooled_a] ─────────────────────
-    std::vector<const brotensor::GpuTensor*> parts = {
-        &self_z_g_, &pooled_e_g_, &pooled_a_g_
-    };
-    brotensor::concat_rows_gpu(parts, y);
-}
-
-void DeepSetsEncoder::backward(const brotensor::GpuTensor& dY, brotensor::GpuTensor& dX) {
-    assert(device_ == brotensor::Device::GPU);
-    assert(dY.size() == out_dim());
-    if (dX.rows != observation::TOTAL || dX.cols != 1) dX.resize(observation::TOTAL, 1);
-    dX.zero();
-    const int H = cfg_.hidden;
-    const int E = cfg_.embed_dim;
-
-    // Split dY into [dSelfZ | dPooled_e | dPooled_a].
-    brotensor::GpuTensor dSelfZ_view = brotensor::GpuTensor::view(
-        const_cast<float*>(dY.data) + 0 * E, E, 1);
-    brotensor::GpuTensor dPooledE_view = brotensor::GpuTensor::view(
-        const_cast<float*>(dY.data) + 1 * E, E, 1);
-    brotensor::GpuTensor dPooledA_view = brotensor::GpuTensor::view(
-        const_cast<float*>(dY.data) + 2 * E, E, 1);
-
-    // ── Self backward ──────────────────────────────────────────────────────
-    brotensor::GpuTensor dSelfH(H, 1);
-    brotensor::linear_backward_gpu(self_W2_g_, self_h_g_, dSelfZ_view,
-                             dSelfH, self_dW2_g_, self_db2_g_);
-    brotensor::GpuTensor dSelfHraw(H, 1);
-    brotensor::relu_backward_gpu(self_h_raw_g_, dSelfH, dSelfHraw);
-    // Reuse self_in_view as input for backward, and write dX[0..SELF) directly.
-    brotensor::GpuTensor self_in_view = brotensor::GpuTensor::view(
-        x_g_cache_.data, observation::SELF_FEATURES, 1);
-    brotensor::GpuTensor dX_self_view = brotensor::GpuTensor::view(
-        dX.data, observation::SELF_FEATURES, 1);
-    brotensor::linear_backward_gpu(self_W1_g_, self_in_view, dSelfHraw,
-                             dX_self_view, self_dW1_g_, self_db1_g_);
-
-    // ── Enemy backward ─────────────────────────────────────────────────────
-    // Iterate all K slots: invalid slots get zero rows in dE_z (from
-    // masked_mean_pool_backward via e_mask_g_), so their fc1/fc2 contributions
-    // accumulate to zero — no host-side validity check needed. Each slot uses
-    // its own cached inputs (the CPU "last-valid stomp" hack is gone; CPU now
-    // matches via Linear's explicit-input backward overload).
-    brotensor::GpuTensor dE_z(observation::K_ENEMIES, E);
-    brotensor::masked_mean_pool_backward_gpu(dPooledE_view, e_mask_g_.data,
-                                       observation::K_ENEMIES, dE_z);
-    const int off_e = observation::SELF_FEATURES;
-    for (int k = 0; k < observation::K_ENEMIES; ++k) {
-        brotensor::GpuTensor dZk_view = brotensor::GpuTensor::view(
-            dE_z.data + static_cast<size_t>(k) * E, E, 1);
-        brotensor::GpuTensor h_raw_row = brotensor::GpuTensor::view(
-            e_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
-        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
-            e_h_g_.data + static_cast<size_t>(k) * H, H, 1);
-        brotensor::GpuTensor dHk(H, 1);
-        brotensor::linear_backward_gpu(enemy_W2_g_, h_row, dZk_view,
-                                 dHk, enemy_dW2_g_, enemy_db2_g_);
-        brotensor::GpuTensor dHk_raw(H, 1);
-        brotensor::relu_backward_gpu(h_raw_row, dHk, dHk_raw);
-        const int base = off_e + k * observation::ENEMY_FEATURES;
-        brotensor::GpuTensor x_slot_view = brotensor::GpuTensor::view(
-            x_g_cache_.data + base, observation::ENEMY_FEATURES, 1);
-        brotensor::GpuTensor dX_slot_view = brotensor::GpuTensor::view(
-            dX.data + base, observation::ENEMY_FEATURES, 1);
-        brotensor::linear_backward_gpu(enemy_W1_g_, x_slot_view, dHk_raw,
-                                 dX_slot_view, enemy_dW1_g_, enemy_db1_g_);
-    }
-
-    // ── Ally backward ──────────────────────────────────────────────────────
-    brotensor::GpuTensor dA_z(observation::K_ALLIES, E);
-    brotensor::masked_mean_pool_backward_gpu(dPooledA_view, a_mask_g_.data,
-                                       observation::K_ALLIES, dA_z);
-    const int off_a = off_e + observation::K_ENEMIES * observation::ENEMY_FEATURES;
-    for (int k = 0; k < observation::K_ALLIES; ++k) {
-        brotensor::GpuTensor dZk_view = brotensor::GpuTensor::view(
-            dA_z.data + static_cast<size_t>(k) * E, E, 1);
-        brotensor::GpuTensor h_raw_row = brotensor::GpuTensor::view(
-            a_h_raw_g_.data + static_cast<size_t>(k) * H, H, 1);
-        brotensor::GpuTensor h_row = brotensor::GpuTensor::view(
-            a_h_g_.data + static_cast<size_t>(k) * H, H, 1);
-        brotensor::GpuTensor dHk(H, 1);
-        brotensor::linear_backward_gpu(ally_W2_g_, h_row, dZk_view,
-                                 dHk, ally_dW2_g_, ally_db2_g_);
-        brotensor::GpuTensor dHk_raw(H, 1);
-        brotensor::relu_backward_gpu(h_raw_row, dHk, dHk_raw);
-        const int base = off_a + k * observation::ALLY_FEATURES;
-        brotensor::GpuTensor x_slot_view = brotensor::GpuTensor::view(
-            x_g_cache_.data + base, observation::ALLY_FEATURES, 1);
-        brotensor::GpuTensor dX_slot_view = brotensor::GpuTensor::view(
-            dX.data + base, observation::ALLY_FEATURES, 1);
-        brotensor::linear_backward_gpu(ally_W1_g_, x_slot_view, dHk_raw,
-                                 dX_slot_view, ally_dW1_g_, ally_db1_g_);
-    }
-}
-#endif
 
 } // namespace brogameagent::nn

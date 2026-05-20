@@ -1,9 +1,5 @@
 #include "brogameagent/nn/autoencoder.h"
 
-#ifdef BROTENSOR_HAS_GPU
-#include <brotensor/runtime.h>
-#endif
-
 #include <cassert>
 #include <cstring>
 
@@ -37,39 +33,12 @@ void DeepSetsAutoencoder::backward(const brotensor::Tensor& dX_hat) {
     // dX_obs discarded — no upstream consumer for the raw observation grad.
 }
 
-#ifdef BROTENSOR_HAS_GPU
-void DeepSetsAutoencoder::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& x_hat) {
-    assert(device_ == brotensor::Device::GPU);
-    if (embed_g_.rows != enc_.out_dim() || embed_g_.cols != 1)
-        embed_g_.resize(enc_.out_dim(), 1);
-    enc_.forward(x, embed_g_);
-    dec_.forward(embed_g_, x_hat);
-}
-
-void DeepSetsAutoencoder::backward(const brotensor::GpuTensor& dX_hat) {
-    assert(device_ == brotensor::Device::GPU);
-    if (dEmbed_g_.rows != enc_.out_dim() || dEmbed_g_.cols != 1)
-        dEmbed_g_.resize(enc_.out_dim(), 1);
-    if (dX_obs_g_.rows != observation::TOTAL || dX_obs_g_.cols != 1)
-        dX_obs_g_.resize(observation::TOTAL, 1);
-    dec_.backward(dX_hat, dEmbed_g_);
-    enc_.backward(dEmbed_g_, dX_obs_g_);
-    // dX_obs_g_ discarded — no upstream consumer.
-}
-#endif
-
 void DeepSetsAutoencoder::to(brotensor::Device d) {
     if (d == device_) return;
-    brotensor::device_require_gpu("DeepSetsAutoencoder");
     enc_.to(d);
     dec_.to(d);
-#ifdef BROTENSOR_HAS_GPU
-    if (d == brotensor::Device::GPU) {
-        embed_g_.resize(enc_.out_dim(), 1);
-        dEmbed_g_.resize(enc_.out_dim(), 1);
-        dX_obs_g_.resize(observation::TOTAL, 1);
-    }
-#endif
+    embed_  = embed_.to(d);
+    dEmbed_ = dEmbed_.to(d);
     device_ = d;
 }
 

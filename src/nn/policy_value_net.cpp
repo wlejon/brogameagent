@@ -1,10 +1,6 @@
 #include "brogameagent/nn/policy_value_net.h"
-#include <brotensor/ops_cpu.h>
 
-#ifdef BROTENSOR_HAS_GPU
 #include <brotensor/ops.h>
-#include <brotensor/runtime.h>
-#endif
 
 #include <cassert>
 #include <cstring>
@@ -93,7 +89,11 @@ void PolicyValueNet::forward(const brotensor::Tensor& x, float& value, brotensor
     v_act_.forward(v_h_raw_, v_h_act_);
     v_fc2_.forward(v_h_act_, v_pre_tanh_);
     v_tanh_.forward(v_pre_tanh_, v_post_tanh_);
-    value = v_post_tanh_[0];
+    // v_post_tanh_ is a 1-element tensor on the parameter device; stage it to
+    // host to read the scalar (host accessors throw on a device tensor).
+    value = (device_ == brotensor::Device::CPU)
+                ? v_post_tanh_[0]
+                : v_post_tanh_.to(brotensor::Device::CPU)[0];
 
     // Policy head.
     p_fc_.forward(*h, logits);
@@ -101,39 +101,42 @@ void PolicyValueNet::forward(const brotensor::Tensor& x, float& value, brotensor
 
 void PolicyValueNet::backward(float dValue, const brotensor::Tensor& dLogits) {
     const int trunk_out = trunk_dim();
+    const brotensor::Device dev = device_;
 
     // ── Value head backward ───────────────────────────────────────────────
+    // dPostTanh carries a host scalar; stage it to the parameter device so the
+    // downstream device-dispatched ops see consistent operand devices.
     brotensor::Tensor dPostTanh = brotensor::Tensor::vec(1);
     dPostTanh[0] = dValue;
-    brotensor::Tensor dPreTanh = brotensor::Tensor::vec(1);
+    dPostTanh = dPostTanh.to(dev);
+    brotensor::Tensor dPreTanh = brotensor::Tensor::zeros_on(dev, 1, 1);
     v_tanh_.backward(dPostTanh, dPreTanh);
 
-    brotensor::Tensor dVAct = brotensor::Tensor::vec(cfg_.value_hidden);
+    brotensor::Tensor dVAct = brotensor::Tensor::zeros_on(dev, cfg_.value_hidden, 1);
     v_fc2_.backward(dPreTanh, dVAct);
 
-    brotensor::Tensor dVRaw = brotensor::Tensor::vec(cfg_.value_hidden);
+    brotensor::Tensor dVRaw = brotensor::Tensor::zeros_on(dev, cfg_.value_hidden, 1);
     v_act_.backward(dVAct, dVRaw);
 
-    brotensor::Tensor dTrunkFromV = brotensor::Tensor::vec(trunk_out);
+    brotensor::Tensor dTrunkFromV = brotensor::Tensor::zeros_on(dev, trunk_out, 1);
     v_fc1_.backward(dVRaw, dTrunkFromV);
 
     // ── Policy head backward ──────────────────────────────────────────────
-    brotensor::Tensor dTrunkFromP = brotensor::Tensor::vec(trunk_out);
+    brotensor::Tensor dTrunkFromP = brotensor::Tensor::zeros_on(dev, trunk_out, 1);
     p_fc_.backward(dLogits, dTrunkFromP);
 
     // ── Sum gradients into the trunk's last activation ───────────────────
-    brotensor::Tensor dHAct = brotensor::Tensor::vec(trunk_out);
-    for (int i = 0; i < trunk_out; ++i)
-        dHAct[i] = dTrunkFromV[i] + dTrunkFromP[i];
+    brotensor::Tensor dHAct = dTrunkFromV;
+    brotensor::add_inplace(dHAct, dTrunkFromP);
 
     // ── Walk trunk backwards ──────────────────────────────────────────────
     for (int li = static_cast<int>(trunk_.size()) - 1; li >= 0; --li) {
         const int w = cfg_.hidden[li];
-        brotensor::Tensor dHRaw = brotensor::Tensor::vec(w);
+        brotensor::Tensor dHRaw = brotensor::Tensor::zeros_on(dev, w, 1);
         trunk_acts_[li].backward(dHAct, dHRaw);
 
         const int prev_w = (li == 0) ? cfg_.in_dim : cfg_.hidden[li - 1];
-        brotensor::Tensor dPrev = brotensor::Tensor::vec(prev_w);
+        brotensor::Tensor dPrev = brotensor::Tensor::zeros_on(dev, prev_w, 1);
         trunk_[li].backward(dHRaw, dPrev);
 
         // dPrev becomes dHAct for the next iteration; for li==0 it's dX which
@@ -142,34 +145,15 @@ void PolicyValueNet::backward(float dValue, const brotensor::Tensor& dLogits) {
     }
 }
 
-#ifdef BROTENSOR_HAS_GPU
-void PolicyValueNet::forward(const brotensor::GpuTensor& x, brotensor::GpuTensor& logits) {
-    assert(device_ == brotensor::Device::GPU);
+// ─── Batched forward / backward ───────────────────────────────────────────
+//
+// One code path: the brotensor batched ops dispatch on the operand device,
+// so these run on whatever device the parameters were migrated to.
 
-    // Trunk: Linear → ReLU per layer. Caches owned by `this`.
-    const brotensor::GpuTensor* h = &x;
-    for (size_t i = 0; i < trunk_.size(); ++i) {
-        trunk_[i].forward(*h, trunk_raw_g_[i]);
-        brotensor::relu_forward_gpu(trunk_raw_g_[i], trunk_act_g_[i]);
-        h = &trunk_act_g_[i];
-    }
-
-    // Value head: Linear → ReLU → Linear → tanh. Result lives in
-    // v_post_tanh_g_ (accessible via value_gpu()).
-    v_fc1_.forward(*h, v_h_raw_g_);
-    brotensor::relu_forward_gpu(v_h_raw_g_, v_h_act_g_);
-    v_fc2_.forward(v_h_act_g_, v_pre_tanh_g_);
-    brotensor::tanh_forward_gpu(v_pre_tanh_g_, v_post_tanh_g_);
-
-    // Policy head.
-    p_fc_.forward(*h, logits);
-}
-
-void PolicyValueNet::forward_batched(const brotensor::GpuTensor& X_BD,
-                                     brotensor::GpuTensor& logits_BL,
-                                     brotensor::GpuTensor& values_B1) {
-    assert(device_ == brotensor::Device::GPU);
-    const int B = X_BD.rows;
+void PolicyValueNet::forward_batched(const brotensor::Tensor& X_BD,
+                                     brotensor::Tensor& logits_BL,
+                                     brotensor::Tensor& values_B1) {
+    (void)X_BD.rows;
 
     // Lazily size the batched scratch vector to match trunk depth.
     if (trunk_raw_bg_.size() != trunk_.size()) {
@@ -181,168 +165,106 @@ void PolicyValueNet::forward_batched(const brotensor::GpuTensor& X_BD,
 
     // Trunk: Linear(W, b) → ReLU per layer. Each call resizes its output to
     // (B, hidden[i]) automatically.
-    const brotensor::GpuTensor* h = &X_BD;
+    const brotensor::Tensor* h = &X_BD;
     for (size_t i = 0; i < trunk_.size(); ++i) {
-        brotensor::linear_forward_batched_gpu(trunk_[i].W_g(), trunk_[i].b_g(),
-                                        *h, trunk_raw_bg_[i]);
-        brotensor::relu_forward_batched_gpu(trunk_raw_bg_[i], trunk_act_bg_[i]);
+        brotensor::linear_forward_batched(trunk_[i].W(), trunk_[i].b(),
+                                          *h, trunk_raw_bg_[i]);
+        brotensor::relu_forward_batched(trunk_raw_bg_[i], trunk_act_bg_[i]);
         h = &trunk_act_bg_[i];
     }
 
     // Value head: Linear → ReLU → Linear → Tanh, all batched.
-    brotensor::linear_forward_batched_gpu(v_fc1_.W_g(), v_fc1_.b_g(), *h, v_h_raw_bg_);
-    brotensor::relu_forward_batched_gpu(v_h_raw_bg_, v_h_act_bg_);
-    brotensor::linear_forward_batched_gpu(v_fc2_.W_g(), v_fc2_.b_g(),
-                                    v_h_act_bg_, v_pre_tanh_bg_);
-    if (values_B1.rows != B || values_B1.cols != 1) values_B1.resize(B, 1);
-    brotensor::tanh_forward_batched_gpu(v_pre_tanh_bg_, values_B1);
+    brotensor::linear_forward_batched(v_fc1_.W(), v_fc1_.b(), *h, v_h_raw_bg_);
+    brotensor::relu_forward_batched(v_h_raw_bg_, v_h_act_bg_);
+    brotensor::linear_forward_batched(v_fc2_.W(), v_fc2_.b(),
+                                      v_h_act_bg_, v_pre_tanh_bg_);
+    // If the caller handed us a committed output on the wrong device, drop it
+    // so the dispatcher adopts the parameter device; tanh_forward_batched then
+    // resizes. (An empty/uncommitted tensor already adopts cleanly.)
+    if (values_B1.data != nullptr && values_B1.device != device_)
+        values_B1 = brotensor::Tensor();
+    brotensor::tanh_forward_batched(v_pre_tanh_bg_, values_B1);
 
     // Policy head.
-    brotensor::linear_forward_batched_gpu(p_fc_.W_g(), p_fc_.b_g(), *h, logits_BL);
+    brotensor::linear_forward_batched(p_fc_.W(), p_fc_.b(), *h, logits_BL);
 }
 
-void PolicyValueNet::forward_batched_train(const brotensor::GpuTensor& X_BD,
-                                           brotensor::GpuTensor& logits_BL,
-                                           brotensor::GpuTensor& values_B1) {
-    assert(device_ == brotensor::Device::GPU);
-    const int B = X_BD.rows;
+void PolicyValueNet::forward_batched_train(const brotensor::Tensor& X_BD,
+                                           brotensor::Tensor& logits_BL,
+                                           brotensor::Tensor& values_B1) {
+    (void)X_BD.rows;
 
-    if (trunk_raw_btr_g_.size() != trunk_.size()) {
-        trunk_raw_btr_g_.clear();
-        trunk_act_btr_g_.clear();
-        trunk_raw_btr_g_.resize(trunk_.size());
-        trunk_act_btr_g_.resize(trunk_.size());
+    if (trunk_raw_btr_.size() != trunk_.size()) {
+        trunk_raw_btr_.clear();
+        trunk_act_btr_.clear();
+        trunk_raw_btr_.resize(trunk_.size());
+        trunk_act_btr_.resize(trunk_.size());
     }
 
-    // Trunk: Linear (caches X view) → ReLU.
-    const brotensor::GpuTensor* h = &X_BD;
+    // Trunk: Linear (caches X) → ReLU.
+    const brotensor::Tensor* h = &X_BD;
     for (size_t i = 0; i < trunk_.size(); ++i) {
-        trunk_[i].forward_batched_train(*h, trunk_raw_btr_g_[i]);
-        brotensor::relu_forward_batched_gpu(trunk_raw_btr_g_[i], trunk_act_btr_g_[i]);
-        h = &trunk_act_btr_g_[i];
+        trunk_[i].forward_batched_train(*h, trunk_raw_btr_[i]);
+        brotensor::relu_forward_batched(trunk_raw_btr_[i], trunk_act_btr_[i]);
+        h = &trunk_act_btr_[i];
     }
 
     // Value head: Linear → ReLU → Linear → Tanh.
-    v_fc1_.forward_batched_train(*h, v_h_raw_btr_g_);
-    brotensor::relu_forward_batched_gpu(v_h_raw_btr_g_, v_h_act_btr_g_);
-    v_fc2_.forward_batched_train(v_h_act_btr_g_, v_pre_tanh_btr_g_);
-    if (values_B1.rows != B || values_B1.cols != 1) values_B1.resize(B, 1);
-    brotensor::tanh_forward_batched_gpu(v_pre_tanh_btr_g_, values_B1);
-    // Stash post-tanh (== values_B1) for tanh_backward via a non-owning view.
-    v_post_tanh_btr_g_ = brotensor::GpuTensor::view(values_B1.data,
-                                              values_B1.rows, values_B1.cols);
+    v_fc1_.forward_batched_train(*h, v_h_raw_btr_);
+    brotensor::relu_forward_batched(v_h_raw_btr_, v_h_act_btr_);
+    v_fc2_.forward_batched_train(v_h_act_btr_, v_pre_tanh_btr_);
+    if (values_B1.data != nullptr && values_B1.device != device_)
+        values_B1 = brotensor::Tensor();
+    brotensor::tanh_forward_batched(v_pre_tanh_btr_, values_B1);
+    // Stash post-tanh (== values_B1) for tanh_backward.
+    v_post_tanh_btr_ = values_B1;
 
     // Policy head: Linear (no activation).
     p_fc_.forward_batched_train(*h, logits_BL);
 }
 
-void PolicyValueNet::backward_batched(const brotensor::GpuTensor& dLogits_BL,
-                                      const brotensor::GpuTensor& dValues_B1) {
-    assert(device_ == brotensor::Device::GPU);
-
+void PolicyValueNet::backward_batched(const brotensor::Tensor& dLogits_BL,
+                                      const brotensor::Tensor& dValues_B1) {
     // ── Value head backward ───────────────────────────────────────────────
-    brotensor::tanh_backward_batched_gpu(v_post_tanh_btr_g_, dValues_B1, dPreTanh_btr_g_);
-    v_fc2_.backward_batched(dPreTanh_btr_g_, dVAct_btr_g_);
-    brotensor::relu_backward_batched_gpu(v_h_raw_btr_g_, dVAct_btr_g_, dVRaw_btr_g_);
+    brotensor::tanh_backward_batched(v_post_tanh_btr_, dValues_B1, dPreTanh_btr_);
+    v_fc2_.backward_batched(dPreTanh_btr_, dVAct_btr_);
+    brotensor::relu_backward_batched(v_h_raw_btr_, dVAct_btr_, dVRaw_btr_);
     // Write directly into dHAct so we can fold in the policy-head gradient
     // afterwards via add_inplace.
-    v_fc1_.backward_batched(dVRaw_btr_g_, dHAct_btr_g_);
+    v_fc1_.backward_batched(dVRaw_btr_, dHAct_btr_);
 
     // ── Policy head backward ──────────────────────────────────────────────
-    p_fc_.backward_batched(dLogits_BL, dTrunkFromP_btr_g_);
-    brotensor::add_inplace_batched_gpu(dHAct_btr_g_, dTrunkFromP_btr_g_);
+    p_fc_.backward_batched(dLogits_BL, dTrunkFromP_btr_);
+    brotensor::add_inplace_batched(dHAct_btr_, dTrunkFromP_btr_);
 
     // ── Walk trunk backwards. Ping-pong between dHAct and dPrev ──────────
-    brotensor::GpuTensor* cur  = &dHAct_btr_g_;
-    brotensor::GpuTensor* next = &dPrev_btr_g_;
+    brotensor::Tensor* cur  = &dHAct_btr_;
+    brotensor::Tensor* next = &dPrev_btr_;
     for (int li = static_cast<int>(trunk_.size()) - 1; li >= 0; --li) {
-        brotensor::relu_backward_batched_gpu(trunk_raw_btr_g_[li], *cur, dHRaw_btr_g_);
+        brotensor::relu_backward_batched(trunk_raw_btr_[li], *cur, dHRaw_btr_);
         if (li == 0) {
-            trunk_[li].backward_batched(dHRaw_btr_g_, dXdiscard_btr_g_);
+            trunk_[li].backward_batched(dHRaw_btr_, dXdiscard_btr_);
         } else {
-            trunk_[li].backward_batched(dHRaw_btr_g_, *next);
+            trunk_[li].backward_batched(dHRaw_btr_, *next);
             std::swap(cur, next);
         }
     }
 }
-
-void PolicyValueNet::backward(const brotensor::GpuTensor& dLogits) {
-    assert(device_ == brotensor::Device::GPU);
-
-    // ── Value head backward ───────────────────────────────────────────────
-    // Caller wrote d(loss)/d(value) into dPostTanh_g_ via dValue_gpu().
-    brotensor::tanh_backward_gpu(v_post_tanh_g_, dPostTanh_g_, dPreTanh_g_);
-    v_fc2_.backward(dPreTanh_g_, dVAct_g_);
-    brotensor::relu_backward_gpu(v_h_raw_g_, dVAct_g_, dVRaw_g_);
-    // Write straight into dHAct_g_ to avoid a device→device copy.
-    v_fc1_.backward(dVRaw_g_, dHAct_g_);
-
-    // ── Policy head backward ──────────────────────────────────────────────
-    p_fc_.backward(dLogits, dTrunkFromP_g_);
-
-    // dHAct += dTrunkFromP.
-    brotensor::add_inplace_gpu(dHAct_g_, dTrunkFromP_g_);
-
-    // ── Walk trunk backwards. Ping-pong between dHAct_g_ and dPrev_g_ ────
-    brotensor::GpuTensor* cur  = &dHAct_g_;
-    brotensor::GpuTensor* next = &dPrev_g_;
-    for (int li = static_cast<int>(trunk_.size()) - 1; li >= 0; --li) {
-        brotensor::relu_backward_gpu(trunk_raw_g_[li], *cur, dHRaw_g_);
-        if (li == 0) {
-            // Trunk-input gradient is discarded.
-            trunk_[li].backward(dHRaw_g_, dXdiscard_g_);
-        } else {
-            trunk_[li].backward(dHRaw_g_, *next);
-            std::swap(cur, next);
-        }
-    }
-}
-#endif
 
 void PolicyValueNet::to(brotensor::Device d) {
     if (d == device_) return;
-    brotensor::device_require_gpu("PolicyValueNet");
-#ifdef BROTENSOR_HAS_GPU
-    if (d == brotensor::Device::GPU) {
-        for (auto& l : trunk_) l.to(brotensor::Device::GPU);
-        v_fc1_.to(brotensor::Device::GPU);
-        v_fc2_.to(brotensor::Device::GPU);
-        p_fc_.to(brotensor::Device::GPU);
-
-        // Allocate forward caches.
-        trunk_raw_g_.clear();
-        trunk_act_g_.clear();
-        trunk_raw_g_.resize(cfg_.hidden.size());
-        trunk_act_g_.resize(cfg_.hidden.size());
-        for (size_t i = 0; i < cfg_.hidden.size(); ++i) {
-            trunk_raw_g_[i].resize(cfg_.hidden[i], 1);
-            trunk_act_g_[i].resize(cfg_.hidden[i], 1);
-        }
-        v_h_raw_g_.resize(cfg_.value_hidden, 1);
-        v_h_act_g_.resize(cfg_.value_hidden, 1);
-        v_pre_tanh_g_.resize(1, 1);
-        v_post_tanh_g_.resize(1, 1);
-        dPostTanh_g_.resize(1, 1);
-        dPreTanh_g_.resize(1, 1);
-        dVAct_g_.resize(cfg_.value_hidden, 1);
-        dVRaw_g_.resize(cfg_.value_hidden, 1);
-        const int trunk_out = trunk_dim();
-        dTrunkFromV_g_.resize(trunk_out, 1);
-        dTrunkFromP_g_.resize(trunk_out, 1);
-        dHAct_g_.resize(trunk_out, 1);
-        // dHRaw and dPrev get re-sized inside backward as we walk layers.
-        dHRaw_g_.resize(cfg_.hidden.empty() ? 1 : cfg_.hidden.back(), 1);
-        dPrev_g_.resize(cfg_.in_dim, 1);
-        dXdiscard_g_.resize(cfg_.in_dim, 1);
-        device_ = brotensor::Device::GPU;
-    } else {
-        for (auto& l : trunk_) l.to(brotensor::Device::CPU);
-        v_fc1_.to(brotensor::Device::CPU);
-        v_fc2_.to(brotensor::Device::CPU);
-        p_fc_.to(brotensor::Device::CPU);
-        device_ = brotensor::Device::CPU;
-    }
-#endif
+    for (auto& l : trunk_) l.to(d);
+    v_fc1_.to(d);
+    v_fc2_.to(d);
+    p_fc_.to(d);
+    // Single-sample activation caches.
+    for (auto& t : trunk_raw_) t = t.to(d);
+    for (auto& t : trunk_act_) t = t.to(d);
+    v_h_raw_ = v_h_raw_.to(d);
+    v_h_act_ = v_h_act_.to(d);
+    v_pre_tanh_  = v_pre_tanh_.to(d);
+    v_post_tanh_ = v_post_tanh_.to(d);
+    device_ = d;
 }
 
 void PolicyValueNet::zero_grad() {

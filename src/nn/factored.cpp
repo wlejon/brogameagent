@@ -1,5 +1,5 @@
 #include "brogameagent/nn/factored.h"
-#include <brotensor/ops_cpu.h>
+#include <brotensor/ops.h>
 
 #include <cassert>
 #include <cmath>
@@ -65,7 +65,7 @@ void factored_to_flat(const float* logits,
         // softmax_xent_segment is overkill (it also computes loss/grad),
         // but it's the existing stable softmax with mask we already trust.
         // The dummy target/grad buffers are written and discarded.
-        brotensor::softmax_xent_segment_cpu(logits + off, zero_target.data() + off,
+        brotensor::softmax_xent_segment(logits + off, zero_target.data() + off,
                              probs.data() + off, dummy_d.data() + off,
                              len, mask);
     }

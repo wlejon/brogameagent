@@ -2,12 +2,9 @@
 
 // BatchedInferenceServer
 // ──────────────────────
-// Forms a batch from concurrent calls to evaluate(), runs one batched GPU
-// forward of a PolicyValueNet, and returns each caller's per-row result.
-//
-// Compiled only when BROTENSOR_HAS_GPU is defined; the class is GPU-only.
-
-#ifdef BROTENSOR_HAS_GPU
+// Forms a batch from concurrent calls to evaluate(), runs one batched forward
+// of a BatchedNet, and returns each caller's per-row result. Device-neutral —
+// the batched forward runs on whatever device the net's parameters live on.
 
 #include "brogameagent/learn/batched_net.h"
 
@@ -80,5 +77,3 @@ private:
 };
 
 } // namespace brogameagent::learn
-
-#endif // BROTENSOR_HAS_GPU

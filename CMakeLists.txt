@@ -126,6 +126,7 @@ add_library(brogameagent STATIC
     src/learn/gumbel.cpp
     src/learn/contrastive.cpp
     src/learn/inference_backend.cpp
+    src/learn/inference_server.cpp
     # --- Grid-world / platformer training kit ---
     src/grid/obs_window.cpp
     src/grid/generic_recorder.cpp
@@ -150,14 +151,6 @@ if(MSVC)
     target_compile_options(brogameagent PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4>)
 else()
     target_compile_options(brogameagent PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-Wextra>)
-endif()
-
-# --- GPU dispatch glue (gated; default OFF) ---
-# When a GPU backend is selected we compile the inference_server adapter that
-# bridges brogameagent's MCTS to a batched GPU inference path. brotensor
-# itself is linked unconditionally above.
-if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
-    target_sources(brogameagent PRIVATE src/learn/inference_server.cpp)
 endif()
 
 # --- Install / export ---
