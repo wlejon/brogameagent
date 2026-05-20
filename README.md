@@ -225,16 +225,19 @@ like ordinary C++ and single-steps cleanly in a debugger.
 
 ### Circuits and loss primitives (`include/brogameagent/nn/`)
 
-The tensor type (`brotensor::Tensor`) and the underlying scalar ops
-(`linear_forward_cpu` / `linear_backward_cpu`, `softmax_forward_cpu` /
-`softmax_xent_cpu`, activations, `xavier_init_cpu`, …) live in the
-sibling `brotensor` library — see `<brotensor/tensor.h>` and
-`<brotensor/ops_cpu.h>`. Layers below own the higher-level circuit
-structure (autograd-free, parameter mirrors, serialization) and dispatch
-to brotensor for the per-op math; when `BROGAMEAGENT_WITH_CUDA` or
-`BROGAMEAGENT_WITH_METAL` is on, parameter-bearing layers also hold
-device mirrors and route through brotensor's GPU surface via
-`Device::to(GPU)`.
+The tensor type (`brotensor::Tensor`) and the underlying ops
+(`linear_forward`, `softmax_forward`, `attention_forward`, the
+activations, `xavier_init`, …) live in the sibling `brotensor`
+library — see `<brotensor/tensor.h>` and `<brotensor/ops.h>`. A
+`brotensor::Tensor` carries a runtime `Device` tag, and every op is
+device-neutral: it dispatches to the CPU, CUDA, or Metal backend by its
+operands' device. There is no separate host/device tensor type and no
+`_cpu` / `_gpu` op split. Layers below own the higher-level circuit
+structure (autograd-free, parameter/gradient/optimizer tensors,
+serialization) and call those device-neutral ops; a layer's
+`to(Device)` migrates every owned tensor at once, so the same
+forward/backward code runs on CPU or — when `BROGAMEAGENT_WITH_CUDA` /
+`BROGAMEAGENT_WITH_METAL` is on — on the GPU.
 
 - `Linear`, `Relu`, `Tanh` — circuits with SGD+momentum velocity state
   and per-tensor serialization.
@@ -340,6 +343,12 @@ which runs finite-difference gradient checks against every circuit's
 analytic backward (9 checks, pass on clean build). Training plumbing
 is exercised by `nn_train_value.exe` (value-loss convergence) and
 `nn_exit.exe` (full loop, save/load/publish round-trip).
+
+When built with `BROGAMEAGENT_WITH_CUDA` / `BROGAMEAGENT_WITH_METAL`,
+`tests/gpu/` additionally exercises GPU dispatch — per-layer
+host↔device migration round-trips and the batched inference / MCTS
+server paths. (CPU↔GPU parity for brotensor's op surface itself is
+tested in brotensor.)
 
 ## License / authorship
 
