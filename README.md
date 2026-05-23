@@ -1,33 +1,70 @@
 # brogameagent
 
-A C++20 combat simulation and planner library for MOBA-style 1v1 (and
-NvN) fights. Built for algorithmic, rollout-based AI — MCTS variants over
-a snapshot-restorable sim, plus hand-crafted NN circuits for ExIt-style
-self-improvement. No Python, no libtorch, no ONNX — every circuit is
-authored in plain C++. Sibling repos `bromath` (header-only math) and
+A C++20 algorithms library for sampling-based game AI: MCTS variants,
+ExIt-style self-improvement, and a hand-crafted, autograd-free NN
+circuit stack — all designed to plug into any snapshot-restorable
+substrate. No Python, no libtorch, no ONNX; every circuit is authored
+in plain C++. Sibling repos `bromath` (header-only math) and
 `brotensor` (tensor + ops, CPU always-on / CUDA / Metal) supply the
 low-level primitives; both vendor in as `add_subdirectory`, no system
 deps.
 
+Two reference substrates ship in-tree:
+
+- A deterministic MOBA-style combat sim (1v1 / NvN) with snapshot /
+  restore, projectiles, abilities, and a replay format — the original
+  driver for the library and still the richest test bed.
+- A tile-grid harness (`include/brogameagent/grid/`) — a smaller,
+  domain-neutral substrate used to exercise the generic planner /
+  trainer paths without combat-sim coupling.
+
+New substrates plug in by implementing the `mcts::IEvaluator` /
+`IPrior` interfaces (or the domain-agnostic `GenericMcts<State,
+Action>`) and feeding `GenericTrainer` + `WeightsHandle`. Nothing in
+the planner or learning stack is combat-specific.
+
 ## Intent
 
-The sim is a fast, deterministic substrate for **sampling-based planning**:
-snapshot the current world, fork N hypothetical futures under different AI
-responses, step forward, score, commit the winning action. `VecSimulation`
-makes the fork-and-step loop cheap enough to do per-frame at runtime.
+Whatever the substrate, the loop is the same: snapshot current state,
+fork N hypothetical futures under different actions, step forward,
+score, commit the winner. `VecSimulation` (combat) and the grid
+harness both make that fork-and-step loop cheap enough to do per-frame
+at runtime; `ExItTrainer` closes the loop by distilling the search's
+visit distribution back into a prior that short-circuits the next
+round of search.
 
 Layered on top of that substrate:
 
 - **A planner zoo** — single-hero `Mcts`, simultaneous-move `DecoupledMcts`,
   cooperative `TeamMcts`, hierarchical `TacticMcts` / `LayeredPlanner`,
   options-based `OptionMcts` / `TeamOptionMcts`, role-based `Commander`,
-  partial-observability `InfoSetMcts`, and `root_parallel_search`.
-- **Hand-crafted NN circuits** — a small library of eager, autograd-free
-  layers (`Linear`, `DeepSetsEncoder`, `ValueHead`, `FactoredPolicyHead`)
-  composed into a `SingleHeroNet` that plugs into any MCTS variant via the
-  existing `IPrior` / `IEvaluator` interfaces. An `ExItTrainer` consumes
-  MCTS-derived policy/value targets and hot-swaps weights through a
-  `WeightsHandle` so the game never pauses for training.
+  partial-observability `InfoSetMcts` (with `Belief` / `Observability`
+  filtering), `root_parallel_search`, and a domain-agnostic
+  `GenericMcts<State, Action>` for non-combat substrates.
+- **A circuit library** — eager, autograd-free layers spanning the usual
+  toolkit: `Linear` / `Relu` / `Tanh`, `LayerNorm`, `Embedding`, `GRU`,
+  `MultiHeadAttention` / `TransformerBlock` / `TransformerEncoder`,
+  `SetTransformer`, `DeepSetsEncoder`, `Autoencoder` (with `Decoder`),
+  `ForwardModel`, `Ensemble`, factored / categorical / distributional
+  heads, and the prebuilt `SingleHeroNet` and `PolicyValueNet` that plug
+  into any MCTS variant via the existing `IPrior` / `IEvaluator`
+  interfaces. Tensor storage and ops come from sibling
+  [brotensor](../brotensor) — one `brotensor::Tensor` carries a runtime
+  `Device` tag, and a single op surface dispatches CPU / CUDA / Metal.
+- **A learning stack** — `ExItTrainer` consumes MCTS-derived
+  policy/value targets and hot-swaps weights through a `WeightsHandle`
+  so the game never pauses for training. A more general
+  `GenericTrainer` + `GenericReplayBuffer` pair lets the same machinery
+  drive non-combat tasks. A batched `InferenceServer` (with pluggable
+  `InferenceBackend`) lets many search threads share one forward pass.
+  Distillation extras: `gumbel_improved_policy`, `GumbelNoisePrior`,
+  contrastive (`learn/contrastive.h`), and a `ForwardModel` skeleton
+  for MuZero-shaped extensions.
+- **A grid harness** — `include/brogameagent/grid/` is a tile-grid
+  training substrate (best-crop curriculum, failure tape, BC ingest,
+  observation window, frame stack, reward shaping, generic recorder)
+  decoupled from the combat sim; used as the substrate for the
+  `15_grid_corridor` example and lighter-weight RL experiments.
 
 ## Building
 
@@ -42,10 +79,11 @@ cmake -S . -B build -DBROGAMEAGENT_WITH_METAL=ON
 ```
 
 Produces the static lib, tests, `replay_query.exe`, `mcts_bench.exe`,
-the NN CLIs (`nn_check.exe`, `nn_train_value.exe`, `nn_exit.exe`), and
-the examples under `examples/` (see `examples/README.md` for the guided
-tour from "hello world" to layered multi-agent search). The GPU options
-additionally enable the batched `inference_server` adapter and the
+the NN CLIs (`nn_check.exe`, `nn_train_value.exe`, `nn_exit.exe`,
+`nn_pretrain_ae.exe`), and the examples under `examples/` (see
+`examples/README.md` for the guided tour from "hello world" through
+multi-agent search and into the grid harness). The GPU options
+additionally enable the batched `InferenceServer` adapter and the
 `nn_pretrain_ae_gpu` / `nn_exit_gpu` tools.
 
 ### Running tests
@@ -239,16 +277,35 @@ serialization) and call those device-neutral ops; a layer's
 forward/backward code runs on CPU or — when `BROGAMEAGENT_WITH_CUDA` /
 `BROGAMEAGENT_WITH_METAL` is on — on the GPU.
 
+Core building blocks:
+
 - `Linear`, `Relu`, `Tanh` — circuits with SGD+momentum velocity state
   and per-tensor serialization.
+- `LayerNorm`, `Embedding`, `FeedForward` — standard transformer
+  building blocks.
+- `MultiHeadAttention`, `TransformerBlock`, `TransformerEncoder`,
+  `SetTransformer` — attention stacks for sequence / set inputs.
+- `GRU` — recurrent cell for sequential observation histories.
 - `DeepSetsEncoder` — per-stream MLP over self / enemy-slots / ally-slots,
   mean-pool over valid slots, concat. Invalid slots contribute zero
   gradient.
+- `Autoencoder` / `Decoder` — reconstruction pretraining (see
+  `nn_pretrain_ae`).
+- `ForwardModel` — latent-dynamics skeleton for MuZero-shaped extensions.
+- `Ensemble` — homogeneous N-way wrapper with per-member parameters and
+  averaged forward.
+
+Heads and assembled nets:
+
 - `ValueHead` — `embed → hidden → 1 → tanh`; output in [−1, 1].
 - `FactoredPolicyHead` — three linears: 9 move logits, 6 attack logits
   (N_ENEMY_SLOTS + "no-op"), 9 ability logits (MAX_ABILITIES + "no-op").
+- `CategoricalHead` / distributional heads (`heads_dist.h`) — for
+  discrete-action and value-distribution outputs (C51-style).
 - `SingleHeroNet` — `DeepSetsEncoder → Linear+ReLU trunk → {ValueHead,
   FactoredPolicyHead}`. Default shape ~14K params.
+- `PolicyValueNet` — generic policy+value head pairing used by the
+  grid harness and other non-combat substrates.
 - `WeightsHandle` — atomic publish/subscribe over a `.bgnn` blob via
   `shared_ptr` + mutex. Publishers bump a version; readers snapshot
   per-decision and reload only when the version advances. This is the
@@ -296,6 +353,15 @@ Load via `SingleHeroNet::load(blob)`; the adapter classes
   distribution from a completed search tree as a distillation target
   that's strictly better than raw visit counts when the search budget
   is small.
+- `InferenceServer` / `InferenceBackend` — many search threads enqueue
+  observations; the server batches them through one net forward per
+  tick. Backend is pluggable (CPU `BatchedNet`, GPU on opt-in builds).
+- `GenericReplayBuffer<Situation>` / `GenericTrainer<Net, Loss>` —
+  substrate-agnostic versions of `ReplayBuffer` / `ExItTrainer` used by
+  the grid harness and any non-combat task that wants the same
+  generate→train→publish loop.
+- `Contrastive` (`learn/contrastive.h`) — auxiliary representation
+  losses for the encoder stack.
 
 ### ExIt loop (at the level of `nn_exit`)
 
@@ -319,6 +385,30 @@ distribution is the policy-improvement target; the eventual
 discounted return is the value target. Repeating this yields a
 progressively stronger prior that short-circuits MCTS at tight
 iteration budgets via `use_leaf_value` + a fast `NeuralPrior` seed.
+
+## Grid harness (`include/brogameagent/grid/`)
+
+A small tile-grid training substrate, completely independent of the
+combat sim, exercising the same `GenericMcts` / `GenericTrainer` /
+`WeightsHandle` machinery on a simpler state space. Useful as a fast
+correctness substrate and as a template for porting the stack to new
+domains.
+
+- `Harness` — wires generate → train → eval against a user-supplied
+  step function; owns the replay buffer, trainer thread, and weights
+  handle.
+- `BestCrop` — curriculum buffer that keeps the highest-return episode
+  prefixes seen so far and seeds future searches from them.
+- `FailureTape` — bounded ring of recent failure tails for targeted
+  replay / inspection.
+- `bc_ingest` — behavioral-cloning ingest path that turns recorded
+  expert trajectories into `Situation`s for warm-start training.
+- `ObsWindow`, `FrameStack` — observation construction utilities.
+- `shaping` — pluggable reward-shaping functions.
+- `GenericRecorder` — substrate-neutral episode recorder, mirroring
+  `Recorder` but free of combat-sim types.
+
+See `examples/15_grid_corridor.cpp` for the end-to-end shape.
 
 ## Test coverage
 
