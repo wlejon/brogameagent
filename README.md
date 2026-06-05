@@ -183,6 +183,27 @@ Three independent builders, stable in layout:
 - `World::spawnProjectile(Projectile)` — Single / Pierce / AoE modes,
   optional homing via `targetId`, ownership for event attribution.
 
+### Capabilities and policies
+
+A higher-level behaviour layer sits above raw `applyAction`. A
+`Capability` (`include/brogameagent/capability.h`) is one "tool" an
+agent can invoke — `MoveTo`, `LaneWalk`, `BasicAttack`, `CastAbility`,
+`Flee`, `Hold` ship as built-in factories (`makeMoveToCapability()` etc.,
+`addAllBuiltinCapabilities(set)`). Each cap has `gate` (cheap legality
+pre-flight), `start`, `advance`, and `cancel`, and mutates an in-flight
+`Action` struct rather than holding per-action state. A `CapabilitySet`
+is the per-agent bag of caps (stable integer ids, lane-waypoint and
+fallback-point scratch) and exposes `buildBuiltinMask` for scripted
+selection.
+
+A `Policy` (`include/brogameagent/policy.h`) picks which capability to
+start each think tick. `ScriptedMinionPolicy` is the built-in default
+(attack-in-range → lane-walk → hold) for bulk minion behaviour; the
+JS-primary path in the host engine writes the pending `Action` directly
+instead. `CapabilityId` reserves ids ≥ `kJsCapFirst` (100) for
+JS-registered caps. See `examples/13_capabilities_demo.cpp` for a tower /
+minion / hero wired through capability sets.
+
 ### Snapshot / restore
 
 `World::snapshot()` / `restore(WorldSnapshot)` captures all resettable
@@ -304,8 +325,17 @@ Heads and assembled nets:
   discrete-action and value-distribution outputs (C51-style).
 - `SingleHeroNet` — `DeepSetsEncoder → Linear+ReLU trunk → {ValueHead,
   FactoredPolicyHead}`. Default shape ~14K params.
-- `PolicyValueNet` — generic policy+value head pairing used by the
-  grid harness and other non-combat substrates.
+- `SingleHeroNetST` — set-transformer variant: a `SetTransformer` over the
+  entity slots in place of the DeepSets mean-pool, same head pairing.
+- `SingleHeroNetTX` — transformer variant: a per-stream
+  `TransformerEncoder<n_blocks, num_heads, d_ff>` over the enemy / ally
+  slots, masked mean-pool, concat with the self block, then the same trunk +
+  heads. Implements `ICircuit` and `learn::BatchedNet`, so it drives the
+  batched `InferenceServer` and the GPU MCTS-server path; it's the net the
+  transformer / batched / GPU-dispatch tests exercise.
+- `PolicyValueNet` — generic policy+value head pairing (also a
+  `learn::BatchedNet`) used by the grid harness and other non-combat
+  substrates.
 - `WeightsHandle` — atomic publish/subscribe over a `.bgnn` blob via
   `shared_ptr` + mutex. Publishers bump a version; readers snapshot
   per-decision and reload only when the version advances. This is the
@@ -425,14 +455,27 @@ See `examples/15_grid_corridor.cpp` for the end-to-end shape.
   layout, action mask alignment.
 - `Simulation` / `VecSimulation`: per-tick semantics, cooldown ticks,
   determinism under seed, termination + winner, reward drain.
+- `Mcts`: legal-action enumeration, attack routing, side-effect-free
+  search, prefers-attack-when-in-range, determinism under seed, wall-time
+  budget, `advance_root` subtree reuse, terminal HP-delta evaluation.
 - Recorder / reader: round-trip, event slicing, bad-magic rejection,
   random access by step.
 
 NN circuits are additionally verified end-to-end by `nn_check.exe`,
 which runs finite-difference gradient checks against every circuit's
-analytic backward (9 checks, pass on clean build). Training plumbing
-is exercised by `nn_train_value.exe` (value-loss convergence) and
-`nn_exit.exe` (full loop, save/load/publish round-trip).
+analytic backward — Linear / ReLU / Tanh / Sigmoid, softmax-xent,
+DeepSetsEncoder, decoder / autoencoder, LayerNorm, Embedding, attention,
+GRU, SetTransformer, the distributional + opponent heads, `ForwardModel`,
+InfoNCE, and the assembled `SingleHeroNet` / `SingleHeroNetST` /
+`PolicyValueNet` (save/load + SGD-step). It prints a per-check TSV and a
+`# summary pass=… fail=…` footer, returning non-zero on any failure.
+Transformer circuits (MHA, FeedForward, TransformerBlock,
+TransformerEncoder) and the `SingleHeroNetTX` net have their own CPU
+correctness binary (`brogameagent_transformer_test` /
+`brogameagent_single_hero_net_tx_test`), and Adam bias-correction has
+`brogameagent_adam_test`. Training plumbing is exercised by
+`nn_train_value.exe` (value-loss convergence) and `nn_exit.exe` (full
+loop, save/load/publish round-trip).
 
 When built with `BROGAMEAGENT_WITH_CUDA` / `BROGAMEAGENT_WITH_METAL`,
 `tests/gpu/` additionally exercises GPU dispatch — per-layer

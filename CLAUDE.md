@@ -8,10 +8,15 @@ Game-agent algorithms library: MCTS variants (single-hero, decoupled, team, laye
 include/brogameagent/
   grid/            tile-grid simulation harness
   learn/           ExIt trainer, replay, neural adapters, inference server
-  nn/              circuit classes (Linear, Attention, Encoder, …)
-                   — tensor + scalar ops live in sibling brotensor
-  *.h              World, Agent, Mcts variants, perception/observation/reward,
-                   recorder, capability system, simulation, vec_simulation
+  nn/              circuit classes (Linear, Attention, Encoder, …) plus the
+                   assembled hero nets: SingleHeroNet (DeepSets),
+                   SingleHeroNetST (set-transformer), SingleHeroNetTX
+                   (per-stream transformer; also a learn::BatchedNet),
+                   PolicyValueNet — tensor + scalar ops live in brotensor
+  *.h              World, Agent, Mcts variants (incl. info_set_mcts/belief/
+                   observability, generic_mcts), perception/observation/reward,
+                   capability + policy (Capability/CapabilitySet/Policy/
+                   ScriptedMinionPolicy), recorder, simulation, vec_simulation
 
 src/                 implementation
 tests/               GoogleTest-style; tests/gpu/ is GPU-conditional
@@ -52,7 +57,15 @@ ctest --test-dir build -C Release
 build/Release/brogameagent_test.exe
 ```
 
-`tests/test_main.cpp` is the monolithic CPU-side test entry. `tests/gpu/` is built only when a GPU backend is on and exercises the dispatch layer (host↔device parity, batched ops, layer dispatch round-trips).
+`tests/test_main.cpp` is the main CPU-side test entry (sim, combat, MCTS,
+recorder, …). Alongside it: `test_transformer.cpp` (MHA / FeedForward /
+TransformerBlock / TransformerEncoder), `test_adam.cpp` (Adam
+bias-correction), and `test_single_hero_net_tx.cpp` (SingleHeroNetTX
+forward / FD-gradient / save-load) are separate CPU test binaries.
+`tools/nn_check` runs finite-diff gradient checks over every circuit.
+`tests/gpu/` is built only when a GPU backend is on and exercises the
+dispatch layer (host↔device parity, batched ops, layer dispatch
+round-trips, the MCTS / inference-server paths).
 
 ## Conventions
 
