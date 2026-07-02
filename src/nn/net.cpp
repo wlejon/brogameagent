@@ -2,8 +2,8 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
 #include <cstring>
+#include <stdexcept>
 
 namespace brogameagent::nn {
 
@@ -101,12 +101,19 @@ void SingleHeroNet::load_encoder_only(const std::vector<uint8_t>& enc_blob) {
 }
 
 void SingleHeroNet::load(const std::vector<uint8_t>& blob) {
-    assert(blob.size() >= sizeof(uint32_t) * 2);
+    // assert() compiles to a no-op in Release (NDEBUG) builds — malformed
+    // input would otherwise silently fall through into load_from() below,
+    // which trusts the blob's internal offsets/sizes without further
+    // validation, reading out of bounds. These checks must survive Release.
+    if (blob.size() < sizeof(uint32_t) * 2)
+        throw std::runtime_error("SingleHeroNet::load: blob too small for header");
     uint32_t magic = 0, version = 0;
     std::memcpy(&magic,   blob.data(),                   sizeof(uint32_t));
     std::memcpy(&version, blob.data() + sizeof(uint32_t), sizeof(uint32_t));
-    assert(magic == kMagic);
-    assert(version == kVersion);
+    if (magic != kMagic)
+        throw std::runtime_error("SingleHeroNet::load: bad magic (not a BGNN blob)");
+    if (version != kVersion)
+        throw std::runtime_error("SingleHeroNet::load: unsupported version");
     size_t offset = sizeof(uint32_t) * 2;
     enc_.load_from(blob.data(), offset, blob.size());
     trunk_.load_from(blob.data(), offset, blob.size());
