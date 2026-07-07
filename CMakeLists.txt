@@ -33,6 +33,20 @@ if(BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL)
         "BROGAMEAGENT_WITH_CUDA and BROGAMEAGENT_WITH_METAL are mutually exclusive.")
 endif()
 
+# --- NN + learning layer (optional) ---
+#
+# brotensor is used by exactly two source trees: src/nn/* and src/learn/*.
+# The core — navmesh, pathfinding, steering, perception, MCTS, grid harness —
+# has zero brotensor references and never includes an nn/ or learn/ header, so
+# the whole neural layer gates cleanly as one unit. With BROGAMEAGENT_WITH_NN=OFF
+# brogameagent builds with no brotensor dependency at all, which is what a
+# minimal `bro` build wants. GPU dispatch is a feature of the NN layer, so
+# requesting a GPU backend implies it. Default ON preserves the full surface.
+option(BROGAMEAGENT_WITH_NN "Build the neural-net + learning layer (requires brotensor)" ON)
+if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
+    set(BROGAMEAGENT_WITH_NN ON CACHE BOOL "" FORCE)
+endif()
+
 # --- bromath (shared header-only math, sibling repo) ---
 # Guard against double-add — when consumed as a sibling lib from another
 # parent project (bro, etc.) the parent or another sibling may have already
@@ -53,22 +67,24 @@ endif()
 # the matching brogameagent option. When neither GPU backend is requested,
 # both are forced OFF so brotensor builds CPU-only. Double-add guard mirrors
 # bromath: first-loader wins when consumed as a sibling.
-if(BROGAMEAGENT_WITH_CUDA)
-    set(BROTENSOR_WITH_CUDA  ON  CACHE BOOL "" FORCE)
-    set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
-elseif(BROGAMEAGENT_WITH_METAL)
-    set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
-    set(BROTENSOR_WITH_METAL ON  CACHE BOOL "" FORCE)
-else()
-    set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
-    set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
-endif()
-if(NOT TARGET brotensor)
-    set(BROTENSOR_DIR "${CMAKE_SOURCE_DIR}/../brotensor" CACHE PATH "brotensor sibling")
-    if(EXISTS "${BROTENSOR_DIR}/CMakeLists.txt")
-        add_subdirectory("${BROTENSOR_DIR}" "${CMAKE_BINARY_DIR}/brotensor" EXCLUDE_FROM_ALL)
+if(BROGAMEAGENT_WITH_NN)
+    if(BROGAMEAGENT_WITH_CUDA)
+        set(BROTENSOR_WITH_CUDA  ON  CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
+    elseif(BROGAMEAGENT_WITH_METAL)
+        set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_METAL ON  CACHE BOOL "" FORCE)
     else()
-        message(FATAL_ERROR "brotensor not found at ${BROTENSOR_DIR}")
+        set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
+    endif()
+    if(NOT TARGET brotensor)
+        set(BROTENSOR_DIR "${CMAKE_SOURCE_DIR}/../brotensor" CACHE PATH "brotensor sibling")
+        if(EXISTS "${BROTENSOR_DIR}/CMakeLists.txt")
+            add_subdirectory("${BROTENSOR_DIR}" "${CMAKE_BINARY_DIR}/brotensor" EXCLUDE_FROM_ALL)
+        else()
+            message(FATAL_ERROR "brotensor not found at ${BROTENSOR_DIR}")
+        endif()
     endif()
 endif()
 
@@ -95,44 +111,51 @@ add_library(brogameagent STATIC
     src/observability.cpp
     src/belief.cpp
     src/info_set_mcts.cpp
-    # --- NN circuits ---
-    src/nn/factored.cpp
-    src/nn/circuits.cpp
-    src/nn/encoder.cpp
-    src/nn/decoder.cpp
-    src/nn/autoencoder.cpp
-    src/nn/heads.cpp
-    src/nn/net.cpp
-    src/nn/policy_value_net.cpp
-    src/nn/layernorm.cpp
-    src/nn/embedding.cpp
-    src/nn/attention.cpp
-    src/nn/gru.cpp
-    src/nn/set_transformer.cpp
-    src/nn/net_st.cpp
-    src/nn/heads_dist.cpp
-    src/nn/ensemble.cpp
-    src/nn/forward_model.cpp
-    src/nn/multi_head_attention.cpp
-    src/nn/feedforward.cpp
-    src/nn/transformer_block.cpp
-    src/nn/transformer_encoder.cpp
-    src/nn/net_tx.cpp
-    # --- Learning primitives + adapters ---
-    src/learn/trainer.cpp
-    src/learn/generic_trainer.cpp
-    src/learn/search_trace.cpp
-    src/learn/neural_adapters.cpp
-    src/learn/gumbel.cpp
-    src/learn/contrastive.cpp
-    src/learn/inference_backend.cpp
-    src/learn/inference_server.cpp
-    # --- Grid-world / platformer training kit ---
+    # --- Grid-world observation/recording (brotensor-free) ---
     src/grid/obs_window.cpp
     src/grid/generic_recorder.cpp
-    src/grid/harness.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
+
+# The neural + learning layer — the only sources that depend on brotensor.
+if(BROGAMEAGENT_WITH_NN)
+    target_sources(brogameagent PRIVATE
+        # --- NN circuits ---
+        src/nn/factored.cpp
+        src/nn/circuits.cpp
+        src/nn/encoder.cpp
+        src/nn/decoder.cpp
+        src/nn/autoencoder.cpp
+        src/nn/heads.cpp
+        src/nn/net.cpp
+        src/nn/policy_value_net.cpp
+        src/nn/layernorm.cpp
+        src/nn/embedding.cpp
+        src/nn/attention.cpp
+        src/nn/gru.cpp
+        src/nn/set_transformer.cpp
+        src/nn/net_st.cpp
+        src/nn/heads_dist.cpp
+        src/nn/ensemble.cpp
+        src/nn/forward_model.cpp
+        src/nn/multi_head_attention.cpp
+        src/nn/feedforward.cpp
+        src/nn/transformer_block.cpp
+        src/nn/transformer_encoder.cpp
+        src/nn/net_tx.cpp
+        # --- Learning primitives + adapters ---
+        src/learn/trainer.cpp
+        src/learn/generic_trainer.cpp
+        src/learn/search_trace.cpp
+        src/learn/neural_adapters.cpp
+        src/learn/gumbel.cpp
+        src/learn/contrastive.cpp
+        src/learn/inference_backend.cpp
+        src/learn/inference_server.cpp
+        # --- Grid-world training harness (pulls nn/ + learn/) ---
+        src/grid/harness.cpp
+    )
+endif()
 
 target_include_directories(brogameagent PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -143,9 +166,12 @@ target_compile_features(brogameagent PUBLIC cxx_std_20)
 # bromath is header-only INTERFACE; expose its include dirs without putting
 # the bromath target itself into our install-export set.
 target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:bromath::bromath>)
-# brotensor is a hard dependency (host Tensor + CPU ops live there); GPU
-# kernels are an additive feature of brotensor itself.
-target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:brotensor::brotensor>)
+# brotensor backs the NN + learning layer only (host Tensor + CPU ops; GPU
+# kernels are an additive feature of brotensor itself). Linked only when that
+# layer is built.
+if(BROGAMEAGENT_WITH_NN)
+    target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:brotensor::brotensor>)
+endif()
 
 if(MSVC)
     target_compile_options(brogameagent PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4>)
@@ -196,24 +222,27 @@ if(BROGAMEAGENT_TOOLS)
     add_executable(mcts_bench tools/mcts_bench.cpp)
     target_link_libraries(mcts_bench PRIVATE brogameagent)
 
-    add_executable(nn_check tools/nn_check.cpp)
-    target_link_libraries(nn_check PRIVATE brogameagent)
+    # NN training/inspection tools need the neural layer (and brotensor).
+    if(BROGAMEAGENT_WITH_NN)
+        add_executable(nn_check tools/nn_check.cpp)
+        target_link_libraries(nn_check PRIVATE brogameagent)
 
-    add_executable(nn_train_value tools/nn_train_value.cpp)
-    target_link_libraries(nn_train_value PRIVATE brogameagent)
+        add_executable(nn_train_value tools/nn_train_value.cpp)
+        target_link_libraries(nn_train_value PRIVATE brogameagent)
 
-    add_executable(nn_exit tools/nn_exit.cpp)
-    target_link_libraries(nn_exit PRIVATE brogameagent)
+        add_executable(nn_exit tools/nn_exit.cpp)
+        target_link_libraries(nn_exit PRIVATE brogameagent)
 
-    add_executable(nn_pretrain_ae tools/nn_pretrain_ae.cpp)
-    target_link_libraries(nn_pretrain_ae PRIVATE brogameagent)
+        add_executable(nn_pretrain_ae tools/nn_pretrain_ae.cpp)
+        target_link_libraries(nn_pretrain_ae PRIVATE brogameagent)
 
-    if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
-        add_executable(nn_pretrain_ae_gpu tools/nn_pretrain_ae_gpu.cpp)
-        target_link_libraries(nn_pretrain_ae_gpu PRIVATE brogameagent)
+        if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
+            add_executable(nn_pretrain_ae_gpu tools/nn_pretrain_ae_gpu.cpp)
+            target_link_libraries(nn_pretrain_ae_gpu PRIVATE brogameagent)
 
-        add_executable(nn_exit_gpu tools/nn_exit_gpu.cpp)
-        target_link_libraries(nn_exit_gpu PRIVATE brogameagent)
+            add_executable(nn_exit_gpu tools/nn_exit_gpu.cpp)
+            target_link_libraries(nn_exit_gpu PRIVATE brogameagent)
+        endif()
     endif()
 endif()
 

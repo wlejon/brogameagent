@@ -1,3 +1,10 @@
+# The current test suite exercises the NN + learning layer (test_main.cpp
+# itself includes nn/factored.h), so it only builds when that layer is on.
+if(NOT BROGAMEAGENT_WITH_NN)
+    message(STATUS "brogameagent: NN layer off (BROGAMEAGENT_WITH_NN=OFF) — skipping the NN test suite")
+    return()
+endif()
+
 add_executable(brogameagent_test
     test_main.cpp
 )
