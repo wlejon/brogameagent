@@ -1,0 +1,81 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+# brogameagent runs game-agent inference and training: fixed-layout observation
+# tensors, replay ring buffers, and NN forward/backward over the brotensor op
+# surface. Index and stride arithmetic across those buffers is where an
+# out-of-bounds slip hides, so that is where the analysis pays off.
+jobs:
+  analyze:
+    name: Analyze C++
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: brogameagent
+
+      - uses: actions/checkout@v7
+        with:
+          repository: wlejon/bromath
+          path: bromath
+
+      - uses: actions/checkout@v7
+        with:
+          repository: wlejon/brotensor
+          path: brotensor
+
+      - name: Install Ninja
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ninja-build
+
+      # Debug / -O0 keeps the extracted IR close to the source so dataflow paths
+      # in the results point at code a human can act on.
+      - name: Configure
+        run: cmake -S brogameagent -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      # brotensor's compiled backends (core + CPU) are built here, ahead of
+      # `init`. For a compiled language CodeQL only extracts what it observes the
+      # compiler build while tracing, so anything already built when `init` runs
+      # is never analysed. That is the exclusion mechanism — paths-ignore does not
+      # filter compiled sources — and it keeps brotensor out of brogameagent's
+      # Security tab, where it does not belong (it has its own analysis). bromath
+      # is header-only and is analysed where brogameagent includes it.
+      - name: Pre-build brotensor (outside the traced build)
+        run: cmake --build build --parallel 4 --target brotensor_core brotensor_cpu
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: c-cpp
+          build-mode: manual
+          queries: security-extended
+          # Relative to the workspace root; this repo is checked out into
+          # brogameagent/ (not the root) so the siblings can sit beside it.
+          # paths-ignore is the second line of defence, catching any finding that
+          # originates in a sibling *header* pulled into a brogameagent TU.
+          config-file: brogameagent/.github/codeql/codeql-config.yml
+
+      # Only brogameagent's own library TUs are left to compile, so only they are
+      # traced.
+      - name: Build brogameagent (traced)
+        run: cmake --build build --parallel 4 --target brogameagent
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:c-cpp

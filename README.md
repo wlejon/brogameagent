@@ -1,5 +1,9 @@
 # brogameagent
 
+[![CI](https://github.com/wlejon/brogameagent/actions/workflows/ci.yml/badge.svg)](https://github.com/wlejon/brogameagent/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/wlejon/brogameagent/actions/workflows/codeql.yml/badge.svg)](https://github.com/wlejon/brogameagent/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A C++20 algorithms library for sampling-based game AI: MCTS variants,
 ExIt-style self-improvement, and a hand-crafted, autograd-free NN
 circuit stack — all designed to plug into any snapshot-restorable

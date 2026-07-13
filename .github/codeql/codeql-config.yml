@@ -1,0 +1,14 @@
+name: brogameagent CodeQL config
+
+queries:
+  - uses: security-extended
+
+# The brotensor sibling is kept out of the analysis by build order (see the
+# pre-build step in codeql.yml) — that is what excludes its compiled TUs. This
+# paths-ignore is the complement: it drops any finding that originates in a
+# sibling *header* (bromath, brotensor) pulled into a brogameagent translation
+# unit, which build order cannot catch. Together they scope the Security tab to
+# brogameagent's own code.
+paths-ignore:
+  - bromath
+  - brotensor

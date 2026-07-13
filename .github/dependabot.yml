@@ -1,0 +1,18 @@
+version: 2
+
+# brogameagent pulls its siblings (bromath, brotensor) by source checkout, not
+# from a package manager, and vendors nothing, so there is no manifest for
+# Dependabot to bump. The only versioned things it can watch are the pinned
+# actions in .github/workflows/.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: [ci]
+    commit-message:
+      prefix: "ci"
