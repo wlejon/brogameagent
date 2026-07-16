@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 
 namespace brogameagent {
@@ -256,7 +257,7 @@ void linearProgram3(const std::vector<LpLine>& lines, size_t numObstLines, size_
 
         // result violates line i by more than the current worst violation.
         std::vector<LpLine> projLines(lines.begin(),
-                                      lines.begin() + (ptrdiff_t)numObstLines);
+                                      lines.begin() + (std::ptrdiff_t)numObstLines);
         for (size_t j = numObstLines; j < i; j++) {
             LpLine line;
             const float determinant = vcross(lines[i].direction, lines[j].direction);
