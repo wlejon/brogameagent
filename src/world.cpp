@@ -1,5 +1,6 @@
 #include "brogameagent/world.h"
 #include "brogameagent/agent.h"
+#include "brogameagent/avoidance.h"
 
 #include <algorithm>
 #include <cmath>
@@ -40,16 +41,90 @@ World::~World() {
 
 void World::addObstacle(const AABB& box) {
     obstacles_.push_back(box);
+    avoidanceObstaclesDirty_ = true;
+}
+
+void World::setAvoidanceEnabled(bool on) { avoidanceEnabled_ = on; }
+
+void World::addAvoidanceObstacle(const AABB& box) {
+    avoidanceObstacles_.push_back(box);
+    avoidanceObstaclesDirty_ = true;
+}
+
+void World::clearAvoidanceObstacles() {
+    avoidanceObstacles_.clear();
+    avoidanceObstaclesDirty_ = true;
 }
 
 void World::tick(float dt) {
-    for (Agent* a : agents_) {
-        if (a->unit().alive()) a->update(dt);
-        a->unit().tickCooldowns(dt);
-        applyDotHot(*a, dt);
+    if (avoidanceEnabled_ && dt > 0.0f) {
+        stepAvoidance_(dt);
+        for (Agent* a : agents_) {
+            a->unit().tickCooldowns(dt);
+            applyDotHot(*a, dt);
+        }
+    } else {
+        for (Agent* a : agents_) {
+            if (a->unit().alive()) a->update(dt);
+            a->unit().tickCooldowns(dt);
+            applyDotHot(*a, dt);
+        }
     }
     stepProjectiles(dt);
     cullProjectiles();
+}
+
+void World::stepAvoidance_(float dt) {
+    if (!avoidSim_) {
+        avoidSim_ = std::make_unique<AvoidanceSim>();
+        avoidanceObstaclesDirty_ = true;
+    }
+    if (avoidanceObstaclesDirty_) {
+        avoidSim_->clearObstacles();
+        for (const AABB& b : obstacles_) avoidSim_->addObstacleBox(b);
+        for (const AABB& b : avoidanceObstacles_) avoidSim_->addObstacleBox(b);
+        avoidanceObstaclesDirty_ = false;
+    }
+
+    // Mirror living agents into sim slots (dead ones neither move nor block).
+    // Registration order == slot order, so results are deterministic for a
+    // given roster. Per-agent avoidance opt-out keeps legacy movement but
+    // stays visible to others as a non-reciprocating body.
+    avoidSim_->clearAgents();
+    std::vector<Agent*> live;
+    live.reserve(agents_.size());
+    for (Agent* a : agents_) {
+        if (!a->unit().alive()) continue;
+        const AgentAvoidance& av = a->avoidance();
+        AvoidanceAgentParams p;
+        p.radius = av.radius > 0.0f ? av.radius : a->radius();
+        p.maxSpeed = av.maxSpeed > 0.0f ? av.maxSpeed : a->speed();
+        p.neighborDist = av.neighborDist;
+        p.maxNeighbors = av.maxNeighbors;
+        p.timeHorizon = av.timeHorizon;
+        p.timeHorizonObst = av.timeHorizonObst;
+        int slot = avoidSim_->addAgent({a->x(), a->z()}, p);
+        avoidSim_->setVelocity(slot, a->velocity());
+        if (av.enabled) {
+            avoidSim_->setPrefVelocity(slot, a->preferredVelocity_());
+        } else {
+            avoidSim_->setResponsive(slot, false);
+            avoidSim_->setPrefVelocity(slot, a->velocity());
+        }
+        live.push_back(a);
+    }
+
+    avoidSim_->computeNewVelocities(dt);
+
+    for (size_t i = 0; i < live.size(); i++) {
+        Agent* a = live[i];
+        if (a->avoidance().enabled) {
+            bromath::Vec2 v = avoidSim_->velocity((int)i);
+            a->integrate_(v.x, v.y, dt);
+        } else {
+            a->update(dt);  // legacy, unfiltered
+        }
+    }
 }
 
 std::vector<Agent*> World::enemiesOf(const Agent& self) const {

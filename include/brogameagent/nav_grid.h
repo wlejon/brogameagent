@@ -21,6 +21,11 @@ public:
     /// @param padding  Extra clearance around the obstacle (agent radius).
     void addObstacle(const AABB& box, float padding = 0);
 
+    /// The raw (unpadded) obstacle boxes added so far. Retained so embedders
+    /// can bridge the same walls into other systems — e.g. baking them into
+    /// World avoidance obstacles so ORCA respects what A* paths around.
+    const std::vector<AABB>& obstacles() const { return obstacleBoxes_; }
+
     /// Check if a world position is on a walkable cell.
     bool isWalkable(float x, float z) const;
 
@@ -58,6 +63,7 @@ private:
     float cellSize_;
     int width_, height_;
     std::vector<uint8_t> grid_; // 0 = walkable, 1 = blocked
+    std::vector<AABB> obstacleBoxes_; // raw boxes, retained for obstacles()
 
     // Scratch buffers for A* live in thread_local statics inside findPath()
     // so concurrent pathfinding across threads doesn't race.

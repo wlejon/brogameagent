@@ -24,6 +24,23 @@ struct AgentAction {
     int   useAbilityId = -1;
 };
 
+/// Per-agent ORCA local-avoidance configuration, consumed by World::tick()
+/// when the world's avoidance pass is enabled (World::setAvoidanceEnabled).
+/// radius / maxSpeed <= 0 mean "derive from the agent" (its radius() and
+/// speed() at tick time), so the defaults just work.
+struct AgentAvoidance {
+    /// When false the agent keeps its legacy scripted movement (unfiltered)
+    /// but still appears to others as a non-reciprocating body they steer
+    /// around at full effort.
+    bool  enabled = true;
+    float radius = -1.0f;          // <=0: use Agent::radius()
+    float maxSpeed = -1.0f;        // <=0: use Agent::speed()
+    float neighborDist = 10.0f;
+    int   maxNeighbors = 10;
+    float timeHorizon = 2.0f;      // seconds of mutual lookahead vs agents
+    float timeHorizonObst = 1.0f;  // seconds of lookahead vs obstacles
+};
+
 /// A game agent. Owns a Unit (combat stats), a 2D position, a velocity,
 /// a facing yaw (movement direction) and a separate aim yaw/pitch
 /// (where the bot is "looking" — decoupled from movement for FPS-style
@@ -64,6 +81,14 @@ public:
     // Back-compat scripted API
     void setSpeed(float speed);
     void setRadius(float radius);
+    float speed() const { return speed_; }
+    float radius() const { return radius_; }
+
+    /// ORCA local-avoidance participation — applied by World::tick() when
+    /// the world's avoidance pass is enabled. Defaults derive radius and
+    /// maxSpeed from the agent itself.
+    void setAvoidance(const AgentAvoidance& av) { avoidance_ = av; }
+    const AgentAvoidance& avoidance() const { return avoidance_; }
 
     /// Combat / stat payload. Direct access is intentional — callers routinely
     /// mutate HP, cooldowns, etc. and we don't want accessor boilerplate.
@@ -127,6 +152,12 @@ private:
     /// maxTurnRate, integrate position.
     void integrate_(float desiredVx, float desiredVz, float dt);
 
+    /// What the scripted path follower wants this tick ({0,0} when idle).
+    /// Advances the waypoint cursor. update() is preferredVelocity_ +
+    /// integrate_; World's avoidance pass inserts the ORCA filter between
+    /// the two.
+    bromath::Vec2 preferredVelocity_();
+
     const NavGrid* navGrid_ = nullptr;
     // Set by World::addAgent / cleared by World::removeAgent (and by ~World).
     // Used by ~Agent() to auto-deregister so a stale pointer can't be ticked.
@@ -145,6 +176,8 @@ private:
 
     float maxAccel_    = 0.0f; // <=0 = unlimited
     float maxTurnRate_ = 0.0f; // <=0 = unlimited
+
+    AgentAvoidance avoidance_{};
 
     bool hasTarget_ = false;
     float targetX_ = 0, targetZ_ = 0;

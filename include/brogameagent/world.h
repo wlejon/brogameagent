@@ -4,8 +4,10 @@
 #include "unit.h"
 #include "projectile.h"
 #include "snapshot.h"
+#include "avoidance.h"
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <random>
 #include <unordered_map>
 #include <vector>
@@ -68,6 +70,28 @@ public:
 
     const std::vector<Agent*>& agents() const { return agents_; }
     const std::vector<AABB>& obstacles() const { return obstacles_; }
+
+    // --- Local avoidance (ORCA) ---
+
+    /// Enable the ORCA local-avoidance pass in tick(). Off by default —
+    /// agents keep the legacy pass-through-each-other movement. When on,
+    /// each living agent's path-following steering becomes its preferred
+    /// velocity, the AvoidanceSim filters it against neighbors and obstacle
+    /// walls, and the filtered velocity feeds the agent's usual dynamics
+    /// integrator (accel/turn clamps and nav-grid clamping still apply).
+    /// Per-agent tuning/opt-out lives on Agent::setAvoidance().
+    /// Wall segments are derived from the world's AABB obstacles() plus any
+    /// avoidance-only boxes added below.
+    void setAvoidanceEnabled(bool on);
+    bool avoidanceEnabled() const { return avoidanceEnabled_; }
+
+    /// Avoidance-only wall box: steered around by ORCA but invisible to
+    /// perception/LOS (unlike addObstacle boxes, which feed both). The
+    /// bridge for NavGrid obstacles: bake a grid's boxes in here and agents
+    /// respect the same walls they path around.
+    void addAvoidanceObstacle(const AABB& box);
+    void clearAvoidanceObstacles();
+    const std::vector<AABB>& avoidanceObstacles() const { return avoidanceObstacles_; }
 
     /// Returns all living agents on a different team.
     std::vector<Agent*> enemiesOf(const Agent& self) const;
@@ -173,9 +197,15 @@ private:
     static bool pierceAlreadyHit_(const Projectile& p, int unitId);
     static void pierceRemember_(Projectile& p, int unitId);
     void applyProjectileHit_(const Projectile& p, Agent& target);
+    void stepAvoidance_(float dt);
 
     std::vector<Agent*> agents_;
     std::vector<AABB> obstacles_;
+
+    bool avoidanceEnabled_ = false;
+    bool avoidanceObstaclesDirty_ = true;
+    std::vector<AABB> avoidanceObstacles_;
+    std::unique_ptr<AvoidanceSim> avoidSim_;  // lazily created on first avoidance tick
     std::unordered_map<int, AbilitySpec> abilities_;
 
     std::vector<DamageEvent> events_;

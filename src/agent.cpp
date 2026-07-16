@@ -36,6 +36,7 @@ Agent::Agent(const Agent& other)
       aimYaw_(other.aimYaw_), aimPitch_(other.aimPitch_),
       speed_(other.speed_), radius_(other.radius_),
       maxAccel_(other.maxAccel_), maxTurnRate_(other.maxTurnRate_),
+      avoidance_(other.avoidance_),
       hasTarget_(other.hasTarget_),
       targetX_(other.targetX_), targetZ_(other.targetZ_),
       path_(other.path_),
@@ -53,6 +54,7 @@ Agent::Agent(Agent&& other) noexcept
       aimYaw_(other.aimYaw_), aimPitch_(other.aimPitch_),
       speed_(other.speed_), radius_(other.radius_),
       maxAccel_(other.maxAccel_), maxTurnRate_(other.maxTurnRate_),
+      avoidance_(other.avoidance_),
       hasTarget_(other.hasTarget_),
       targetX_(other.targetX_), targetZ_(other.targetZ_),
       path_(std::move(other.path_)),
@@ -74,6 +76,7 @@ Agent& Agent::operator=(const Agent& other) {
     aimYaw_ = other.aimYaw_; aimPitch_ = other.aimPitch_;
     speed_ = other.speed_; radius_ = other.radius_;
     maxAccel_ = other.maxAccel_; maxTurnRate_ = other.maxTurnRate_;
+    avoidance_ = other.avoidance_;
     hasTarget_ = other.hasTarget_;
     targetX_ = other.targetX_; targetZ_ = other.targetZ_;
     path_ = other.path_;
@@ -93,6 +96,7 @@ Agent& Agent::operator=(Agent&& other) noexcept {
     aimYaw_ = other.aimYaw_; aimPitch_ = other.aimPitch_;
     speed_ = other.speed_; radius_ = other.radius_;
     maxAccel_ = other.maxAccel_; maxTurnRate_ = other.maxTurnRate_;
+    avoidance_ = other.avoidance_;
     hasTarget_ = other.hasTarget_;
     targetX_ = other.targetX_; targetZ_ = other.targetZ_;
     path_ = std::move(other.path_);
@@ -199,16 +203,19 @@ void Agent::integrate_(float desiredVx, float desiredVz, float dt) {
     z_ = nz;
 }
 
-void Agent::update(float dt) {
+bromath::Vec2 Agent::preferredVelocity_() {
     if (!hasTarget_ || path_.empty()) {
-        // Decelerate to rest under the accel clamp.
-        integrate_(0.0f, 0.0f, dt);
-        return;
+        // Idle: prefer rest (integrate_ decelerates under the accel clamp).
+        return {0.0f, 0.0f};
     }
-
     bromath::Vec2 pos{x_, z_};
     SteeringOutput steer = followPath(pos, path_, waypointIdx_, radius_ * 2.0f);
-    integrate_(steer.fx * speed_, steer.fz * speed_, dt);
+    return {steer.fx * speed_, steer.fz * speed_};
+}
+
+void Agent::update(float dt) {
+    bromath::Vec2 pref = preferredVelocity_();
+    integrate_(pref.x, pref.y, dt);
 }
 
 void Agent::applyAction(const AgentAction& action, float dt) {

@@ -93,6 +93,7 @@ endif()
 add_library(brogameagent STATIC
     src/nav_grid.cpp
     src/steering.cpp
+    src/avoidance.cpp
     src/agent.cpp
     src/perception.cpp
     src/world.cpp

@@ -15,6 +15,8 @@ NavGrid::NavGrid(float minX, float minZ, float maxX, float maxZ, float cellSize)
 }
 
 void NavGrid::addObstacle(const AABB& box, float padding) {
+    obstacleBoxes_.push_back(box);
+
     float x0 = box.cx - box.hw - padding;
     float x1 = box.cx + box.hw + padding;
     float z0 = box.cz - box.hd - padding;
