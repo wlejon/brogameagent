@@ -3,6 +3,7 @@
 #include "types.h"
 #include "unit.h"
 #include "nav_grid.h"
+#include "nav_mesh.h"   // impl only when built with BROGAMEAGENT_WITH_NAVMESH
 #include "steering.h"
 #include "avoidance.h"
 #include "perception.h"

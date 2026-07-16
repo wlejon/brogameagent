@@ -47,6 +47,38 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
     set(BROGAMEAGENT_WITH_NN ON CACHE BOOL "" FORCE)
 endif()
 
+# --- Polygon navmesh (optional, Recast/Detour from vcpkg) ---
+#
+# NavMesh (include/brogameagent/nav_mesh.h) bakes and queries polygon
+# navmeshes via the recastnavigation package — the 3D counterpart to NavGrid
+# (slopes, bridges, multi-level interiors). It is the library's only external
+# (non-sibling) dependency, so it gates:
+#   - Standalone builds default ON, but soft-disable (STATUS message) when
+#     find_package can't see recastnavigation — consumers without vcpkg still
+#     build. Point CMake at it via CMAKE_TOOLCHAIN_FILE (vcpkg toolchain) or
+#     CMAKE_PREFIX_PATH=<vcpkg>/installed/<triplet>.
+#   - Subdirectory consumers (bro etc.) default OFF and must opt in with
+#     -DBROGAMEAGENT_WITH_NAVMESH=ON, so adding this feature never changes an
+#     existing parent configure.
+# When ON, brogameagent defines BROGAMEAGENT_HAS_NAVMESH=1 on its interface.
+if(PROJECT_IS_TOP_LEVEL)
+    set(_bga_navmesh_default ON)
+else()
+    set(_bga_navmesh_default OFF)
+endif()
+option(BROGAMEAGENT_WITH_NAVMESH
+    "Polygon navmesh bake + queries (requires recastnavigation)" ${_bga_navmesh_default})
+if(BROGAMEAGENT_WITH_NAVMESH)
+    find_package(recastnavigation CONFIG QUIET)
+    if(NOT recastnavigation_FOUND)
+        message(STATUS
+            "brogameagent: recastnavigation not found — building without NavMesh. "
+            "Install it (vcpkg install recastnavigation) and pass the vcpkg "
+            "toolchain or CMAKE_PREFIX_PATH to enable.")
+        set(BROGAMEAGENT_WITH_NAVMESH OFF)
+    endif()
+endif()
+
 # --- bromath (shared header-only math, sibling repo) ---
 # Guard against double-add — when consumed as a sibling lib from another
 # parent project (bro, etc.) the parent or another sibling may have already
@@ -117,6 +149,15 @@ add_library(brogameagent STATIC
     src/grid/generic_recorder.cpp
 )
 add_library(brogameagent::brogameagent ALIAS brogameagent)
+
+# Polygon navmesh — the only source that depends on Recast/Detour. The
+# header is Recast-free, so it ships unconditionally; only the impl gates.
+if(BROGAMEAGENT_WITH_NAVMESH)
+    target_sources(brogameagent PRIVATE src/nav_mesh.cpp)
+    target_link_libraries(brogameagent PRIVATE
+        RecastNavigation::Recast RecastNavigation::Detour)
+    target_compile_definitions(brogameagent PUBLIC BROGAMEAGENT_HAS_NAVMESH=1)
+endif()
 
 # The neural + learning layer — the only sources that depend on brotensor.
 if(BROGAMEAGENT_WITH_NN)

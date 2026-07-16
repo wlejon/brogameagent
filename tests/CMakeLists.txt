@@ -11,6 +11,21 @@ else()
 endif()
 add_test(NAME brogameagent_avoidance_test COMMAND brogameagent_avoidance_test)
 
+# Polygon navmesh (Recast/Detour). Core-only — builds with the NN layer off,
+# but needs the navmesh feature compiled in.
+if(BROGAMEAGENT_WITH_NAVMESH)
+    add_executable(brogameagent_nav_mesh_test
+        test_nav_mesh.cpp
+    )
+    target_link_libraries(brogameagent_nav_mesh_test PRIVATE brogameagent)
+    if(MSVC)
+        target_compile_options(brogameagent_nav_mesh_test PRIVATE /W4)
+    else()
+        target_compile_options(brogameagent_nav_mesh_test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME brogameagent_nav_mesh_test COMMAND brogameagent_nav_mesh_test)
+endif()
+
 # The current test suite exercises the NN + learning layer (test_main.cpp
 # itself includes nn/factored.h), so it only builds when that layer is on.
 if(NOT BROGAMEAGENT_WITH_NN)
