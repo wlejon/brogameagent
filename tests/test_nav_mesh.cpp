@@ -1,7 +1,9 @@
 // NavMesh tests — Recast/Detour-backed polygon navmesh: bake from triangle
 // soup, obstacle routing, slope limits, multi-level (bridge over floor —
 // the case NavGrid cannot represent), snapping, raycast, serialization,
-// determinism. Core-only: builds with BROGAMEAGENT_WITH_NN=OFF.
+// determinism, and dynamic obstacles (tiled dtTileCache bake: add/remove
+// cylinder/box/oriented-box obstacles with incremental tile rebuilds).
+// Core-only: builds with BROGAMEAGENT_WITH_NN=OFF.
 
 #define _USE_MATH_DEFINES
 #include <cmath>
@@ -339,6 +341,180 @@ TEST(bake_is_deterministic) {
     auto pathB = b.findPath({-8, 0, 0}, {6, 0, 7});
     CHECK(!pathA.empty());
     CHECK(pathsIdentical(pathA, pathB));
+}
+
+// ─── Dynamic obstacles (tiled tile-cache bake) ──────────────────────────────
+
+static NavMeshBakeConfig obstacleConfig() {
+    NavMeshBakeConfig cfg;
+    cfg.dynamicObstacles = true;
+    cfg.tileSize = 8.0f;
+    return cfg;
+}
+
+// Pump update() until the cache reports up-to-date. Returns the number of
+// calls it took, or -1 if it failed to settle within maxIters.
+static int pumpUntilSettled(NavMesh& nm, int maxIters = 64) {
+    for (int i = 0; i < maxIters; i++)
+        if (nm.update()) return i + 1;
+    return -1;
+}
+
+TEST(tiled_bake_routes_like_static_and_gates_the_api) {
+    NavMesh nm;
+    CHECK(bakeSoup(nm, floorWithBox(), obstacleConfig()));
+    CHECK(nm.valid());
+    CHECK(nm.supportsObstacles());
+    CHECK(nm.obstacleCount() == 0);
+    CHECK(!nm.obstaclesPending());
+    CHECK(nm.update());  // nothing pending: immediately up to date
+
+    // Same routing contract as the static bake: bends around the baked box,
+    // never through it.
+    auto path = nm.findPath({-8, 0, 0}, {8, 0, 0});
+    CHECK(path.size() >= 3);
+    const float straight = bromath::vdist(path.front(), path.back());
+    CHECK(pathLength(path) > straight + 0.2f);
+    for (const Vec3& p : path)
+        CHECK(!(std::abs(p.x) < 1.0f && std::abs(p.z) < 1.0f));
+
+    // Tiled meshes do not serialize (state lives in the tile cache).
+    std::vector<uint8_t> blob;
+    CHECK(!nm.saveTo(blob));
+
+    // Static meshes reject the obstacle API cleanly.
+    NavMesh flat;
+    CHECK(bakeSoup(flat, floorWithBox()));
+    CHECK(!flat.supportsObstacles());
+    CHECK(flat.addObstacle({0, 0, 0}, 1.0f, 2.0f) == 0);
+    CHECK(!flat.lastError().empty());
+    CHECK(flat.addBoxObstacle({-1, 0, -1}, {1, 2, 1}) == 0);
+    CHECK(!flat.removeObstacle(1));
+    CHECK(flat.update());  // no-op, reports up to date
+    CHECK(flat.generation() >= 1);  // bake counts as a surface change
+}
+
+TEST(cylinder_obstacle_blocks_then_restores) {
+    Soup s;
+    s.addFloor(-10, -10, 10, 10, 0, 0);
+    NavMesh nm;
+    CHECK(bakeSoup(nm, s, obstacleConfig()));
+    const uint32_t gen0 = nm.generation();
+
+    auto before = nm.findPath({-8, 0, 0}, {8, 0, 0});
+    CHECK(!before.empty());
+    const float straightLen = pathLength(before);
+
+    NavMesh::ObstacleId ob = nm.addObstacle({0, -0.5f, 0}, 2.0f, 3.0f);
+    CHECK(ob != 0);
+    CHECK(nm.obstacleCount() == 1);
+    CHECK(nm.obstaclesPending());
+    CHECK(nm.generation() == gen0);  // nothing applied until update() pumps
+
+    // Path is unchanged until the touched tiles rebuild.
+    auto stillOpen = nm.findPath({-8, 0, 0}, {8, 0, 0});
+    CHECK(!stillOpen.empty());
+    CHECK(std::abs(pathLength(stillOpen) - straightLen) < 0.01f);
+
+    const int pumps = pumpUntilSettled(nm);
+    CHECK(pumps > 0);  // converges incrementally (one tile rebuild per call)
+    CHECK(!nm.obstaclesPending());
+    CHECK(nm.generation() == gen0 + 1);
+
+    auto blocked = nm.findPath({-8, 0, 0}, {8, 0, 0});
+    CHECK(!blocked.empty());
+    CHECK(blocked.size() >= 3);                       // bends — no straight run
+    CHECK(pathLength(blocked) > straightLen + 0.2f);  // detours around it
+    for (const Vec3& p : blocked)
+        CHECK(std::sqrt(p.x * p.x + p.z * p.z) > 1.9f);  // outside the cylinder
+
+    CHECK(nm.removeObstacle(ob));
+    CHECK(nm.obstacleCount() == 0);
+    CHECK(nm.obstaclesPending());
+    CHECK(pumpUntilSettled(nm) > 0);
+    CHECK(nm.generation() == gen0 + 2);
+
+    auto restored = nm.findPath({-8, 0, 0}, {8, 0, 0});
+    CHECK(!restored.empty());
+    CHECK(pathLength(restored) < straightLen + 0.5f);  // straight again
+
+    // Stale handle: a second remove is a clean no-op.
+    CHECK(!nm.removeObstacle(ob));
+    CHECK(!nm.removeObstacle(0));
+}
+
+TEST(box_obstacle_severs_corridor_then_restores) {
+    Soup s;
+    s.addFloor(-10, -2, 10, 2, 0, 0);  // 4 m wide corridor
+    NavMesh nm;
+    CHECK(bakeSoup(nm, s, obstacleConfig()));
+    CHECK(!nm.findPath({-8, 0, 0}, {8, 0, 0}).empty());
+
+    // AABB spanning the corridor's full width: the goal becomes unreachable.
+    NavMesh::ObstacleId ob = nm.addBoxObstacle({-1, -1, -3}, {1, 3, 3});
+    CHECK(ob != 0);
+    CHECK(pumpUntilSettled(nm) > 0);
+    CHECK(nm.findPath({-8, 0, 0}, {8, 0, 0}).empty());
+
+    // Both endpoints still snap — the failure is connectivity, not snapping.
+    Vec3 snapped;
+    CHECK(nm.nearestPoint({-8, 0, 0}, snapped));
+    CHECK(nm.nearestPoint({8, 0, 0}, snapped));
+
+    CHECK(nm.removeObstacle(ob));
+    CHECK(pumpUntilSettled(nm) > 0);
+    CHECK(!nm.findPath({-8, 0, 0}, {8, 0, 0}).empty());
+}
+
+TEST(oriented_box_obstacle_carves_rotated_footprint) {
+    Soup s;
+    s.addFloor(-10, -10, 10, 10, 0, 0);
+    NavMesh nm;
+    CHECK(bakeSoup(nm, s, obstacleConfig()));
+
+    const float straightLen = pathLength(nm.findPath({-8, 0, 0}, {8, 0, 0}));
+
+    // Long thin box rotated 45°: blocks the straight run through the middle.
+    NavMesh::ObstacleId ob =
+        nm.addBoxObstacle({0, 0.5f, 0}, {3.0f, 1.5f, 0.75f},
+                          0.25f * 3.14159265f);
+    CHECK(ob != 0);
+    CHECK(pumpUntilSettled(nm) > 0);
+
+    auto blocked = nm.findPath({-8, 0, 0}, {8, 0, 0});
+    CHECK(!blocked.empty());
+    CHECK(pathLength(blocked) > straightLen + 0.5f);
+
+    CHECK(nm.removeObstacle(ob));
+    CHECK(pumpUntilSettled(nm) > 0);
+    CHECK(pathLength(nm.findPath({-8, 0, 0}, {8, 0, 0})) < straightLen + 0.5f);
+}
+
+TEST(many_obstacles_track_counts_and_generations) {
+    Soup s;
+    s.addFloor(-10, -10, 10, 10, 0, 0);
+    NavMesh nm;
+    CHECK(bakeSoup(nm, s, obstacleConfig()));
+    const uint32_t gen0 = nm.generation();
+
+    // A batch of adds applied by one pump loop bumps generation ONCE.
+    std::vector<NavMesh::ObstacleId> ids;
+    for (int i = 0; i < 4; i++) {
+        NavMesh::ObstacleId ob =
+            nm.addObstacle({-6.0f + 4.0f * static_cast<float>(i), -0.5f, -5.0f},
+                           1.0f, 2.0f);
+        CHECK(ob != 0);
+        ids.push_back(ob);
+    }
+    CHECK(nm.obstacleCount() == 4);
+    CHECK(pumpUntilSettled(nm) > 0);
+    CHECK(nm.generation() == gen0 + 1);
+
+    // Remove them all: surface restores, one more generation.
+    for (NavMesh::ObstacleId ob : ids) CHECK(nm.removeObstacle(ob));
+    CHECK(nm.obstacleCount() == 0);
+    CHECK(pumpUntilSettled(nm) > 0);
+    CHECK(nm.generation() == gen0 + 2);
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────

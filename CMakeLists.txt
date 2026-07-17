@@ -155,7 +155,8 @@ add_library(brogameagent::brogameagent ALIAS brogameagent)
 if(BROGAMEAGENT_WITH_NAVMESH)
     target_sources(brogameagent PRIVATE src/nav_mesh.cpp)
     target_link_libraries(brogameagent PRIVATE
-        RecastNavigation::Recast RecastNavigation::Detour)
+        RecastNavigation::Recast RecastNavigation::Detour
+        RecastNavigation::DetourTileCache)
     target_compile_definitions(brogameagent PUBLIC BROGAMEAGENT_HAS_NAVMESH=1)
 endif()
 

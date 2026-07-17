@@ -25,6 +25,19 @@ struct NavMeshBakeConfig {
     float edgeMaxError = 1.3f;       // max contour simplification deviation (cells).
     float detailSampleDist = 6.0f;   // detail-mesh sample spacing (in cells; <0.9 = off).
     float detailSampleMaxError = 1.0f; // detail-mesh max deviation (in cellHeight units).
+
+    // --- Dynamic obstacles (tiled tile-cache bake) ---------------------------
+    // With dynamicObstacles=true the soup is baked TILED through Detour's
+    // dtTileCache (compressed per-tile layers) instead of as one static tile.
+    // That enables the runtime obstacle API (addObstacle/removeObstacle/
+    // update) — tiles touched by an obstacle are rebuilt incrementally, no
+    // full rebake. Trade-offs of the tiled path: no detail mesh (surface Y is
+    // quantized to cellHeight, slightly coarser on slopes) and no saveTo()
+    // serialization. Queries are identical.
+    bool  dynamicObstacles = false;
+    float tileSize = 16.0f;          // tile edge length (world units); clamped
+                                     // to 16..255 cells per tile.
+    int   maxObstacles = 128;        // obstacle slot budget for this mesh.
 };
 
 /// Result of a NavMesh::raycast() — the navmesh "can I walk straight there"
@@ -46,14 +59,22 @@ struct NavMeshRaycastHit {
 /// the library. Input triangles must be wound counter-clockwise when viewed
 /// from above (+Y normals) to be considered walkable.
 ///
-/// Current scope: single-tile bake — the whole soup becomes one Detour tile,
-/// which is right for baked levels up to a few hundred meters across.
-/// Tiled/streaming bakes (huge or dynamic worlds) are future work.
+/// Two bake modes:
+///   - Static (default): the whole soup becomes one Detour tile — right for
+///     baked levels up to a few hundred meters across; supports the detail
+///     mesh and saveTo()/loadFrom() serialization.
+///   - Dynamic-obstacle (NavMeshBakeConfig::dynamicObstacles): tiled bake via
+///     dtTileCache with compressed per-tile layers. Enables the runtime
+///     obstacle API — addObstacle*/removeObstacle queue changes, update()
+///     rebuilds only the touched tiles (typically 1 tile per update call), and
+///     generation() bumps once all pending changes have been applied so path
+///     followers know to re-plan. See the "Dynamic obstacles" section below.
 ///
 /// Thread safety: bake()/loadFrom() must not run concurrently with anything
-/// else. Queries (findPath / nearestPoint / raycast / randomPoint) are
-/// serialized by an internal mutex — safe to call from multiple threads,
-/// but they do not run in parallel (Detour query objects are stateful).
+/// else. Queries (findPath / nearestPoint / raycast / randomPoint) and the
+/// obstacle calls (addObstacle*/removeObstacle/update) are serialized by an
+/// internal mutex — safe to call from multiple threads, but they do not run
+/// in parallel (Detour query objects are stateful).
 /// For parallel pathfinding, give each worker its own NavMesh via
 /// saveTo()/loadFrom() — loading is a cheap memcpy, the bake is the
 /// expensive part.
@@ -126,12 +147,66 @@ public:
     /// pick). Deterministic per seed. Returns false when the mesh is empty.
     bool randomPoint(uint32_t seed, bromath::Vec3& out) const;
 
+    // --- Dynamic obstacles ---------------------------------------------------
+    // Available only on meshes baked with NavMeshBakeConfig::dynamicObstacles.
+    // add/remove queue a change; nothing moves until update() is pumped —
+    // each update() call rebuilds at most one touched tile, so changes take
+    // effect over the next few pumps (update() returns true once everything
+    // has been applied). Obstacles carve the walkable surface exactly like
+    // baked-in geometry: findPath detours around them or fails when they
+    // sever the corridor, and removing them restores the original surface.
+
+    /// Handle to a queued/active obstacle. 0 is never a valid handle.
+    using ObstacleId = uint32_t;
+
+    /// True when this mesh was baked with dynamicObstacles and can take
+    /// runtime obstacles.
+    bool supportsObstacles() const;
+
+    /// Add a cylinder obstacle (pos = center of the cylinder's BASE, i.e. on
+    /// the walkable surface). Returns 0 on failure (unsupported mesh, request
+    /// queue full — pump update() — or out of obstacle slots; lastError()
+    /// explains).
+    ObstacleId addObstacle(bromath::Vec3 pos, float radius, float height);
+
+    /// Add an axis-aligned box obstacle. Returns 0 on failure (see above).
+    ObstacleId addBoxObstacle(bromath::Vec3 bmin, bromath::Vec3 bmax);
+
+    /// Add a Y-rotated box obstacle (center + half extents + yaw radians).
+    /// Returns 0 on failure (see above).
+    ObstacleId addBoxObstacle(bromath::Vec3 center, bromath::Vec3 halfExtents,
+                              float yawRadians);
+
+    /// Queue removal of an obstacle. Returns false for an unknown/stale
+    /// handle or an unsupported mesh. The surface restores after update().
+    bool removeObstacle(ObstacleId id);
+
+    /// Pump pending obstacle changes: rebuilds at most one touched tile per
+    /// call. Returns true when the mesh is fully up to date (nothing pending);
+    /// keep calling once per frame — or loop until true for a synchronous
+    /// apply. On meshes without obstacle support this is a no-op returning
+    /// true. `dt` is forwarded to Detour (currently unused by it).
+    bool update(float dt = 1.0f / 60.0f);
+
+    /// True while queued obstacle changes have not yet been fully applied.
+    bool obstaclesPending() const;
+
+    /// Number of active obstacles (added and not removed; counts queued ones).
+    int obstacleCount() const;
+
+    /// Monotonic counter that bumps every time the walkable surface changes:
+    /// after a successful bake()/loadFrom(), and after update() finishes
+    /// applying a batch of obstacle changes. Path followers snapshot this at
+    /// plan time and re-plan when it moves.
+    uint32_t generation() const;
+
     // --- Serialization -----------------------------------------------------------
     // Baking is expensive; the baked mesh is cheap to snapshot. The blob is
     // the raw Detour tile data (self-validating magic/version header) — cache
     // it to disk and loadFrom() at startup.
 
-    /// Serialize the baked mesh. Returns false when !valid().
+    /// Serialize the baked mesh. Returns false when !valid(), and for
+    /// dynamic-obstacle (tiled) meshes, which do not support serialization.
     bool saveTo(std::vector<uint8_t>& out) const;
 
     /// Load a mesh previously produced by saveTo(). Replaces any current
