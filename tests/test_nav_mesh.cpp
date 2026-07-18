@@ -254,6 +254,99 @@ TEST(bridge_over_floor_resolves_levels) {
     CHECK(snapped.y < 0.5f);
 }
 
+// ─── Off-mesh links ─────────────────────────────────────────────────────────
+
+// Two floors separated by a 2 m gap the agent cannot walk across.
+static Soup gapSoup() {
+    Soup s;
+    s.addFloor(-10, -4, -1, 4, 0, 0);  // west floor
+    s.addFloor(1, -4, 10, 4, 0, 0);    // east floor
+    return s;
+}
+
+static size_t countLinkStarts(const NavMeshPath& p) {
+    size_t n = 0;
+    for (size_t i = 0; i < p.points.size(); i++)
+        if (p.isLinkStart(i)) n++;
+    return n;
+}
+
+TEST(off_mesh_link_bridges_gap) {
+    // Without a link the gap severs the path (partial clamp).
+    NavMesh plain;
+    CHECK(bakeSoup(plain, gapSoup()));
+    CHECK(plain.findPathEx({-8, 0, 0}, {8, 0, 0}).partial);
+
+    // With a bidirectional link across the gap both directions complete, and
+    // the path marks the takeoff point so followers can play a jump.
+    NavMeshBakeConfig cfg = testConfig();
+    cfg.offMeshLinks.push_back({{-2, 0, 0}, {2, 0, 0}, 0.6f, true});
+    NavMesh nm;
+    CHECK(bakeSoup(nm, gapSoup(), cfg));
+
+    auto fwd = nm.findPathEx({-8, 0, 0}, {8, 0, 0});
+    CHECK(!fwd.partial);
+    CHECK(fwd.points.size() >= 3);
+    CHECK(fwd.flags.size() == fwd.points.size());
+    CHECK(countLinkStarts(fwd) == 1);
+    for (size_t i = 0; i + 1 < fwd.points.size(); i++) {
+        if (!fwd.isLinkStart(i)) continue;
+        // Takeoff at the link start, landing (next point) at the link end.
+        CHECK(bromath::vdist(fwd.points[i], {-2, 0, 0}) < 0.7f);
+        CHECK(bromath::vdist(fwd.points[i + 1], {2, 0, 0}) < 0.7f);
+        CHECK(!fwd.isLinkStart(fwd.points.size() - 1)); // never on the last point
+    }
+    auto rev = nm.findPathEx({8, 0, 0}, {-8, 0, 0});
+    CHECK(!rev.partial);
+    CHECK(countLinkStarts(rev) == 1);
+
+    // findPath() mirrors the same points (flags only live on findPathEx).
+    CHECK(pathsEqual(nm.findPath({-8, 0, 0}, {8, 0, 0}), fwd.points));
+
+    // Links live in the Detour blob: save/load keeps them traversable.
+    std::vector<uint8_t> blob;
+    CHECK(nm.saveTo(blob));
+    NavMesh loaded;
+    CHECK(loaded.loadFrom(blob.data(), blob.size()));
+    auto reloaded = loaded.findPathEx({-8, 0, 0}, {8, 0, 0});
+    CHECK(!reloaded.partial);
+    CHECK(countLinkStarts(reloaded) == 1);
+    CHECK(pathsEqual(reloaded.points, fwd.points));
+}
+
+TEST(off_mesh_link_one_way_and_tiled_rejection) {
+    // One-way link: forward completes, reverse clamps at the gap.
+    NavMeshBakeConfig cfg = testConfig();
+    cfg.offMeshLinks.push_back({{-2, 0, 0}, {2, 0, 0}, 0.6f, /*bidirectional=*/false});
+    NavMesh nm;
+    CHECK(bakeSoup(nm, gapSoup(), cfg));
+    auto fwd = nm.findPathEx({-8, 0, 0}, {8, 0, 0});
+    CHECK(!fwd.partial);
+    CHECK(countLinkStarts(fwd) == 1);
+    auto rev = nm.findPathEx({8, 0, 0}, {-8, 0, 0});
+    CHECK(rev.partial);
+    CHECK(!rev.points.empty());
+    CHECK(rev.points.back().x > 1.0f);  // clamped on the east floor
+
+    // A link whose endpoint misses the walkable surface is dropped (Detour
+    // classification) — the path stays partial, never crashes.
+    NavMeshBakeConfig bad = testConfig();
+    bad.offMeshLinks.push_back({{-2, 5, 0}, {2, 5, 0}, 0.3f, true});  // floating
+    NavMesh dropped;
+    CHECK(bakeSoup(dropped, gapSoup(), bad));
+    CHECK(dropped.findPathEx({-8, 0, 0}, {8, 0, 0}).partial);
+
+    // dynamicObstacles + offMeshLinks refuse to bake (tile rebuilds would
+    // drop the links) with a clear diagnosis.
+    NavMeshBakeConfig tiled = testConfig();
+    tiled.dynamicObstacles = true;
+    tiled.offMeshLinks.push_back({{-2, 0, 0}, {2, 0, 0}, 0.6f, true});
+    NavMesh refuse;
+    Soup s = gapSoup();
+    CHECK(!refuse.bake(s.verts.data(), s.verts.size() / 3, s.idx.data(), s.idx.size(), tiled));
+    CHECK(refuse.lastError().find("offMeshLinks") != std::string::npos);
+}
+
 // ─── nearestPoint / raycast ─────────────────────────────────────────────────
 
 TEST(nearest_point_snaps_onto_mesh) {

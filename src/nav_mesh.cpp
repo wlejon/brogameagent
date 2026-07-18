@@ -498,9 +498,18 @@ bool NavMesh::bake(const float* vertices, size_t vertexCount,
         tris[i] = static_cast<int>(indices[i]);
     }
 
-    // Dynamic-obstacle bakes take the tiled tile-cache path.
-    if (config.dynamicObstacles)
+    // Dynamic-obstacle bakes take the tiled tile-cache path. Off-mesh links
+    // are bake-time dtNavMeshData features; dtTileCache rebuilds tiles at
+    // runtime and would silently drop them, so refuse the combination.
+    if (config.dynamicObstacles) {
+        if (!config.offMeshLinks.empty()) {
+            im.error = "bake: offMeshLinks are not supported together with "
+                       "dynamicObstacles (tile rebuilds would drop them) — "
+                       "bake links into a static mesh instead";
+            return false;
+        }
         return im.bakeTiled(vertices, nverts, tris, config);
+    }
 
     rcConfig cfg = makeRcConfig(config);
     rcCalcBounds(vertices, nverts, cfg.bmin, cfg.bmax);
@@ -584,6 +593,30 @@ bool NavMesh::bake(const float* vertices, size_t vertexCount,
     for (int i = 0; i < pmesh->npolys; i++) pmesh->flags[i] = kPolyFlagWalk;
 
     // 5. Poly mesh → Detour navmesh data.
+    //
+    // Off-mesh links become dtOffMeshConnection polys. Detour only reads
+    // these arrays during dtCreateNavMeshData, so locals are fine. Endpoints
+    // that don't land within `radius` of the walkable surface are dropped by
+    // Detour (its off-mesh classification), matching Godot links placed off
+    // the mesh.
+    const int nlinks = static_cast<int>(config.offMeshLinks.size());
+    std::vector<float> linkVerts;
+    std::vector<float> linkRads(static_cast<size_t>(nlinks));
+    std::vector<unsigned short> linkPolyFlags(static_cast<size_t>(nlinks), kPolyFlagWalk);
+    std::vector<unsigned char> linkAreas(static_cast<size_t>(nlinks));
+    std::vector<unsigned char> linkDirs(static_cast<size_t>(nlinks));
+    std::vector<unsigned int> linkUserIds(static_cast<size_t>(nlinks));
+    linkVerts.reserve(static_cast<size_t>(nlinks) * 6);
+    for (int i = 0; i < nlinks; i++) {
+        const NavMeshOffMeshLink& l = config.offMeshLinks[static_cast<size_t>(i)];
+        linkVerts.insert(linkVerts.end(),
+                         {l.start.x, l.start.y, l.start.z, l.end.x, l.end.y, l.end.z});
+        linkRads[static_cast<size_t>(i)] = l.radius;
+        linkAreas[static_cast<size_t>(i)] = l.areaId;
+        linkDirs[static_cast<size_t>(i)] = l.bidirectional ? DT_OFFMESH_CON_BIDIR : 0;
+        linkUserIds[static_cast<size_t>(i)] = l.userId;
+    }
+
     dtNavMeshCreateParams params;
     std::memset(&params, 0, sizeof(params));
     params.verts = pmesh->verts;
@@ -598,6 +631,15 @@ bool NavMesh::bake(const float* vertices, size_t vertexCount,
     params.detailVertsCount = dmesh->nverts;
     params.detailTris = dmesh->tris;
     params.detailTriCount = dmesh->ntris;
+    if (nlinks > 0) {
+        params.offMeshConVerts = linkVerts.data();
+        params.offMeshConRad = linkRads.data();
+        params.offMeshConFlags = linkPolyFlags.data();
+        params.offMeshConAreas = linkAreas.data();
+        params.offMeshConDir = linkDirs.data();
+        params.offMeshConUserID = linkUserIds.data();
+        params.offMeshConCount = nlinks;
+    }
     params.walkableHeight = config.agentHeight;
     params.walkableRadius = config.agentRadius;
     params.walkableClimb = config.agentMaxClimb;
@@ -664,14 +706,23 @@ NavMeshPath NavMesh::findPathEx(bromath::Vec3 start, bromath::Vec3 end,
         im.query->closestPointOnPoly(polys[npolys - 1], snappedEnd, target, nullptr);
 
     float straight[kMaxStraightPoints * 3];
+    unsigned char straightFlags[kMaxStraightPoints];
     int nstraight = 0;
     status = im.query->findStraightPath(snappedStart, target, polys, npolys,
-                                        straight, nullptr, nullptr,
+                                        straight, straightFlags, nullptr,
                                         &nstraight, kMaxStraightPoints);
     if (dtStatusFailed(status) || nstraight == 0) return out;
 
     out.points.reserve(static_cast<size_t>(nstraight));
-    for (int i = 0; i < nstraight; i++) out.points.push_back(toVec3(&straight[i * 3]));
+    out.flags.reserve(static_cast<size_t>(nstraight));
+    for (int i = 0; i < nstraight; i++) {
+        out.points.push_back(toVec3(&straight[i * 3]));
+        // Detour marks the takeoff vertex of an off-mesh connection; the
+        // next vertex is the landing (the funnel restarts there).
+        out.flags.push_back(
+            (straightFlags[i] & DT_STRAIGHTPATH_OFFMESH_CONNECTION)
+                ? NavMeshPath::kLinkStart : 0);
+    }
     return out;
 }
 

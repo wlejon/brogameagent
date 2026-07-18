@@ -9,6 +9,27 @@
 
 namespace brogameagent {
 
+/// A point-to-point traversal shortcut baked into a NavMesh — jump gaps,
+/// drop ledges, ladders, teleporters (the Godot NavigationLink analog).
+/// Detour traverses links automatically during path queries once baked; the
+/// resulting path marks the takeoff point (NavMeshPath::kLinkStart) so
+/// followers can play a jump/climb animation while moving straight to the
+/// next point. Each endpoint must lie within `radius` of the (eroded)
+/// walkable surface to connect — endpoints that miss are dropped silently
+/// by Detour, exactly like a Godot link placed off the mesh.
+struct NavMeshOffMeshLink {
+    bromath::Vec3 start;
+    bromath::Vec3 end;
+    float radius = 0.5f;       // endpoint pickup radius (world units)
+    bool bidirectional = true; // false: traversable start → end only
+    /// Area id stored on the link polygon (dtOffMeshConnection). All
+    /// baked polys currently share one walkable area — per-area costs are
+    /// future work — so this is a forward-compat tag, not a cost knob.
+    uint8_t areaId = 63;       // RC_WALKABLE_AREA
+    /// Application tag carried through Detour (dtOffMeshConnection::userId).
+    uint32_t userId = 0;
+};
+
 /// Bake parameters for NavMesh::bake(). Defaults are tuned for a ~0.5 m
 /// radius humanoid agent in meter-scale worlds; the comments give the Recast
 /// semantics so embedders can retune without reading Recast docs.
@@ -32,12 +53,21 @@ struct NavMeshBakeConfig {
     // That enables the runtime obstacle API (addObstacle/removeObstacle/
     // update) — tiles touched by an obstacle are rebuilt incrementally, no
     // full rebake. Trade-offs of the tiled path: no detail mesh (surface Y is
-    // quantized to cellHeight, slightly coarser on slopes) and no saveTo()
-    // serialization. Queries are identical.
+    // quantized to cellHeight, slightly coarser on slopes), no saveTo()
+    // serialization, and no off-mesh links (bake() fails rather than dropping
+    // them). Queries are identical.
     bool  dynamicObstacles = false;
     float tileSize = 16.0f;          // tile edge length (world units); clamped
                                      // to 16..255 cells per tile.
     int   maxObstacles = 128;        // obstacle slot budget for this mesh.
+
+    // --- Off-mesh links ------------------------------------------------------
+    // Baked into the Detour data (static bakes only — see NavMeshOffMeshLink).
+    // Links survive saveTo()/loadFrom() since they live in the tile blob.
+    // NOT supported together with dynamicObstacles: dtTileCache rebuilds
+    // tiles at runtime and would drop bake-time connections, so bake() fails
+    // with a clear error rather than silently losing links.
+    std::vector<NavMeshOffMeshLink> offMeshLinks;
 };
 
 /// Result of a NavMesh::raycast() — the navmesh "can I walk straight there"
@@ -52,7 +82,14 @@ struct NavMeshRaycastHit {
 /// Result of NavMesh::findPathEx(): the straightened (funnel/string-pulled)
 /// waypoint list, including the snapped start and the (possibly clamped) end.
 struct NavMeshPath {
+    /// flags bit: points[i] is the TAKEOFF of an off-mesh link — the segment
+    /// from points[i] to points[i+1] traverses the link (jump/drop/teleport),
+    /// not the walkable surface. Followers move straight along it; apps can
+    /// watch the marker to play a jump/climb animation.
+    static constexpr uint8_t kLinkStart = 0x01;
+
     std::vector<bromath::Vec3> points;
+    std::vector<uint8_t> flags;   // per-point flag bits; same size as points
 
     /// True when the goal was NOT reached and the path ends at the closest
     /// reachable point instead (goal on a disconnected island, or the
@@ -61,6 +98,11 @@ struct NavMeshPath {
     /// still reads true — so callers can tell "unreachable" (empty + partial)
     /// from "endpoint failed to snap" (empty + !partial).
     bool partial = false;
+
+    /// Convenience: is points[i] an off-mesh link takeoff?
+    bool isLinkStart(size_t i) const {
+        return i < flags.size() && (flags[i] & kLinkStart) != 0;
+    }
 };
 
 /// Polygon navigation mesh baked from arbitrary triangle soup — the 3D
