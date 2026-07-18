@@ -62,13 +62,29 @@ bool NavGrid::hasGridLOS(bromath::Vec2 from, bromath::Vec2 to) const {
 
 // A* with 8-directional movement
 std::vector<bromath::Vec2> NavGrid::findPath(bromath::Vec2 from, bromath::Vec2 to) const {
-    int sx = toGridX(from.x), sz = toGridZ(from.y);
-    int gx = toGridX(to.x),   gz = toGridZ(to.y);
+    return findPathEx(from, to).points;
+}
 
-    if (!inBounds(sx, sz) || !inBounds(gx, gz)) return {};
-    if (grid_[sz * width_ + sx] != 0) return {};
-    if (grid_[gz * width_ + gx] != 0) return {};
-    if (sx == gx && sz == gz) return {to};
+NavGridPath NavGrid::findPathEx(bromath::Vec2 from, bromath::Vec2 to,
+                                bool requireFullPath) const {
+    NavGridPath result;
+
+    int sx = toGridX(from.x), sz = toGridZ(from.y);
+    if (!inBounds(sx, sz) || grid_[sz * width_ + sx] != 0)
+        return result;  // invalid start: empty, !partial
+
+    // Clamp an out-of-bounds goal onto the grid; the search then aims for
+    // the nearest representable cell and the result is marked partial.
+    const int rawGx = toGridX(to.x), rawGz = toGridZ(to.y);
+    const int gx = std::clamp(rawGx, 0, width_ - 1);
+    const int gz = std::clamp(rawGz, 0, height_ - 1);
+    const bool goalClamped = gx != rawGx || gz != rawGz;
+    const bool goalBlocked = grid_[gz * width_ + gx] != 0;
+
+    if (sx == gx && sz == gz && !goalClamped && !goalBlocked) {
+        result.points = {to};
+        return result;
+    }
 
     const int N = width_ * height_;
     // thread_local so concurrent findPath() across threads is safe; each
@@ -99,6 +115,14 @@ std::vector<bromath::Vec2> NavGrid::findPath(bromath::Vec2 from, bromath::Vec2 t
     gScore[idx(sx, sz)] = 0;
     open.push({heuristic(sx, sz), sx, sz});
 
+    // Closest-reachable fallback: the expanded node nearest the goal (by
+    // heuristic; ties break by lower g then lower cell index — fully
+    // deterministic). Used when the goal is blocked/clamped/walled off.
+    int bestIdx = idx(sx, sz);
+    float bestH = heuristic(sx, sz);
+    float bestG = 0.0f;
+    bool goalReached = false;
+
     // 8 directions: dx, dz, cost
     static constexpr int DX[] = {1, -1, 0, 0, 1, -1, 1, -1};
     static constexpr int DZ[] = {0, 0, 1, -1, 1, 1, -1, -1};
@@ -108,10 +132,19 @@ std::vector<bromath::Vec2> NavGrid::findPath(bromath::Vec2 from, bromath::Vec2 t
         auto [f, cx, cz] = open.top();
         open.pop();
 
-        if (cx == gx && cz == gz) break;
+        if (cx == gx && cz == gz) { goalReached = true; break; }
 
         int ci = idx(cx, cz);
-        if (f > gScore[ci] + heuristic(cx, cz) + 0.01f) continue; // stale entry
+        const float h = heuristic(cx, cz);
+        if (f > gScore[ci] + h + 0.01f) continue; // stale entry
+
+        if (h < bestH ||
+            (h == bestH && (gScore[ci] < bestG ||
+                            (gScore[ci] == bestG && ci < bestIdx)))) {
+            bestIdx = ci;
+            bestH = h;
+            bestG = gScore[ci];
+        }
 
         for (int d = 0; d < 8; d++) {
             int nx = cx + DX[d], nz = cz + DZ[d];
@@ -134,9 +167,11 @@ std::vector<bromath::Vec2> NavGrid::findPath(bromath::Vec2 from, bromath::Vec2 t
         }
     }
 
-    // Reconstruct
-    int gi = idx(gx, gz);
-    if (cameFrom[gi] == -1 && !(sx == gx && sz == gz)) return {};
+    // Reconstruct — to the goal when reached, else to the closest reachable
+    // cell (partial path, Godot-style clamping).
+    result.partial = !goalReached || goalClamped;
+    if (result.partial && requireFullPath) return result;  // empty, partial=true
+    const int gi = goalReached ? idx(gx, gz) : bestIdx;
 
     std::vector<bromath::Vec2> raw;
     for (int i = gi; i != -1; i = cameFrom[i]) {
@@ -145,10 +180,12 @@ std::vector<bromath::Vec2> NavGrid::findPath(bromath::Vec2 from, bromath::Vec2 t
     }
     std::reverse(raw.begin(), raw.end());
 
-    // Replace last point with exact target position
-    if (!raw.empty()) raw.back() = to;
+    // Replace last point with the exact target position — only when it was
+    // actually reached; a clamped path ends at the closest cell's center.
+    if (!raw.empty() && goalReached && !goalClamped) raw.back() = to;
 
-    return smoothPath(raw);
+    result.points = smoothPath(raw);
+    return result;
 }
 
 std::vector<bromath::Vec2> NavGrid::smoothPath(const std::vector<bromath::Vec2>& raw) const {

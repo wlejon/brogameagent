@@ -110,6 +110,13 @@ static float pathLength(const std::vector<Vec3>& path) {
     return len;
 }
 
+static bool pathsEqual(const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); i++)
+        if (std::memcmp(&a[i], &b[i], sizeof(Vec3)) != 0) return false;
+    return true;
+}
+
 // ─── Bake + obstacle routing ────────────────────────────────────────────────
 
 TEST(bake_floor_with_box_and_route_around) {
@@ -186,12 +193,29 @@ TEST(slope_beyond_limit_is_not_walkable) {
     NavMesh nm;
     CHECK(bakeSoup(nm, rampSoup(rise))); // default max slope: 45 deg
 
-    // The high plateau exists as walkable mesh but is disconnected — a
-    // partial path toward it must be reported as failure.
-    auto path = nm.findPath({-8, 0, 0}, {8, rise, 0});
-    CHECK(path.empty());
+    // The high plateau exists as walkable mesh but is disconnected — the
+    // path clamps to the closest reachable point on the low plateau and
+    // reports partial.
+    auto res = nm.findPathEx({-8, 0, 0}, {8, rise, 0});
+    CHECK(res.partial);
+    CHECK(!res.points.empty());
+    CHECK(res.points.back().y < 0.5f);        // never climbed the cliff
+    CHECK(res.points.back().x > -4.0f);       // walked toward the ramp base
 
-    // Both endpoints individually are on the mesh (so the failure above is
+    // findPath() mirrors the clamped points.
+    auto path = nm.findPath({-8, 0, 0}, {8, rise, 0});
+    CHECK(pathsEqual(path, res.points));
+
+    // requireFullPath restores hard-fail semantics: empty but flagged
+    // partial, distinguishing "unreachable" from "unsnappable".
+    auto strict = nm.findPathEx({-8, 0, 0}, {8, rise, 0}, NavMesh::kDefaultExtents, true);
+    CHECK(strict.points.empty());
+    CHECK(strict.partial);
+    auto unsnappable = nm.findPathEx({-8, 0, 0}, {500, 0, 500});
+    CHECK(unsnappable.points.empty());
+    CHECK(!unsnappable.partial);
+
+    // Both endpoints individually are on the mesh (so the clamping above is
     // about connectivity, not snapping).
     Vec3 snapped;
     CHECK(nm.nearestPoint({-8, 0, 0}, snapped));
@@ -295,13 +319,6 @@ TEST(random_point_lands_on_mesh_and_is_seed_deterministic) {
 
 // ─── Serialization + determinism ────────────────────────────────────────────
 
-static bool pathsIdentical(const std::vector<Vec3>& a, const std::vector<Vec3>& b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); i++)
-        if (std::memcmp(&a[i], &b[i], sizeof(Vec3)) != 0) return false;
-    return true;
-}
-
 TEST(save_load_round_trip_preserves_paths) {
     NavMesh nm;
     CHECK(bakeSoup(nm, floorWithBox()));
@@ -316,7 +333,7 @@ TEST(save_load_round_trip_preserves_paths) {
     CHECK(loaded.loadFrom(blob.data(), blob.size()));
     CHECK(loaded.valid());
     auto reloaded = loaded.findPath({-8, 0, 0}, {8, 0, 0});
-    CHECK(pathsIdentical(original, reloaded));
+    CHECK(pathsEqual(original, reloaded));
 
     // Garbage data is rejected with a diagnosis, not accepted.
     std::vector<uint8_t> garbage(64, 0xAB);
@@ -340,7 +357,7 @@ TEST(bake_is_deterministic) {
     auto pathA = a.findPath({-8, 0, 0}, {6, 0, 7});
     auto pathB = b.findPath({-8, 0, 0}, {6, 0, 7});
     CHECK(!pathA.empty());
-    CHECK(pathsIdentical(pathA, pathB));
+    CHECK(pathsEqual(pathA, pathB));
 }
 
 // ─── Dynamic obstacles (tiled tile-cache bake) ──────────────────────────────
@@ -450,20 +467,30 @@ TEST(box_obstacle_severs_corridor_then_restores) {
     CHECK(bakeSoup(nm, s, obstacleConfig()));
     CHECK(!nm.findPath({-8, 0, 0}, {8, 0, 0}).empty());
 
-    // AABB spanning the corridor's full width: the goal becomes unreachable.
+    // AABB spanning the corridor's full width: the goal becomes unreachable —
+    // the path clamps to the closest reachable point before the box (partial).
     NavMesh::ObstacleId ob = nm.addBoxObstacle({-1, -1, -3}, {1, 3, 3});
     CHECK(ob != 0);
     CHECK(pumpUntilSettled(nm) > 0);
-    CHECK(nm.findPath({-8, 0, 0}, {8, 0, 0}).empty());
+    auto severed = nm.findPathEx({-8, 0, 0}, {8, 0, 0});
+    CHECK(severed.partial);
+    CHECK(!severed.points.empty());
+    CHECK(severed.points.back().x < -0.9f);  // stops at the box's near face
+    // requireFullPath restores hard-fail semantics.
+    auto strict = nm.findPathEx({-8, 0, 0}, {8, 0, 0}, NavMesh::kDefaultExtents, true);
+    CHECK(strict.points.empty());
+    CHECK(strict.partial);
 
-    // Both endpoints still snap — the failure is connectivity, not snapping.
+    // Both endpoints still snap — the clamping is connectivity, not snapping.
     Vec3 snapped;
     CHECK(nm.nearestPoint({-8, 0, 0}, snapped));
     CHECK(nm.nearestPoint({8, 0, 0}, snapped));
 
     CHECK(nm.removeObstacle(ob));
     CHECK(pumpUntilSettled(nm) > 0);
-    CHECK(!nm.findPath({-8, 0, 0}, {8, 0, 0}).empty());
+    auto reopened = nm.findPathEx({-8, 0, 0}, {8, 0, 0});
+    CHECK(!reopened.points.empty());
+    CHECK(!reopened.partial);
 }
 
 TEST(oriented_box_obstacle_carves_rotated_footprint) {

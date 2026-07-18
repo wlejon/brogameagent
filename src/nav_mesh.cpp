@@ -624,8 +624,15 @@ bool NavMesh::bake(const float* vertices, size_t vertexCount,
 
 std::vector<bromath::Vec3> NavMesh::findPath(bromath::Vec3 start, bromath::Vec3 end,
                                              bromath::Vec3 searchExtents) const {
+    return findPathEx(start, end, searchExtents).points;
+}
+
+NavMeshPath NavMesh::findPathEx(bromath::Vec3 start, bromath::Vec3 end,
+                                bromath::Vec3 searchExtents,
+                                bool requireFullPath) const {
+    NavMeshPath out;
     Impl& im = *impl_;
-    if (!im.query) return {};
+    if (!im.query) return out;
     std::lock_guard<std::mutex> lock(im.queryMutex);
 
     const dtQueryFilter filter; // default: all flags pass, uniform cost
@@ -637,27 +644,34 @@ std::vector<bromath::Vec3> NavMesh::findPath(bromath::Vec3 start, bromath::Vec3 
     float snappedStart[3], snappedEnd[3];
     im.query->findNearestPoly(sp, ext, &filter, &startRef, snappedStart);
     im.query->findNearestPoly(ep, ext, &filter, &endRef, snappedEnd);
-    if (!startRef || !endRef) return {};
+    if (!startRef || !endRef) return out;  // snap failure: empty, !partial
 
     dtPolyRef polys[kMaxPathPolys];
     int npolys = 0;
     dtStatus status = im.query->findPath(startRef, endRef, snappedStart, snappedEnd,
                                          &filter, polys, &npolys, kMaxPathPolys);
-    if (dtStatusFailed(status) || npolys == 0) return {};
-    // Partial result (goal unreachable, or corridor overflowed the poly
-    // buffer): report failure rather than a silently truncated path.
-    if ((status & DT_PARTIAL_RESULT) || polys[npolys - 1] != endRef) return {};
+    if (dtStatusFailed(status) || npolys == 0) return out;
+
+    // Partial result: goal unreachable (or the corridor overflowed the poly
+    // buffer). Clamp the goal to the closest reachable point on the last
+    // corridor poly — Detour guarantees it is the poly closest to the goal —
+    // and report partial so callers can distinguish clamped from complete.
+    out.partial = (status & DT_PARTIAL_RESULT) != 0 || polys[npolys - 1] != endRef;
+    if (out.partial && requireFullPath) return out;  // empty points, partial=true
+
+    float target[3] = {snappedEnd[0], snappedEnd[1], snappedEnd[2]};
+    if (out.partial)
+        im.query->closestPointOnPoly(polys[npolys - 1], snappedEnd, target, nullptr);
 
     float straight[kMaxStraightPoints * 3];
     int nstraight = 0;
-    status = im.query->findStraightPath(snappedStart, snappedEnd, polys, npolys,
+    status = im.query->findStraightPath(snappedStart, target, polys, npolys,
                                         straight, nullptr, nullptr,
                                         &nstraight, kMaxStraightPoints);
-    if (dtStatusFailed(status) || nstraight == 0) return {};
+    if (dtStatusFailed(status) || nstraight == 0) return out;
 
-    std::vector<bromath::Vec3> out;
-    out.reserve(static_cast<size_t>(nstraight));
-    for (int i = 0; i < nstraight; i++) out.push_back(toVec3(&straight[i * 3]));
+    out.points.reserve(static_cast<size_t>(nstraight));
+    for (int i = 0; i < nstraight; i++) out.points.push_back(toVec3(&straight[i * 3]));
     return out;
 }
 

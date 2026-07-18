@@ -101,6 +101,10 @@ public:
     const Unit& unit() const { return unit_; }
 
     /// Set the movement target. Recomputes path if target changed significantly.
+    /// When the target is blocked or unreachable on the bound NavGrid the
+    /// path clamps to the closest reachable cell (see NavGrid::findPathEx):
+    /// the agent walks there and stops. atTarget() keeps measuring against
+    /// the TRUE target, so it stays false at a clamped end.
     void setTarget(float x, float z);
 
     /// Clear the current target. Agent stops moving.

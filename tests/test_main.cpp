@@ -105,8 +105,21 @@ TEST(navgrid_no_path_blocked) {
     NavGrid grid(-5, -5, 5, 5, 0.5f);
     // Surround the goal with obstacles
     grid.addObstacle({4, 0, 1.5f, 5.5f}); // wall on right side
-    auto path = grid.findPath({-4, 0}, {4.5f, 0});
-    CHECK(path.empty()); // goal is inside obstacle
+    // Goal inside the obstacle: the path clamps to the closest reachable
+    // cell just outside the wall and reports partial.
+    auto res = grid.findPathEx({-4, 0}, {4.5f, 0});
+    CHECK(res.partial);
+    CHECK(!res.points.empty());
+    CHECK(res.points.back().x < 2.5f);  // wall spans x in [2.5, 5]
+    CHECK(res.points.back().x > 1.5f);  // ...but got right up to it
+    // requireFullPath restores hard-fail semantics (empty, still partial).
+    auto strict = grid.findPathEx({-4, 0}, {4.5f, 0}, /*requireFullPath=*/true);
+    CHECK(strict.points.empty());
+    CHECK(strict.partial);
+    // Invalid START stays empty and NOT partial.
+    auto badStart = grid.findPathEx({4.5f, 0}, {-4, 0});
+    CHECK(badStart.points.empty());
+    CHECK(!badStart.partial);
 }
 
 TEST(navgrid_grid_los) {

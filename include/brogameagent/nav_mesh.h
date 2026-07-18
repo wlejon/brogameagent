@@ -49,6 +49,20 @@ struct NavMeshRaycastHit {
     bromath::Vec3 normal;     // XZ wall normal at the hit (zero when !hit)
 };
 
+/// Result of NavMesh::findPathEx(): the straightened (funnel/string-pulled)
+/// waypoint list, including the snapped start and the (possibly clamped) end.
+struct NavMeshPath {
+    std::vector<bromath::Vec3> points;
+
+    /// True when the goal was NOT reached and the path ends at the closest
+    /// reachable point instead (goal on a disconnected island, or the
+    /// corridor overflowed the internal poly budget). With
+    /// requireFullPath=true a partial result has EMPTY points but `partial`
+    /// still reads true — so callers can tell "unreachable" (empty + partial)
+    /// from "endpoint failed to snap" (empty + !partial).
+    bool partial = false;
+};
+
 /// Polygon navigation mesh baked from arbitrary triangle soup — the 3D
 /// counterpart to NavGrid for worlds a flat 2D grid cannot represent:
 /// slopes, bridges/overpasses, multi-level interiors. Backed by
@@ -124,12 +138,22 @@ public:
 
     /// Find a walkable path from start to end. Returns the straightened
     /// (funnel/string-pulled) waypoint list, including the snapped start and
-    /// end points. Empty when either endpoint fails to snap or when no
-    /// COMPLETE path exists — partial paths toward unreachable goals are
-    /// reported as failure, not silently truncated.
+    /// end points. When the goal is unreachable (disconnected island) the
+    /// path CLAMPS to the closest reachable point instead of failing — use
+    /// findPathEx() to detect that, or to opt back into hard-fail semantics.
+    /// Empty only when either endpoint fails to snap within searchExtents.
     /// Deterministic: same mesh + inputs always yield the same waypoints.
     std::vector<bromath::Vec3> findPath(bromath::Vec3 start, bromath::Vec3 end,
                                         bromath::Vec3 searchExtents = kDefaultExtents) const;
+
+    /// findPath() with partial-path reporting. When the goal is unreachable
+    /// the result holds the path to the closest reachable point with
+    /// partial=true. Pass requireFullPath=true for hard-fail semantics: a
+    /// partial result then has empty points (partial stays true, see
+    /// NavMeshPath). Deterministic like findPath().
+    NavMeshPath findPathEx(bromath::Vec3 start, bromath::Vec3 end,
+                           bromath::Vec3 searchExtents = kDefaultExtents,
+                           bool requireFullPath = false) const;
 
     /// Snap an arbitrary point onto the navmesh. Returns false if nothing is
     /// within searchExtents.

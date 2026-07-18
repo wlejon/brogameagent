@@ -6,6 +6,19 @@
 
 namespace brogameagent {
 
+/// Result of NavGrid::findPathEx(): smoothed waypoints plus whether the goal
+/// had to be clamped.
+struct NavGridPath {
+    std::vector<bromath::Vec2> points;
+
+    /// True when the goal was NOT reached and the path ends at the closest
+    /// reachable cell instead (goal blocked, out of bounds, or walled off).
+    /// With requireFullPath=true a partial result has EMPTY points but
+    /// `partial` still reads true — so callers can tell "unreachable" from
+    /// "start invalid" (empty + !partial).
+    bool partial = false;
+};
+
 /// 2D grid-based navigation mesh for flat arenas with AABB obstacles.
 /// Cells are marked walkable or blocked. Pathfinding uses A* on the grid
 /// with 8-directional movement, then the path is smoothed via line-of-sight
@@ -30,9 +43,22 @@ public:
     bool isWalkable(float x, float z) const;
 
     /// Find a path from start to goal using A*.
-    /// Returns an empty vector if no path exists.
+    /// When the goal is blocked, out of bounds, or unreachable the path
+    /// CLAMPS to the closest reachable cell (best-heuristic node) instead of
+    /// failing — use findPathEx() to detect that, or to opt back into
+    /// hard-fail semantics. Empty only when the start itself is invalid
+    /// (out of bounds or on a blocked cell).
     /// The returned path is smoothed (redundant waypoints removed).
     std::vector<bromath::Vec2> findPath(bromath::Vec2 from, bromath::Vec2 to) const;
+
+    /// findPath() with partial-path reporting. When the goal is not reached
+    /// the result holds the path to the closest reachable cell with
+    /// partial=true. Pass requireFullPath=true for hard-fail semantics: a
+    /// partial result then has empty points (partial stays true, see
+    /// NavGridPath). Deterministic: ties in the closest-cell fallback break
+    /// by lower path cost, then lower cell index.
+    NavGridPath findPathEx(bromath::Vec2 from, bromath::Vec2 to,
+                           bool requireFullPath = false) const;
 
     /// Line-of-sight check on the grid (Bresenham). Returns true if clear.
     bool hasGridLOS(bromath::Vec2 from, bromath::Vec2 to) const;

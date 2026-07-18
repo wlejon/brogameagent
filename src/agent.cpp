@@ -122,9 +122,14 @@ void Agent::setTarget(float x, float z) {
     targetX_ = x;
     targetZ_ = z;
 
+    // With no nav grid the "path" is just {target} — rebuild it on every
+    // change (it's free, and a stale point would pin the agent at the old
+    // target when successive targets are closer than REPATH_DIST; navmesh
+    // funnel waypoints routinely are). With a grid, keep the threshold so a
+    // chased moving target doesn't re-run A* every tick.
     float dx = targetX_ - lastPathTargetX_;
     float dz = targetZ_ - lastPathTargetZ_;
-    if (path_.empty() || (dx * dx + dz * dz) > REPATH_DIST_SQ) {
+    if (path_.empty() || !navGrid_ || (dx * dx + dz * dz) > REPATH_DIST_SQ) {
         recomputePath();
     }
 }
