@@ -15,6 +15,14 @@ struct AvoidanceAgentParams {
     int   maxNeighbors = 10;      // nearest-N cap on the neighbor set
     float timeHorizon = 2.0f;     // seconds of mutual lookahead vs other agents
     float timeHorizonObst = 1.0f; // seconds of lookahead vs static obstacles
+    /// Vertical extent used by the neighbor query's elevation filter: a
+    /// neighbor is ignored when the two agents' vertical spans
+    /// [elevation - height/2, elevation + height/2] don't overlap — agents
+    /// on different levels (bridge over tunnel, stacked floors) shouldn't
+    /// steer around each other. Elevation defaults to 0 for every agent, so
+    /// embedders that never call setElevation() keep exact single-level
+    /// behavior regardless of this value.
+    float height = 2.0f;
 };
 
 /// 2D (XZ-plane) Optimal Reciprocal Collision Avoidance — the ORCA algorithm
@@ -52,6 +60,12 @@ public:
     void setVelocity(int i, bromath::Vec2 v)     { agents_[(size_t)i].velocity = v; }
     void setPrefVelocity(int i, bromath::Vec2 v) { agents_[(size_t)i].prefVelocity = v; }
     void setParams(int i, const AvoidanceAgentParams& p) { agents_[(size_t)i].params = p; }
+
+    /// Vertical position (Y) for the neighbor query's elevation filter — see
+    /// AvoidanceAgentParams::height. The solve itself stays 2D (XZ); this
+    /// only decides who counts as a neighbor. Defaults to 0.
+    void setElevation(int i, float y) { agents_[(size_t)i].elevation = y; }
+    float elevation(int i) const { return agents_[(size_t)i].elevation; }
 
     /// Non-responsive agents are still avoided by everyone else (at full
     /// rather than shared effort, since they won't take their half) but never
@@ -104,6 +118,7 @@ private:
         bromath::Vec2 position;
         bromath::Vec2 velocity;
         bromath::Vec2 prefVelocity;
+        float elevation = 0.0f;  // Y, neighbor elevation filter only
         AvoidanceAgentParams params;
         bool responsive = true;
     };

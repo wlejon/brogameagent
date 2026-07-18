@@ -152,6 +152,68 @@ TEST(avoid_nonresponsive_agent_is_steered_around) {
     CHECK_NEAR(sim.position(blocker).y, 0.0f, 1e-6f);
 }
 
+TEST(avoid_elevation_filter_separates_levels) {
+    // Two agents crossing head-on but on different vertical levels (bridge
+    // over tunnel). With disjoint vertical spans they must NOT see each
+    // other: both walk essentially straight (only the tiny symmetry dither
+    // bends the path) instead of swerving. Same setup with overlapping
+    // spans still avoids — proving the filter, not a broken solve.
+    const float dt = 1.0f / 60.0f;
+
+    // Different levels: |dy| = 6 > (2 + 2) / 2 with the default height 2.
+    {
+        AvoidanceSim sim;
+        AvoidanceAgentParams p;
+        p.radius = 0.5f;
+        p.maxSpeed = 4.0f;
+        int a = sim.addAgent({-5, 0}, p);
+        int b = sim.addAgent({5, 0}, p);
+        sim.setElevation(a, 0.0f);
+        sim.setElevation(b, 6.0f);
+        CHECK_NEAR(sim.elevation(b), 6.0f, 1e-6f);
+
+        float maxLateral = 0.0f;
+        for (int step = 0; step < 5 * 60; step++) {
+            sim.setPrefVelocity(a, prefTowards(sim.position(a), {5, 0}, p.maxSpeed));
+            sim.setPrefVelocity(b, prefTowards(sim.position(b), {-5, 0}, p.maxSpeed));
+            sim.step(dt);
+            maxLateral = std::max(maxLateral, std::abs(sim.position(a).y));
+            maxLateral = std::max(maxLateral, std::abs(sim.position(b).y));
+        }
+        CHECK(bromath::vdist(sim.position(a), {5, 0}) < 0.3f);
+        CHECK(bromath::vdist(sim.position(b), {-5, 0}) < 0.3f);
+        // Straight-line pass-through: no avoidance swerve (dither alone
+        // deflects < ~0.06 over the 10-unit run).
+        CHECK(maxLateral < 0.15f);
+    }
+
+    // Overlapping spans (|dy| = 1 < 2): normal reciprocal avoidance.
+    {
+        AvoidanceSim sim;
+        AvoidanceAgentParams p;
+        p.radius = 0.5f;
+        p.maxSpeed = 4.0f;
+        int a = sim.addAgent({-5, 0}, p);
+        int b = sim.addAgent({5, 0}, p);
+        sim.setElevation(a, 0.0f);
+        sim.setElevation(b, 1.0f);
+
+        float minDist = 1e30f;
+        bool arrivedA = false, arrivedB = false;
+        for (int step = 0; step < 15 * 60; step++) {
+            sim.setPrefVelocity(a, prefTowards(sim.position(a), {5, 0}, p.maxSpeed));
+            sim.setPrefVelocity(b, prefTowards(sim.position(b), {-5, 0}, p.maxSpeed));
+            sim.step(dt);
+            minDist = std::min(minDist, minPairDist(sim));
+            arrivedA = bromath::vdist(sim.position(a), {5, 0}) < 0.3f;
+            arrivedB = bromath::vdist(sim.position(b), {-5, 0}) < 0.3f;
+            if (arrivedA && arrivedB) break;
+        }
+        CHECK(arrivedA && arrivedB);
+        CHECK(minDist >= (p.radius * 2.0f) * 0.9f);
+    }
+}
+
 // ─── AvoidanceSim: static obstacles ─────────────────────────────────────────
 
 // Distance from p to segment [a,b].

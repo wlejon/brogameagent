@@ -139,7 +139,16 @@ void AvoidanceSim::gatherNeighbors_(int i, std::vector<std::pair<float, int>>& o
             if (it == grid_.end()) continue;
             for (int j : it->second) {
                 if (j == i) continue;
-                const float d2 = vlen2(agents_[(size_t)j].position - self.position);
+                const Slot& other = agents_[(size_t)j];
+                // Elevation filter: agents whose vertical spans don't overlap
+                // are on different levels (bridge over tunnel, stacked
+                // floors) and must not steer around each other. Default
+                // elevations are all 0, so single-level embedders are
+                // unaffected.
+                const float dy = std::fabs(other.elevation - self.elevation);
+                if (dy > 0.5f * (self.params.height + other.params.height))
+                    continue;
+                const float d2 = vlen2(other.position - self.position);
                 if (d2 <= rangeSq) out.push_back({d2, j});
             }
         }

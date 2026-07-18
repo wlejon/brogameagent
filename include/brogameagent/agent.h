@@ -39,6 +39,11 @@ struct AgentAvoidance {
     int   maxNeighbors = 10;
     float timeHorizon = 2.0f;      // seconds of mutual lookahead vs agents
     float timeHorizonObst = 1.0f;  // seconds of lookahead vs obstacles
+    /// Vertical extent for the ORCA elevation filter: agents whose vertical
+    /// spans [elevation - height/2, elevation + height/2] don't overlap are
+    /// on different levels and ignore each other. Agent elevations default
+    /// to 0 (see Agent::setElevation), so single-level worlds are unaffected.
+    float height = 2.0f;
 };
 
 /// A game agent. Owns a Unit (combat stats), a 2D position, a velocity,
@@ -112,6 +117,15 @@ public:
     float x() const { return x_; }
     float z() const { return z_; }
 
+    /// Vertical position (Y) for multi-level worlds. The agent's own movement
+    /// stays 2D (XZ) — elevation is embedder-driven state (set it from the
+    /// navmesh route height, a ground probe, or floor index each tick) and is
+    /// consumed by World's avoidance pass so agents on different levels don't
+    /// steer around each other (see AgentAvoidance::height). Not part of
+    /// snapshots: re-derive it after applySnapshot the same way it was set.
+    void setElevation(float y) { elevation_ = y; }
+    float elevation() const { return elevation_; }
+
     /// Movement facing (radians, FPS convention: 0 = -Z).
     float yaw() const { return yaw_; }
 
@@ -166,6 +180,7 @@ private:
     Unit unit_{};
 
     float x_ = 0, z_ = 0;
+    float elevation_ = 0;  // Y, avoidance elevation filter only
     float vx_ = 0, vz_ = 0;
     float yaw_ = 0;
     float aimYaw_ = 0, aimPitch_ = 0;

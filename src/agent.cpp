@@ -31,6 +31,7 @@ Agent::Agent(const Agent& other)
       registeredWorld_(nullptr),  // copy is unregistered
       unit_(other.unit_),
       x_(other.x_), z_(other.z_),
+      elevation_(other.elevation_),
       vx_(other.vx_), vz_(other.vz_),
       yaw_(other.yaw_),
       aimYaw_(other.aimYaw_), aimPitch_(other.aimPitch_),
@@ -49,6 +50,7 @@ Agent::Agent(Agent&& other) noexcept
       registeredWorld_(nullptr),  // moved-to is unregistered
       unit_(std::move(other.unit_)),
       x_(other.x_), z_(other.z_),
+      elevation_(other.elevation_),
       vx_(other.vx_), vz_(other.vz_),
       yaw_(other.yaw_),
       aimYaw_(other.aimYaw_), aimPitch_(other.aimPitch_),
@@ -71,6 +73,7 @@ Agent& Agent::operator=(const Agent& other) {
     navGrid_ = other.navGrid_;
     unit_ = other.unit_;
     x_ = other.x_; z_ = other.z_;
+    elevation_ = other.elevation_;
     vx_ = other.vx_; vz_ = other.vz_;
     yaw_ = other.yaw_;
     aimYaw_ = other.aimYaw_; aimPitch_ = other.aimPitch_;
@@ -91,6 +94,7 @@ Agent& Agent::operator=(Agent&& other) noexcept {
     navGrid_ = other.navGrid_;
     unit_ = std::move(other.unit_);
     x_ = other.x_; z_ = other.z_;
+    elevation_ = other.elevation_;
     vx_ = other.vx_; vz_ = other.vz_;
     yaw_ = other.yaw_;
     aimYaw_ = other.aimYaw_; aimPitch_ = other.aimPitch_;

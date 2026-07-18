@@ -103,7 +103,9 @@ void World::stepAvoidance_(float dt) {
         p.maxNeighbors = av.maxNeighbors;
         p.timeHorizon = av.timeHorizon;
         p.timeHorizonObst = av.timeHorizonObst;
+        p.height = av.height;
         int slot = avoidSim_->addAgent({a->x(), a->z()}, p);
+        avoidSim_->setElevation(slot, a->elevation());
         avoidSim_->setVelocity(slot, a->velocity());
         if (av.enabled) {
             avoidSim_->setPrefVelocity(slot, a->preferredVelocity_());
