@@ -214,6 +214,134 @@ TEST(avoid_elevation_filter_separates_levels) {
     }
 }
 
+TEST(avoid_priority_shifts_responsibility) {
+    // Head-on crossing with a strong priority gap: the low-priority agent
+    // does (nearly) all the swerving while the high-priority one holds
+    // course. Both still arrive and never overlap — the shares sum to 1, so
+    // the pair stays jointly collision-free.
+    const float dt = 1.0f / 60.0f;
+    AvoidanceSim sim;
+    AvoidanceAgentParams hi;
+    hi.radius = 0.5f;
+    hi.maxSpeed = 4.0f;
+    hi.priority = 1.0f;
+    AvoidanceAgentParams lo = hi;
+    lo.priority = 0.0f;
+    int a = sim.addAgent({-6, 0}, hi);
+    int b = sim.addAgent({6, 0}, lo);
+
+    float minDist = 1e30f, maxLatHi = 0.0f, maxLatLo = 0.0f;
+    bool arrivedA = false, arrivedB = false;
+    for (int step = 0; step < 15 * 60; step++) {
+        sim.setPrefVelocity(a, prefTowards(sim.position(a), {6, 0}, hi.maxSpeed));
+        sim.setPrefVelocity(b, prefTowards(sim.position(b), {-6, 0}, lo.maxSpeed));
+        sim.step(dt);
+        minDist = std::min(minDist, minPairDist(sim));
+        maxLatHi = std::max(maxLatHi, std::abs(sim.position(a).y));
+        maxLatLo = std::max(maxLatLo, std::abs(sim.position(b).y));
+        arrivedA = bromath::vdist(sim.position(a), {6, 0}) < 0.3f;
+        arrivedB = bromath::vdist(sim.position(b), {-6, 0}) < 0.3f;
+        if (arrivedA && arrivedB) break;
+    }
+    CHECK(arrivedA && arrivedB);
+    CHECK(minDist >= (hi.radius * 2.0f) * 0.9f);
+    // The asymmetry is decisive, not marginal: the high-priority agent
+    // holds course while the low-priority one does the swerving.
+    CHECK(maxLatLo > 2.0f * maxLatHi);
+    CHECK(maxLatHi < 0.5f);
+    CHECK(maxLatLo > 0.5f);
+}
+
+TEST(avoid_priority_equal_matches_default_split) {
+    // priority 0.5 goes through the same share formula as the pre-priority
+    // solver's constant 0.5 — trajectories must be bit-identical to a sim
+    // whose agents never set priority at all.
+    const float dt = 1.0f / 60.0f;
+    AvoidanceAgentParams def;
+    def.radius = 0.5f;
+    def.maxSpeed = 4.0f;
+    AvoidanceAgentParams expl = def;
+    expl.priority = 0.5f;  // explicit default
+
+    AvoidanceSim s1, s2;
+    s1.addAgent({-6, 0}, def);
+    s1.addAgent({6, 0.3f}, def);
+    s2.addAgent({-6, 0}, expl);
+    s2.addAgent({6, 0.3f}, expl);
+    for (int step = 0; step < 5 * 60; step++) {
+        s1.setPrefVelocity(0, prefTowards(s1.position(0), {6, 0}, def.maxSpeed));
+        s1.setPrefVelocity(1, prefTowards(s1.position(1), {-6, 0.3f}, def.maxSpeed));
+        s2.setPrefVelocity(0, prefTowards(s2.position(0), {6, 0}, def.maxSpeed));
+        s2.setPrefVelocity(1, prefTowards(s2.position(1), {-6, 0.3f}, def.maxSpeed));
+        s1.step(dt);
+        s2.step(dt);
+        for (int i = 0; i < 2; i++) {
+            Vec2 p1 = s1.position(i), p2 = s2.position(i);
+            CHECK(std::memcmp(&p1, &p2, sizeof(Vec2)) == 0);
+        }
+    }
+}
+
+TEST(avoid_layers_mask_filters_neighbors) {
+    const float dt = 1.0f / 60.0f;
+
+    // Disjoint layers/masks in both directions: ghosts — a head-on pair
+    // passes straight through (only the tiny dither bends the path).
+    {
+        AvoidanceSim sim;
+        AvoidanceAgentParams pa;
+        pa.radius = 0.5f;
+        pa.maxSpeed = 4.0f;
+        pa.layers = 1; pa.mask = 1;
+        AvoidanceAgentParams pb = pa;
+        pb.layers = 2; pb.mask = 2;
+        int a = sim.addAgent({-5, 0}, pa);
+        int b = sim.addAgent({5, 0}, pb);
+
+        float maxLateral = 0.0f;
+        for (int step = 0; step < 5 * 60; step++) {
+            sim.setPrefVelocity(a, prefTowards(sim.position(a), {5, 0}, pa.maxSpeed));
+            sim.setPrefVelocity(b, prefTowards(sim.position(b), {-5, 0}, pb.maxSpeed));
+            sim.step(dt);
+            maxLateral = std::max(maxLateral, std::abs(sim.position(a).y));
+            maxLateral = std::max(maxLateral, std::abs(sim.position(b).y));
+        }
+        CHECK(bromath::vdist(sim.position(a), {5, 0}) < 0.3f);
+        CHECK(bromath::vdist(sim.position(b), {-5, 0}) < 0.3f);
+        CHECK(maxLateral < 0.15f);
+    }
+
+    // One-sided visibility: A sees B (A.mask & B.layers != 0) but B ignores
+    // A. A must take the FULL avoidance effort (no reciprocity to count
+    // on) — the pair still never overlaps while B walks straight.
+    {
+        AvoidanceSim sim;
+        AvoidanceAgentParams pa;
+        pa.radius = 0.5f;
+        pa.maxSpeed = 4.0f;
+        pa.layers = 1; pa.mask = 1 | 2;  // avoids everyone
+        AvoidanceAgentParams pb = pa;
+        pb.layers = 2; pb.mask = 2;      // ignores layer-1 agents
+        int a = sim.addAgent({-5, 0.01f}, pa);
+        int b = sim.addAgent({5, 0}, pb);
+
+        float minDist = 1e30f, latB = 0.0f;
+        bool arrivedA = false;
+        for (int step = 0; step < 15 * 60; step++) {
+            sim.setPrefVelocity(a, prefTowards(sim.position(a), {5, 0.01f}, pa.maxSpeed));
+            sim.setPrefVelocity(b, prefTowards(sim.position(b), {-5, 0}, pb.maxSpeed));
+            sim.step(dt);
+            minDist = std::min(minDist, minPairDist(sim));
+            latB = std::max(latB, std::abs(sim.position(b).y));
+            arrivedA = bromath::vdist(sim.position(a), {5, 0.01f}) < 0.3f;
+            if (arrivedA && bromath::vdist(sim.position(b), {-5, 0}) < 0.3f) break;
+        }
+        CHECK(arrivedA);
+        CHECK(minDist >= (pa.radius * 2.0f) * 0.9f);
+        CHECK(latB < 0.15f);  // the masked-out side never swerved
+    }
+}
+
 // ─── AvoidanceSim: static obstacles ─────────────────────────────────────────
 
 // Distance from p to segment [a,b].
@@ -486,6 +614,44 @@ TEST(world_avoidance_per_agent_opt_out) {
     CHECK(minDist >= 1.0f * 0.9f);
     CHECK_NEAR(blocker.x(), 0.0f, 1e-4f);   // never displaced
     CHECK_NEAR(blocker.z(), 0.01f, 1e-4f);
+}
+
+TEST(world_avoidance_plumbs_priority_and_layers) {
+    // AgentAvoidance::priority/layers/mask reach the sim through
+    // World::tick's avoidance pass: disjoint layers make a head-on pair
+    // ghost through each other (they overlap mid-way) yet still arrive.
+    World world;
+    world.setAvoidanceEnabled(true);
+    Agent a, b;
+    a.unit().id = 1;
+    b.unit().id = 2;
+    a.setPosition(-5, 0);
+    b.setPosition(5, 0);
+    a.setSpeed(4);
+    b.setSpeed(4);
+    a.setRadius(0.5f);
+    b.setRadius(0.5f);
+    AgentAvoidance avA;
+    avA.layers = 1; avA.mask = 1;
+    AgentAvoidance avB;
+    avB.layers = 2; avB.mask = 2;
+    a.setAvoidance(avA);
+    b.setAvoidance(avB);
+    world.addAgent(&a);
+    world.addAgent(&b);
+    a.setTarget(5, 0);
+    b.setTarget(-5, 0);
+
+    const float dt = 1.0f / 60.0f;
+    float minDist = 1e30f;
+    for (int step = 0; step < 15 * 60; step++) {
+        world.tick(dt);
+        minDist = std::min(minDist, std::hypot(a.x() - b.x(), a.z() - b.z()));
+        if (a.atTarget() && b.atTarget()) break;
+    }
+    CHECK(a.atTarget());
+    CHECK(b.atTarget());
+    CHECK(minDist < 0.5f);  // masked out: they overlapped mid-way
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────

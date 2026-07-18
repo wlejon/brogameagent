@@ -23,6 +23,37 @@ struct AvoidanceAgentParams {
     /// embedders that never call setElevation() keep exact single-level
     /// behavior regardless of this value.
     float height = 2.0f;
+
+    /// Avoidance responsibility weight, 0..1 (default 0.5). When two
+    /// mutually-visible responsive agents negotiate, self's share of the
+    /// per-neighbor ORCA constraint is, on a collision course (current
+    /// relative velocity inside the truncated VO — a correction is needed):
+    ///     share = clamp(0.5 + 0.5 * (otherPriority - selfPriority), 0, 1)
+    /// i.e. the LOWER-priority agent corrects proportionally more. When not
+    /// (yet) on a collision course the constraint instead rations the
+    /// remaining slack toward the VO, and the split flips so the
+    /// higher-priority agent gets the slack:
+    ///     share = clamp(0.5 + 0.5 * (selfPriority - otherPriority), 0, 1)
+    /// Net effect either way: the lower-priority agent yields. The two
+    /// shares always sum to 1 across a pair, preserving ORCA's reciprocal
+    /// collision-free guarantee. Equal priorities give 0.5 in both cases —
+    /// bit-identical to the pre-priority solver. At the extremes (1 vs 0)
+    /// the low-priority agent does ALL the avoiding while the high-priority
+    /// one holds course. A neighbor that will not avoid self back —
+    /// non-responsive, or its mask doesn't match self's layers — takes no
+    /// share regardless of priority: self does the full effort.
+    /// Deterministic — a pure function of the two agents' state.
+    float priority = 0.5f;
+
+    /// Layer membership bitmask: which avoidance layers this agent occupies.
+    uint32_t layers = 1;
+
+    /// Neighbor-selection bitmask: agent A avoids neighbor B only when
+    /// (A.mask & B.layers) != 0. Filtered at neighbor gathering, so a
+    /// masked-out neighbor costs nothing. Avoidance is per-side: B may still
+    /// avoid A when B's mask matches A's layers. Default 1/1 = everyone
+    /// avoids everyone (pre-layer behavior).
+    uint32_t mask = 1;
 };
 
 /// 2D (XZ-plane) Optimal Reciprocal Collision Avoidance — the ORCA algorithm
@@ -31,8 +62,9 @@ struct AvoidanceAgentParams {
 ///
 /// Each agent is a moving disc with a preferred velocity (what its planner /
 /// path follower wants this tick). computeNewVelocities() builds, per agent,
-/// one ORCA half-plane per neighbor (from the truncated velocity obstacle,
-/// each side taking half the avoidance effort) and per nearby obstacle
+/// one ORCA half-plane per neighbor (from the truncated velocity obstacle;
+/// the effort split between the pair follows their priorities — see
+/// AvoidanceAgentParams::priority, default 50/50) and per nearby obstacle
 /// segment, then solves a small 2D linear program for the admissible velocity
 /// closest to the preferred one — falling back to a 3D LP that minimizes the
 /// worst constraint violation when the agent-agent constraints are jointly

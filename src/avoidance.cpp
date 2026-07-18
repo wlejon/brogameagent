@@ -140,6 +140,10 @@ void AvoidanceSim::gatherNeighbors_(int i, std::vector<std::pair<float, int>>& o
             for (int j : it->second) {
                 if (j == i) continue;
                 const Slot& other = agents_[(size_t)j];
+                // Layer filter: self only avoids neighbors whose layers
+                // intersect its mask. One-sided by design — the neighbor
+                // still avoids self when ITS mask matches self's layers.
+                if ((self.params.mask & other.params.layers) == 0) continue;
                 // Elevation filter: agents whose vertical spans don't overlap
                 // are on different levels (bridge over tunnel, stacked
                 // floors) and must not steer around each other. Default
@@ -585,7 +589,40 @@ bromath::Vec2 AvoidanceSim::solveAgent_(int i, float dt,
             u = (combinedRadius * invTimeStep - wLength) * unitW;
         }
 
-        const float share = other.responsive ? 0.5f : 1.0f;
+        // Responsibility share (see AvoidanceAgentParams::priority): a
+        // reciprocating pair splits the effort by priority — shares sum to
+        // 1, so the pair remains jointly collision-free. A neighbor that
+        // will NOT avoid self back (non-responsive, or its mask doesn't
+        // match self's layers) takes no share, leaving self the full effort
+        // — without this, one-sided layer visibility would under-avoid.
+        //
+        // The share's meaning depends on which side of the VO the current
+        // relative velocity is on. On a collision course (relVel inside the
+        // VO; u points out) the share is how much of the CORRECTION self
+        // performs — the low-priority agent must correct more. Not (yet) on
+        // a collision course (relVel outside; u points toward the VO) the
+        // share is how much of the remaining SLACK self may consume — there
+        // the high-priority agent gets the slack, so the split flips sign.
+        // Without the flip a share-0 agent with low current speed is pinned
+        // (it may never accelerate toward a distant neighbor at all).
+        // u ⊥ line.direction in every branch, with perpLeft(direction)
+        // pointing out of the VO — so the sign of u · perpLeft(direction)
+        // distinguishes the two cases. Equal priorities give 0.5 on both
+        // sides: bit-identical to the classic solver.
+        const bool reciprocates =
+            other.responsive && (other.params.mask & self.params.layers) != 0;
+        float share;
+        if (reciprocates) {
+            const float pSelf = std::clamp(self.params.priority, 0.0f, 1.0f);
+            const float pOther = std::clamp(other.params.priority, 0.0f, 1.0f);
+            const bool onCollisionCourse =
+                vdot(u, perpLeft(line.direction)) > 0.0f;
+            const float delta = 0.5f * (pOther - pSelf);
+            share = std::clamp(0.5f + (onCollisionCourse ? delta : -delta),
+                               0.0f, 1.0f);
+        } else {
+            share = 1.0f;
+        }
         line.point = velocity + share * u;
         orcaLines.push_back(line);
     }

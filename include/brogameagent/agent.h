@@ -44,6 +44,19 @@ struct AgentAvoidance {
     /// on different levels and ignore each other. Agent elevations default
     /// to 0 (see Agent::setElevation), so single-level worlds are unaffected.
     float height = 2.0f;
+    /// Avoidance responsibility weight, 0..1: when two agents negotiate, the
+    /// lower-priority one yields — it takes proportionally more of the
+    /// correction on a collision course (share = clamp(0.5 +
+    /// 0.5 * (otherPriority - selfPriority), 0, 1)) and proportionally less
+    /// of the approach slack before one (the split flips); shares sum to 1
+    /// either way, so reciprocity is preserved. 0.5 = classic 50/50. See
+    /// AvoidanceAgentParams::priority for the full semantics.
+    float priority = 0.5f;
+    /// Layer membership bitmask (which avoidance layers this agent occupies).
+    uint32_t layers = 1;
+    /// Neighbor-selection bitmask: this agent avoids neighbor B only when
+    /// (mask & B.layers) != 0. Default 1/1 = everyone avoids everyone.
+    uint32_t mask = 1;
 };
 
 /// A game agent. Owns a Unit (combat stats), a 2D position, a velocity,
