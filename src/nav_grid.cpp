@@ -41,6 +41,22 @@ bool NavGrid::isWalkable(float x, float z) const {
     return grid_[gz * width_ + gx] == 0;
 }
 
+void NavGrid::setWalkable(float x, float z, bool walkable) {
+    int gx = toGridX(x);
+    int gz = toGridZ(z);
+    if (inBounds(gx, gz)) {
+        grid_[gz * width_ + gx] = walkable ? 0 : 1;
+    }
+}
+
+void NavGrid::setCellCost(float x, float z, float cost) {
+    int gx = toGridX(x);
+    int gz = toGridZ(z);
+    if (inBounds(gx, gz)) {
+        grid_[gz * width_ + gx] = (cost <= 0.0f || cost >= 1e6f) ? 1 : 0;
+    }
+}
+
 bool NavGrid::hasGridLOS(bromath::Vec2 from, bromath::Vec2 to) const {
     int x0 = toGridX(from.x), z0 = toGridZ(from.y);
     int x1 = toGridX(to.x),   z1 = toGridZ(to.y);

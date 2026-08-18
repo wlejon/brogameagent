@@ -42,6 +42,12 @@ public:
     /// Check if a world position is on a walkable cell.
     bool isWalkable(float x, float z) const;
 
+    /// Set walkable state of a world position.
+    void setWalkable(float x, float z, bool walkable);
+
+    /// Set cell traversal cost (cost <= 0 or cost >= 1e6 marks cell unwalkable).
+    void setCellCost(float x, float z, float cost);
+
     /// Find a path from start to goal using A*.
     /// When the goal is blocked, out of bounds, or unreachable the path
     /// CLAMPS to the closest reachable cell (best-heuristic node) instead of
