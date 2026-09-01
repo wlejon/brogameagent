@@ -140,6 +140,23 @@ void Agent::clearTarget() {
     waypointIdx_ = 0;
 }
 
+void Agent::setPath(std::vector<bromath::Vec2> path) {
+    if (path.empty()) {
+        clearTarget();
+        return;
+    }
+    hasTarget_ = true;
+    targetX_ = path.back().x;
+    targetZ_ = path.back().y;
+    path_ = std::move(path);
+    waypointIdx_ = 0;
+    // Pin the repath threshold to the route's own goal so a later setTarget
+    // at (or near) that goal keeps the supplied route instead of discarding
+    // it for a straight line.
+    lastPathTargetX_ = targetX_;
+    lastPathTargetZ_ = targetZ_;
+}
+
 bool Agent::atTarget() const {
     if (!hasTarget_) return false;
     float dx = x_ - targetX_;

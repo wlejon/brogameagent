@@ -123,6 +123,16 @@ public:
     /// Clear the current target. Agent stops moving.
     void clearTarget();
 
+    /// Follow an externally planned route: the agent walks the supplied
+    /// waypoints (world XZ, in order) with the usual steering/avoidance/
+    /// dynamics, and never re-plans them — no NavGrid A* runs over an
+    /// external path. The final waypoint becomes the target for
+    /// hasTarget()/atTarget(). An empty path is clearTarget().
+    /// Snapshots do not capture routes (applySnapshot re-plans against the
+    /// bound grid, same as a navgrid route): the embedder that planned an
+    /// external route re-issues it after restore.
+    void setPath(std::vector<bromath::Vec2> path);
+
     /// Scripted update: follow the A* path toward setTarget().
     /// Does nothing if no target is set.
     void update(float dt);
@@ -168,6 +178,13 @@ public:
     const std::vector<bromath::Vec2>& path() const { return path_; }
     int currentWaypoint() const { return waypointIdx_; }
     bromath::Vec2 velocity() const { return {vx_, vz_}; }
+
+    /// Directly set the current velocity. Velocity is real dynamics state —
+    /// ORCA's reciprocity reads neighbours' velocities, and AgentSnapshot
+    /// round-trips it — so an embedder restoring agents from its own save
+    /// needs to seed it, not just the position, or the first tick after a
+    /// load resolves avoidance against a world standing still.
+    void setVelocity(float vx, float vz) { vx_ = vx; vz_ = vz; }
 
     /// Capture full resettable agent state into a snapshot.
     AgentSnapshot captureSnapshot() const;

@@ -245,6 +245,58 @@ TEST(agent_with_navgrid) {
     CHECK(agent.x() > 3.0f);
 }
 
+TEST(agent_follows_external_path) {
+    // A grid whose own A* would walk straight through (no obstacles): the
+    // external route makes a detour the planner would never choose, so
+    // following it proves the supplied path is walked, not re-planned.
+    NavGrid grid(-20, -20, 20, 20, 0.5f);
+
+    Agent agent;
+    agent.setNavGrid(&grid);
+    agent.setPosition(0, 0);
+    agent.setSpeed(6.0f);
+    agent.setPath({{0, 8}, {8, 8}});
+
+    CHECK(agent.hasTarget());
+
+    bool detoured = false;
+    for (int i = 0; i < 600; i++) {
+        agent.update(1.0f / 60.0f);
+        if (agent.z() > 6.0f && agent.x() < 2.0f) detoured = true;
+    }
+
+    CHECK(detoured);          // passed through the dog-leg, not the diagonal
+    CHECK(agent.atTarget());  // final waypoint is the target
+    CHECK_NEAR(agent.x(), 8.0f, 1.0f);
+    CHECK_NEAR(agent.z(), 8.0f, 1.0f);
+}
+
+TEST(agent_external_path_empty_clears) {
+    Agent agent;
+    agent.setPosition(0, 0);
+    agent.setSpeed(6.0f);
+    agent.setPath({{5, 0}});
+    CHECK(agent.hasTarget());
+    agent.setPath({});
+    CHECK(!agent.hasTarget());
+    for (int i = 0; i < 60; i++) agent.update(1.0f / 60.0f);
+    CHECK_NEAR(agent.x(), 0.0f, 0.01f);
+}
+
+TEST(agent_external_path_survives_settarget_at_goal) {
+    // setTarget at the route's own goal must keep the supplied route
+    // (the repath threshold is pinned to it), not straight-line it.
+    NavGrid grid(-20, -20, 20, 20, 0.5f);
+    Agent agent;
+    agent.setNavGrid(&grid);
+    agent.setPosition(0, 0);
+    agent.setSpeed(6.0f);
+    agent.setPath({{0, 8}, {8, 8}});
+    agent.setTarget(8, 8); // same goal — a chase-style refresh
+    CHECK(agent.currentWaypoint() == 0);
+    CHECK(agent.path().size() == 2); // still the dog-leg, not {goal}
+}
+
 TEST(agent_aim_at) {
     Agent agent;
     agent.setPosition(0, 0);
