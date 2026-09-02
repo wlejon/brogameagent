@@ -11,6 +11,19 @@ else()
 endif()
 add_test(NAME brogameagent_avoidance_test COMMAND brogameagent_avoidance_test)
 
+# Weighted hex-grid navigator against a linear-scan reference (tie order,
+# identical paths, fields, clearance, components). Core-only.
+add_executable(brogameagent_hex_nav_test
+    test_hex_nav.cpp
+)
+target_link_libraries(brogameagent_hex_nav_test PRIVATE brogameagent)
+if(MSVC)
+    target_compile_options(brogameagent_hex_nav_test PRIVATE /W4)
+else()
+    target_compile_options(brogameagent_hex_nav_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME brogameagent_hex_nav_test COMMAND brogameagent_hex_nav_test)
+
 # Polygon navmesh (Recast/Detour). Core-only — builds with the NN layer off,
 # but needs the navmesh feature compiled in.
 if(BROGAMEAGENT_WITH_NAVMESH)

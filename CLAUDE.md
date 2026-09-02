@@ -12,6 +12,9 @@ land here.
 ```
 include/brogameagent/
   nav_grid.h       2D grid A* + smoothing + grid LOS (partial paths)
+  hex_nav.h        weighted A*/Dijkstra over an odd-r hex grid on embedder-
+                   authored step/clearance tables; reproduces a reference
+                   search's tie order exactly (tests/test_hex_nav.cpp)
   nav_mesh.h       polygon navmesh: Recast bake / Detour queries, off-mesh
                    links, dtTileCache dynamic obstacles (Recast-free header)
   steering.h       seek / arrive / flee / pursue / evade / followPath
