@@ -396,9 +396,7 @@ void ensureAIMctsClassesInstalled() {
             if (!w || !hero) return ev::null();
             const brogameagent::mcts::Option* opt = h->mcts->search(w->world, hero->agent);
             if (!opt) return ev::null();
-            ObjectBuilder res;
-            res.set("name", ev::fromUtf8(opt->name()));
-            return res.get();
+            return ev::fromUtf8(opt->name());
         });
 
         b.def("advanceRoot", 1, [](Value self, std::span<const Value> a) -> Value {
@@ -449,17 +447,19 @@ void installAIMcts(ObjectBuilder& game) {
         ev::Persistent opts(a[0]);
 
         auto h = std::make_unique<HostGenericMcts>();
-        Value numActV = ev::getProperty(opts.get(), "numActions");
-        h->numActions = ev::isNumber(numActV) ? static_cast<int>(ev::toDouble(numActV)) : 4;
-
         Value env = ev::getProperty(opts.get(), "env");
         if (!ev::isObject(env)) return ev::throwTypeError("createGenericMcts: opts.env required");
         h->envObj = ev::Persistent(env);
 
+        Value numActV = ev::getProperty(opts.get(), "numActions");
+        if (!ev::isNumber(numActV)) numActV = ev::getProperty(env, "numActions");
+        h->numActions = ev::isNumber(numActV) ? static_cast<int>(ev::toDouble(numActV)) : 4;
+
         h->snapshotFn = ev::Persistent(ev::getProperty(env, "snapshot"));
         h->restoreFn  = ev::Persistent(ev::getProperty(env, "restore"));
         h->stepFn     = ev::Persistent(ev::getProperty(env, "step"));
-        h->legalFn    = ev::Persistent(ev::getProperty(env, "legal"));
+        h->legalFn    = ev::Persistent(ev::getProperty(env, "legalActions"));
+        if (!ev::isFunction(h->legalFn.get())) h->legalFn = ev::Persistent(ev::getProperty(env, "legal"));
         h->observeFn  = ev::Persistent(ev::getProperty(env, "observe"));
 
         brogameagent::mcts::GenericEnv envBridge;
@@ -646,6 +646,15 @@ void installAIMcts(ObjectBuilder& game) {
         if (!ev::isNumber(lenV) || ev::toDouble(lenV) <= 0) return ev::throwTypeError("opts.worlds must be non-empty");
 
         int nWorlds = static_cast<int>(ev::toDouble(lenV));
+        Value evalV = ev::getProperty(opts.get(), "evaluator");
+        if (ev::isFunction(evalV)) {
+            return ev::throwTypeError("rootParallelSearch: opts.evaluator cannot be a JS function");
+        }
+        Value rollV = ev::getProperty(opts.get(), "rolloutPolicy");
+        if (ev::isFunction(rollV)) {
+            return ev::throwTypeError("rootParallelSearch: opts.rolloutPolicy cannot be a JS function");
+        }
+
         std::vector<brogameagent::World*> worlds;
         worlds.reserve(nWorlds);
         for (int i = 0; i < nWorlds; i++) {
@@ -661,7 +670,6 @@ void installAIMcts(ObjectBuilder& game) {
         auto evaluator = std::make_shared<brogameagent::mcts::HpDeltaEvaluator>();
 
         std::string rollStr = "aggressive";
-        Value rollV = ev::getProperty(opts.get(), "rolloutPolicy");
         if (ev::isString(rollV)) rollStr = ev::toUtf8(rollV);
         std::shared_ptr<brogameagent::mcts::IRolloutPolicy> rollout;
         if (rollStr == "scripted") rollout = std::make_shared<brogameagent::mcts::ScriptedRollout>();
@@ -698,6 +706,11 @@ void installAIMcts(ObjectBuilder& game) {
         Value lenV = ev::getProperty(worldsArr, "length");
         if (!ev::isNumber(lenV) || ev::toDouble(lenV) <= 0) return ev::throwTypeError("opts.worlds must be non-empty");
 
+        Value evalV = ev::getProperty(opts.get(), "evaluator");
+        if (ev::isFunction(evalV)) return ev::throwTypeError("rootParallelSearchDecoupled: opts.evaluator cannot be a JS function");
+        Value rollV = ev::getProperty(opts.get(), "rolloutPolicy");
+        if (ev::isFunction(rollV)) return ev::throwTypeError("rootParallelSearchDecoupled: opts.rolloutPolicy cannot be a JS function");
+
         int nWorlds = static_cast<int>(ev::toDouble(lenV));
         std::vector<brogameagent::World*> worlds;
         worlds.reserve(nWorlds);
@@ -715,7 +728,6 @@ void installAIMcts(ObjectBuilder& game) {
         auto evaluator = std::make_shared<brogameagent::mcts::HpDeltaEvaluator>();
 
         std::string rollStr = "aggressive";
-        Value rollV = ev::getProperty(opts.get(), "rolloutPolicy");
         if (ev::isString(rollV)) rollStr = ev::toUtf8(rollV);
         std::shared_ptr<brogameagent::mcts::IRolloutPolicy> rollout;
         if (rollStr == "scripted") rollout = std::make_shared<brogameagent::mcts::ScriptedRollout>();

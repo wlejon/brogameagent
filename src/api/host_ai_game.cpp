@@ -193,6 +193,15 @@ void decorateHexNavProto(ObjectBuilder& b) {
         o.set("parent", makeInt32Array(parent.data(), parent.size()));
         return o.get();
     });
+
+    b.def("components", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostHexNav* h = unwrapHexNav(self);
+        std::string id, clr;
+        if (!h || !h->nav || !idAt(a, 0, id)) return ev::throwTypeError("components(id, clearanceId?)");
+        if (a.size() > 1 && !ev::isUndefined(a[1]) && !ev::isNull(a[1]) && !idAt(a, 1, clr)) clr.clear();
+        const std::vector<int32_t>& labels = h->nav->components(id, clr);
+        return makeInt32Array(labels.data(), labels.size());
+    });
 }
 
 Value aiCreateHexNav(Value, std::span<const Value> a) {
@@ -352,6 +361,55 @@ void decorateWorldProto(ObjectBuilder& b) {
             return obj.get();
         });
     }, nullptr);
+
+    b.accessor("events", [](Value self, std::span<const Value>) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w) return hostArrayOf(0, [](size_t) { return ev::null(); });
+        const auto& evs = w->world.events();
+        return hostArrayOf(evs.size(), [&](size_t i) {
+            const auto& e = evs[i];
+            ObjectBuilder obj;
+            obj.set("sourceId", ev::fromDouble(e.attackerId));
+            obj.set("attackerId", ev::fromDouble(e.attackerId));
+            obj.set("targetId", ev::fromDouble(e.targetId));
+            obj.set("amount", ev::fromDouble(e.amount));
+            obj.set("kind", ev::fromUtf8(damageKindStr(e.kind)));
+            obj.set("killed", ev::fromBool(e.killed));
+            return obj.get();
+        });
+    }, nullptr);
+
+    b.def("resolveAttack", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.size() < 2) return ev::fromBool(false);
+        HostAgent* ag = unwrapAgent(a[0]);
+        if (!ag) return ev::fromBool(false);
+        int targetId = static_cast<int>(numAt(a, 1));
+        return ev::fromBool(w->world.resolveAttack(ag->agent, targetId));
+    });
+
+    b.def("resolveAbility", 3, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.size() < 3) return ev::fromBool(false);
+        HostAgent* ag = unwrapAgent(a[0]);
+        if (!ag) return ev::fromBool(false);
+        int slot = static_cast<int>(numAt(a, 1));
+        int targetId = static_cast<int>(numAt(a, 2));
+        return ev::fromBool(w->world.resolveAbility(ag->agent, slot, targetId));
+    });
+
+    b.def("dealDamage", 4, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.size() < 3) return ev::fromDouble(0.0);
+        HostAgent* att = unwrapAgent(a[0]);
+        HostAgent* tgt = unwrapAgent(a[1]);
+        if (!att || !tgt) return ev::fromDouble(0.0);
+        float amount = static_cast<float>(numAt(a, 2));
+        std::string kindStr = "physical";
+        if (a.size() >= 4 && ev::isString(a[3])) kindStr = ev::toUtf8(a[3]);
+        float dealt = w->world.dealDamage(att->agent, tgt->agent, amount, parseDamageKind(kindStr.c_str()));
+        return ev::fromDouble(dealt);
+    });
 
     b.def("clearEvents", 0, [](Value self, std::span<const Value>) -> Value {
         HostWorld* w = unwrapWorld(self);

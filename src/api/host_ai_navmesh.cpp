@@ -335,11 +335,18 @@ Value aiBakeNavMesh(Value, std::span<const Value> a) {
             cfg.offMeshLinks.reserve(n);
             for (uint32_t i = 0; i < n; ++i) {
                 Value el = ev::getElement(lRoot.get(), i);
-                if (!ev::isObject(el)) continue;
+                if (!ev::isObject(el)) {
+                    return ev::throwTypeError("bakeNavMesh: offMeshLinks entry must be an object");
+                }
                 ev::Persistent eRoot(el);
+                Value sv = ev::getProperty(eRoot.get(), "start");
+                Value evVal = ev::getProperty(eRoot.get(), "end");
+                if (!ev::isObject(sv) || !ev::isObject(evVal)) {
+                    return ev::throwTypeError("bakeNavMesh: offMeshLink must have 'start' and 'end' objects");
+                }
                 brogameagent::NavMeshOffMeshLink link;
-                link.start = parseVec3(ev::getProperty(eRoot.get(), "start"));
-                link.end   = parseVec3(ev::getProperty(eRoot.get(), "end"));
+                link.start = parseVec3(sv);
+                link.end   = parseVec3(evVal);
                 link.radius = static_cast<float>(getDoubleProperty(eRoot.get(), "radius", link.radius));
                 link.bidirectional = getBoolProperty(eRoot.get(), "bidirectional", link.bidirectional);
                 link.userId = static_cast<uint32_t>(getDoubleProperty(eRoot.get(), "userId", 0.0));
