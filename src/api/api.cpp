@@ -51,6 +51,11 @@ void installGameAi() {
     ev::Persistent aiP(aiVal);
     Value gameVal = makeAiGameValue();
     aiP.set(ev::setProperty(aiP.get(), "game", gameVal));
+
+    ev::registerGlobal("AI", gameVal);
+    if (!ev::isUndefined(globalThisVal)) {
+        ev::setProperty(globalThisVal, "AI", gameVal);
+    }
 }
 
 } // namespace brogameagent::api
