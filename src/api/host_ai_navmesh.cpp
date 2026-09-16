@@ -406,7 +406,7 @@ Value aiLoadNavMesh(Value, std::span<const Value> a) {
     return makeNavMeshHandle(std::move(mesh));
 }
 
-Value aiBuildFromMesh(Value self, std::span<const Value> a) {
+Value aiBuildFromMesh(Value, std::span<const Value> a) {
     if (a.size() < 2) {
         return ev::throwTypeError("buildFromMesh(positions, indices, [opts])");
     }
