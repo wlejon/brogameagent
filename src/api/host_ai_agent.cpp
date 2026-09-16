@@ -157,6 +157,15 @@ void decorateAgentProto(ObjectBuilder& b) {
         return makeVec3Value(v.x, 0.0f, v.y);
     }, nullptr);
 
+    b.accessor("unit", [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        if (ev::isUndefined(h->unitProxy.get())) {
+            h->unitProxy = ev::Persistent(makeUnitHandle(h, self_));
+        }
+        return h->unitProxy.get();
+    }, nullptr);
+
     auto speedGetter = [](Value s, std::span<const Value>) -> Value {
         auto* h = unwrapAgent(s); return h ? ev::fromDouble(h->agent.speed()) : ev::undefined();
     };

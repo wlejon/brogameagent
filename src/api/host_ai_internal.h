@@ -43,6 +43,11 @@ inline constexpr uint32_t kHostDecoupledMctsTag  = 0x444D4354u;  // 'DMCT'
 inline constexpr uint32_t kHostTeamMctsTag       = 0x544D4354u;  // 'TMCT'
 inline constexpr uint32_t kHostOptionTag         = 0x4F50544Eu;  // 'OPTN'
 inline constexpr uint32_t kHostOptionMctsTag     = 0x4F4D4354u;  // 'OMCT'
+inline constexpr uint32_t kHostUnitTag           = 0x4149554Eu;  // 'AIUN'
+inline constexpr uint32_t kHostAgentSnapshotTag  = 0x4149534Eu;  // 'AISN'
+inline constexpr uint32_t kHostWorldSnapshotTag  = 0x41495753u;  // 'AIWS'
+inline constexpr uint32_t kHostVecSimTag         = 0x41495653u;  // 'AIVS'
+inline constexpr uint32_t kHostRewardTrackerTag  = 0x41495254u;  // 'AIRT'
 
 // ---------------------------------------------------------------------------
 // Payload Structures
@@ -70,6 +75,18 @@ struct HostAgent {
     int navWaypoint = 0;
     float navY = 0.0f;
     bool destroyed = false;
+    ev::Persistent unitProxy;
+};
+
+struct HostUnit {
+    uint32_t tag = kHostUnitTag;
+    HostAgent* owner = nullptr;
+    brogameagent::Agent* agentRef = nullptr;
+    ev::Persistent agentValue;
+    brogameagent::Agent* agent() const {
+        if (owner) return &owner->agent;
+        return agentRef;
+    }
 };
 
 struct HostAgentBinding {
@@ -123,6 +140,11 @@ extern HostClass g_navGridClass;
 extern HostClass g_navMeshClass;
 extern HostClass g_agentClass;
 extern HostClass g_agentBindingClass;
+extern HostClass g_unitClass;
+extern HostClass g_agentSnapshotClass;
+extern HostClass g_worldSnapshotClass;
+extern HostClass g_vecSimClass;
+extern HostClass g_rewardTrackerClass;
 extern HostClass g_hexNavClass;
 extern HostClass g_worldClass;
 extern HostClass g_genericMctsClass;
@@ -135,6 +157,14 @@ extern HostClass g_optionMctsClass;
 // ---------------------------------------------------------------------------
 // Unwrap Helpers
 // ---------------------------------------------------------------------------
+
+inline HostUnit* unwrapUnit(Value v) {
+    if (!ev::isObject(v)) return nullptr;
+    void* ptr = ev::handleData(v);
+    if (!ptr) return nullptr;
+    auto* h = static_cast<HostUnit*>(ptr);
+    return (h->tag == kHostUnitTag) ? h : nullptr;
+}
 
 inline HostNavGrid* unwrapNavGrid(Value v) {
     if (!ev::isObject(v)) return nullptr;
@@ -518,11 +548,19 @@ void applyAgentAvoidance(Value opts, brogameagent::Agent& agent);
 void installSteering(ObjectBuilder& b);
 void installPerception(ObjectBuilder& b);
 
+// AIUnit (host_ai_unit.cpp)
+void decorateUnitProto(ObjectBuilder& b);
+Value makeUnitHandle(HostAgent* owner, Value agentVal = ev::undefined());
+
+// Extras (host_ai_extras.cpp)
+void ensureAIExtrasClassesInstalled();
+void installAIExtras(ObjectBuilder& game);
+
 // MCTS (host_ai_mcts.cpp)
 void ensureAIMctsClassesInstalled();
 void installAIMcts(ObjectBuilder& b);
 
-// Core & HexNav & World (host_ai_core.cpp)
+// Game & HexNav & World (host_ai_game.cpp)
 void decorateHexNavProto(ObjectBuilder& b);
 void decorateWorldProto(ObjectBuilder& b);
 Value aiCreateHexNav(Value self, std::span<const Value> a);

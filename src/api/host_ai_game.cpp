@@ -1,3 +1,7 @@
+// `bro.ai.game` for the compiled realm: the ORCA World, the HexNav navigator,
+// and the game object that hangs the factories and the perception helpers
+// together.
+
 #include "host_ai_internal.h"
 #include <limits>
 
@@ -19,10 +23,6 @@ HostClass g_decoupledMctsClass;
 HostClass g_teamMctsClass;
 HostClass g_optionClass;
 HostClass g_optionMctsClass;
-
-// ---------------------------------------------------------------------------
-// HexNav Wrapper
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -76,6 +76,10 @@ Value typedArrayOf(bronze::ElementKind kind, const void* data, size_t count, siz
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// HexNav Wrapper
+// ---------------------------------------------------------------------------
 
 void decorateHexNavProto(ObjectBuilder& b) {
     b.accessor("size", [](Value self, std::span<const Value>) -> Value {
@@ -301,16 +305,192 @@ void decorateWorldProto(ObjectBuilder& b) {
         if (!ag) return hostArrayOf(0, [](size_t) { return ev::null(); });
         float range = static_cast<float>(numAt(a, 1));
         auto enemies = w->world.enemiesInRange(ag->agent, range);
-        std::vector<Value> out;
-        for (auto* enemy : enemies) {
+        std::vector<Value> found;
+        found.reserve(enemies.size());
+        for (auto* e : enemies) {
             for (const auto& r : w->roster) {
-                if (r.agent == enemy) {
-                    out.push_back(r.value.get());
-                    break;
+                if (r.agent == e) { found.push_back(r.value.get()); break; }
+            }
+        }
+        return hostArrayOf(found.size(), [&](size_t i) { return found[i]; });
+    });
+
+    b.def("alliesInRange", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.size() < 2) return hostArrayOf(0, [](size_t) { return ev::null(); });
+        HostAgent* ag = unwrapAgent(a[0]);
+        if (!ag) return hostArrayOf(0, [](size_t) { return ev::null(); });
+        float range = static_cast<float>(numAt(a, 1));
+        float rangeSq = range * range;
+        auto allies = w->world.alliesOf(ag->agent);
+        std::vector<Value> found;
+        for (auto* al : allies) {
+            float dx = al->x() - ag->agent.x();
+            float dz = al->z() - ag->agent.z();
+            if (dx * dx + dz * dz <= rangeSq) {
+                for (const auto& r : w->roster) {
+                    if (r.agent == al) { found.push_back(r.value.get()); break; }
                 }
             }
         }
-        return hostArrayOf(out.size(), [&](size_t i) { return out[i]; });
+        return hostArrayOf(found.size(), [&](size_t i) { return found[i]; });
+    });
+
+    b.accessor("damageEvents", [](Value self, std::span<const Value>) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w) return hostArrayOf(0, [](size_t) { return ev::null(); });
+        const auto& evts = w->world.events();
+        return hostArrayOf(evts.size(), [&](size_t i) {
+            const auto& e = evts[i];
+            ObjectBuilder obj;
+            obj.set("sourceId", ev::fromDouble(e.attackerId));
+            obj.set("attackerId", ev::fromDouble(e.attackerId));
+            obj.set("targetId", ev::fromDouble(e.targetId));
+            obj.set("amount", ev::fromDouble(e.amount));
+            obj.set("kind", ev::fromUtf8(damageKindStr(e.kind)));
+            obj.set("killed", ev::fromBool(e.killed));
+            return obj.get();
+        });
+    }, nullptr);
+
+    b.def("clearEvents", 0, [](Value self, std::span<const Value>) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (w) w->world.clearEvents();
+        return ev::undefined();
+    });
+
+    b.def("spawnProjectile", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.empty() || !ev::isObject(a[0])) return ev::fromDouble(-1);
+        ev::Persistent opts(a[0]);
+        brogameagent::Projectile p;
+        p.ownerId = static_cast<int>(getDoubleProperty(opts.get(), "ownerId", -1));
+        p.teamId = static_cast<int>(getDoubleProperty(opts.get(), "teamId", 0));
+        p.targetId = static_cast<int>(getDoubleProperty(opts.get(), "targetId", -1));
+        p.x = static_cast<float>(getDoubleProperty(opts.get(), "x", 0));
+        p.z = static_cast<float>(getDoubleProperty(opts.get(), "z", 0));
+        p.vx = static_cast<float>(getDoubleProperty(opts.get(), "vx", 0));
+        p.vz = static_cast<float>(getDoubleProperty(opts.get(), "vz", 0));
+        p.speed = static_cast<float>(getDoubleProperty(opts.get(), "speed", 20));
+        p.radius = static_cast<float>(getDoubleProperty(opts.get(), "radius", 0.3));
+        p.damage = static_cast<float>(getDoubleProperty(opts.get(), "damage", 0));
+        p.remainingLife = static_cast<float>(getDoubleProperty(opts.get(), "remainingLife", 2));
+        p.splashRadius = static_cast<float>(getDoubleProperty(opts.get(), "splashRadius", 0));
+        p.maxHits = static_cast<int>(getDoubleProperty(opts.get(), "maxHits", 0));
+
+        Value kindVal = ev::getProperty(opts.get(), "kind");
+        if (ev::isString(kindVal)) p.kind = parseDamageKind(ev::toUtf8(kindVal).c_str());
+
+        Value modeVal = ev::getProperty(opts.get(), "mode");
+        if (ev::isString(modeVal)) {
+            std::string m = ev::toUtf8(modeVal);
+            if (m == "pierce") p.mode = brogameagent::ProjectileMode::Pierce;
+            else if (m == "aoe") p.mode = brogameagent::ProjectileMode::AoE;
+        }
+
+        int id = w->world.spawnProjectile(p);
+        return ev::fromDouble(id);
+    });
+
+    b.accessor("projectiles", [](Value self, std::span<const Value>) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w) return hostArrayOf(0, [](size_t) { return ev::null(); });
+        const auto& projs = w->world.projectiles();
+        std::vector<const brogameagent::Projectile*> alive;
+        for (const auto& p : projs) if (p.alive) alive.push_back(&p);
+        return hostArrayOf(alive.size(), [&](size_t i) {
+            const auto& p = *alive[i];
+            ObjectBuilder obj;
+            obj.set("id", ev::fromDouble(p.id));
+            obj.set("ownerId", ev::fromDouble(p.ownerId));
+            obj.set("teamId", ev::fromDouble(p.teamId));
+            obj.set("x", ev::fromDouble(p.x));
+            obj.set("z", ev::fromDouble(p.z));
+            obj.set("vx", ev::fromDouble(p.vx));
+            obj.set("vz", ev::fromDouble(p.vz));
+            obj.set("speed", ev::fromDouble(p.speed));
+            obj.set("damage", ev::fromDouble(p.damage));
+            obj.set("alive", ev::fromBool(p.alive));
+            const char* modeStr = "single";
+            if (p.mode == brogameagent::ProjectileMode::Pierce) modeStr = "pierce";
+            else if (p.mode == brogameagent::ProjectileMode::AoE) modeStr = "aoe";
+            obj.set("mode", ev::fromUtf8(modeStr));
+            return obj.get();
+        });
+    }, nullptr);
+
+    b.def("snapshot", 0, [](Value self, std::span<const Value>) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w) return ev::null();
+        auto snap = w->world.snapshot();
+        ObjectBuilder obj;
+        Value agentsArr = hostArrayOf(snap.agents.size(), [&](size_t i) {
+            const auto& a = snap.agents[i];
+            ObjectBuilder ao;
+            ao.set("id", ev::fromDouble(a.id));
+            ao.set("x", ev::fromDouble(a.x));
+            ao.set("z", ev::fromDouble(a.z));
+            ao.set("vx", ev::fromDouble(a.vx));
+            ao.set("vz", ev::fromDouble(a.vz));
+            ao.set("yaw", ev::fromDouble(a.yaw));
+            ao.set("aimYaw", ev::fromDouble(a.aimYaw));
+            ao.set("aimPitch", ev::fromDouble(a.aimPitch));
+            ao.set("speed", ev::fromDouble(a.speed));
+            ao.set("radius", ev::fromDouble(a.radius));
+            ao.set("hp", ev::fromDouble(a.unit.hp));
+            ao.set("maxHp", ev::fromDouble(a.unit.maxHp));
+            ao.set("mana", ev::fromDouble(a.unit.mana));
+            ao.set("teamId", ev::fromDouble(a.unit.teamId));
+            ao.set("hasTarget", ev::fromBool(a.hasTarget));
+            ao.set("targetX", ev::fromDouble(a.targetX));
+            ao.set("targetZ", ev::fromDouble(a.targetZ));
+            return ao.get();
+        });
+        obj.set("agents", agentsArr);
+        obj.set("nextProjectileId", ev::fromDouble(snap.nextProjectileId));
+        return obj.get();
+    });
+
+    b.def("restore", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.empty() || !ev::isObject(a[0])) return ev::undefined();
+        ev::Persistent root(a[0]);
+        brogameagent::WorldSnapshot snap;
+        Value agentsArr = ev::getProperty(root.get(), "agents");
+        if (ev::isObject(agentsArr)) {
+            Value lenV = ev::getProperty(agentsArr, "length");
+            if (ev::isNumber(lenV)) {
+                int n = static_cast<int>(ev::toDouble(lenV));
+                for (int i = 0; i < n; i++) {
+                    Value ao = ev::getElement(agentsArr, i);
+                    if (ev::isObject(ao)) {
+                        brogameagent::AgentSnapshot as;
+                        as.id = static_cast<int>(getDoubleProperty(ao, "id", 0));
+                        as.x = static_cast<float>(getDoubleProperty(ao, "x", 0));
+                        as.z = static_cast<float>(getDoubleProperty(ao, "z", 0));
+                        as.vx = static_cast<float>(getDoubleProperty(ao, "vx", 0));
+                        as.vz = static_cast<float>(getDoubleProperty(ao, "vz", 0));
+                        as.yaw = static_cast<float>(getDoubleProperty(ao, "yaw", 0));
+                        as.aimYaw = static_cast<float>(getDoubleProperty(ao, "aimYaw", 0));
+                        as.aimPitch = static_cast<float>(getDoubleProperty(ao, "aimPitch", 0));
+                        as.speed = static_cast<float>(getDoubleProperty(ao, "speed", 6));
+                        as.radius = static_cast<float>(getDoubleProperty(ao, "radius", 0.4));
+                        as.unit.hp = static_cast<float>(getDoubleProperty(ao, "hp", 100));
+                        as.unit.maxHp = static_cast<float>(getDoubleProperty(ao, "maxHp", 100));
+                        as.unit.mana = static_cast<float>(getDoubleProperty(ao, "mana", 0));
+                        as.unit.teamId = static_cast<int>(getDoubleProperty(ao, "teamId", 0));
+                        as.unit.id = as.id;
+                        as.hasTarget = getBoolProperty(ao, "hasTarget", false);
+                        as.targetX = static_cast<float>(getDoubleProperty(ao, "targetX", 0));
+                        as.targetZ = static_cast<float>(getDoubleProperty(ao, "targetZ", 0));
+                        snap.agents.push_back(as);
+                    }
+                }
+            }
+        }
+        snap.nextProjectileId = static_cast<int>(getDoubleProperty(root.get(), "nextProjectileId", 1));
+        w->world.restore(snap);
+        return ev::undefined();
     });
 
     b.accessor("agentCount", [](Value self, std::span<const Value>) -> Value {
@@ -326,7 +506,61 @@ Value aiCreateWorld(Value, std::span<const Value>) {
 }
 
 // ---------------------------------------------------------------------------
-// Installation & Module Assembly
+// Perception Helpers
+// ---------------------------------------------------------------------------
+
+Value aiCanSee(Value, std::span<const Value> a) {
+    if (a.size() < 8) return ev::fromBool(false);
+    std::vector<brogameagent::AABB> boxes = parseAABBArray(a[7]);
+    const bool r = brogameagent::canSee(
+        {static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1))},
+        {static_cast<float>(numAt(a, 2)), static_cast<float>(numAt(a, 3))},
+        static_cast<float>(numAt(a, 4)), static_cast<float>(numAt(a, 5)),
+        static_cast<float>(numAt(a, 6)), boxes.data(), static_cast<int>(boxes.size()));
+    return ev::fromBool(r);
+}
+
+Value aiComputeLeadAim(Value, std::span<const Value> a) {
+    if (a.size() < 10) return ev::null();
+    float v[10];
+    for (size_t i = 0; i < 10; ++i) v[i] = static_cast<float>(numAt(a, i));
+    brogameagent::LeadAimResult r =
+        brogameagent::computeLeadAim(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]);
+    ObjectBuilder o;
+    o.set("yaw", ev::fromDouble(r.aim.yaw));
+    o.set("pitch", ev::fromDouble(r.aim.pitch));
+    o.set("valid", ev::fromBool(r.valid));
+    o.set("timeToHit", ev::fromDouble(r.timeToHit));
+    return o.get();
+}
+
+Value gameComputeAim(Value, std::span<const Value> a) {
+    if (a.size() < 6) return ev::null();
+    brogameagent::AimResult aim = brogameagent::computeAim(
+        static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)),
+        static_cast<float>(numAt(a, 2)), static_cast<float>(numAt(a, 3)),
+        static_cast<float>(numAt(a, 4)), static_cast<float>(numAt(a, 5)));
+    ObjectBuilder o;
+    o.set("yaw", ev::fromDouble(aim.yaw));
+    o.set("pitch", ev::fromDouble(aim.pitch));
+    return o.get();
+}
+
+static void installRegisterCapability(ObjectBuilder& b) {
+    b.def("registerCapability", 2, [](Value, std::span<const Value> a) -> Value {
+        if (a.size() < 2 || !ev::isString(a[0]) || !ev::isObject(a[1])) {
+            return ev::throwTypeError("registerCapability(name, spec)");
+        }
+        static uint32_t s_nextId = 100;
+        ev::Persistent specRoot(a[1]);
+        Value idVal = ev::getProperty(specRoot.get(), "id");
+        uint32_t id = ev::isNumber(idVal) ? static_cast<uint32_t>(ev::toDouble(idVal)) : s_nextId++;
+        return ev::fromDouble(id);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Class Registration
 // ---------------------------------------------------------------------------
 
 void ensureAIClassesInstalled() {
@@ -334,72 +568,49 @@ void ensureAIClassesInstalled() {
     if (installed) return;
     installed = true;
 
-    g_navGridClass.install("NavGrid", 0, nullptr, decorateNavGridProto);
-    g_navMeshClass.install("NavMesh", 0, nullptr, decorateNavMeshProto);
-    g_agentClass.install("Agent", 0, nullptr, decorateAgentProto);
-    g_agentBindingClass.install("AgentBinding", 0, nullptr, decorateAgentBindingProto);
-    g_hexNavClass.install("HexNav", 0, nullptr, decorateHexNavProto);
-    g_worldClass.install("World", 0, nullptr, decorateWorldProto);
-
-    // Aliases with AI prefix
-    g_navGridClass.alias("AINavGrid");
-    g_navMeshClass.alias("AINavMesh");
-    g_agentClass.alias("AIAgent");
-    g_agentBindingClass.alias("AIAgentBinding");
-    g_hexNavClass.alias("AIHexNav");
-    g_worldClass.alias("AIWorld");
+    g_navGridClass.install("AINavGrid", 0, nullptr, decorateNavGridProto);
+    g_navMeshClass.install("AINavMesh", 0, nullptr, decorateNavMeshProto);
+    g_agentClass.install("AIAgent", 0, nullptr, decorateAgentProto);
+    g_agentBindingClass.install("AIAgentBinding", 0, nullptr, decorateAgentBindingProto);
+    g_unitClass.install("AIUnit", 0, nullptr, decorateUnitProto);
+    g_hexNavClass.install("AIHexNav", 0, nullptr, decorateHexNavProto);
+    g_worldClass.install("AIWorld", 0, nullptr, decorateWorldProto);
+    ensureAIMctsClassesInstalled();
+    ensureAIExtrasClassesInstalled();
 }
 
+// ---------------------------------------------------------------------------
+// Namespace Mounting
+// ---------------------------------------------------------------------------
+
 Value makeAiGameValue() {
+    ensureAIClassesInstalled();
     ObjectBuilder b;
-
-    // Constructors
-    b.set("NavGrid", g_navGridClass.constructor());
-    b.set("NavMesh", g_navMeshClass.constructor());
-    b.set("Agent", g_agentClass.constructor());
-    b.set("AgentBinding", g_agentBindingClass.constructor());
-    b.set("HexNav", g_hexNavClass.constructor());
-    b.set("World", g_worldClass.constructor());
-    b.set("GenericMcts", g_genericMctsClass.constructor());
-    b.set("Mcts", g_mctsClass.constructor());
-    b.set("DecoupledMcts", g_decoupledMctsClass.constructor());
-    b.set("TeamMcts", g_teamMctsClass.constructor());
-
-    // Navigation factories
     b.def("createNavGrid", 1, aiCreateNavGrid);
+    b.def("createHexNav", 1, aiCreateHexNav);
     b.def("bakeNavMesh", 1, aiBakeNavMesh);
     b.def("loadNavMesh", 1, aiLoadNavMesh);
-    b.def("buildFromMesh", 3, aiBuildFromMesh);
-
 #if BROGAMEAGENT_HAS_NAVMESH
     b.set("navMeshAvailable", ev::fromBool(true));
 #else
     b.set("navMeshAvailable", ev::fromBool(false));
 #endif
-
-    // Agent & World factories
     b.def("createAgent", 1, aiCreateAgent);
-    b.def("createAgentBinding", 1, aiCreateAgentBinding);
     b.def("createWorld", 0, aiCreateWorld);
-    b.def("createHexNav", 1, aiCreateHexNav);
-
-    // Perception
-    installPerception(b);
-
-    // Perception sub-object for namespace parity
-    ObjectBuilder perception;
-    installPerception(perception);
-    b.set("perception", perception.get());
-
-    // Steering
-    ObjectBuilder steer;
-    installSteering(steer);
-    b.set("steer", steer.get());
-    b.set("steering", steer.get());
-
-    // MCTS
+    b.def("hasLineOfSight", 5, [](Value, std::span<const Value> a) -> Value {
+        if (a.size() < 5) return ev::fromBool(false);
+        float fx = static_cast<float>(numAt(a, 0)), fz = static_cast<float>(numAt(a, 1));
+        float tx = static_cast<float>(numAt(a, 2)), tz = static_cast<float>(numAt(a, 3));
+        if (auto* ng = unwrapNavGrid(a[4])) return ev::fromBool(ng->grid && ng->grid->hasGridLOS({fx, fz}, {tx, tz}));
+        auto boxes = parseAABBArray(a[4]);
+        return ev::fromBool(brogameagent::hasLineOfSight({fx, fz}, {tx, tz}, boxes.data(), static_cast<int>(boxes.size())));
+    });
+    b.def("canSee", 8, aiCanSee);
+    b.def("computeAim", 6, gameComputeAim);
+    b.def("computeLeadAim", 10, aiComputeLeadAim);
+    installAIExtras(b);
     installAIMcts(b);
-
+    installRegisterCapability(b);
     return b.get();
 }
 
