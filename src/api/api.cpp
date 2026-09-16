@@ -3,6 +3,16 @@
 
 namespace brogameagent::api {
 
+static NavMeshHooks s_navMeshHooks;
+
+void setNavMeshHooks(const NavMeshHooks& hooks) {
+    s_navMeshHooks = hooks;
+}
+
+const NavMeshHooks& getNavMeshHooks() {
+    return s_navMeshHooks;
+}
+
 void installGameAi() {
     ensureAIClassesInstalled();
     ensureAIMctsClassesInstalled();

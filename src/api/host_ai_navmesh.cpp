@@ -1,3 +1,4 @@
+#include "api.h"
 #include "host_ai_internal.h"
 
 namespace brogameagent::api {
@@ -140,9 +141,14 @@ void decorateNavMeshProto(ObjectBuilder& b) {
 
     b.def("save", 0, [](Value self_, std::span<const Value>) -> Value {
         HostNavMesh* h = unwrapNavMesh(self_);
-        if (!h || !h->mesh || !h->mesh->valid()) return ev::null();
+        if (!h || !h->mesh) return ev::throwTypeError("save: invalid NavMesh");
         std::vector<uint8_t> bytes;
-        if (!h->mesh->saveTo(bytes)) return ev::null();
+        if (!h->mesh->saveTo(bytes)) {
+            if (h->mesh->supportsObstacles()) {
+                return ev::throwTypeError("save: dynamicObstacles meshes do not serialize");
+            }
+            return ev::throwTypeError("save: NavMesh is not baked");
+        }
         Value ab = ev::createArrayBuffer(static_cast<uint32_t>(bytes.size()));
         if (!ev::isObject(ab)) return ev::null();
         if (auto info = ev::arrayBufferInfo(ab)) {
@@ -236,6 +242,8 @@ void decorateNavMeshProto(ObjectBuilder& b) {
         if (id == 0) {
             return ev::throwError("addObstacle failed: " + h->mesh->lastError());
         }
+        const auto& hooks = getNavMeshHooks();
+        if (hooks.registerNavMeshForPump) hooks.registerNavMeshForPump(h->mesh);
         return ev::fromDouble(id);
     });
 
@@ -295,6 +303,14 @@ Value aiBakeNavMesh(Value, std::span<const Value> a) {
         indices = std::move(idx);
     }
 
+    const auto& hooks = getNavMeshHooks();
+    if (hooks.collectGeometry) {
+        std::string err;
+        if (!hooks.collectGeometry(root.get(), xyz, indices, err)) {
+            if (!err.empty()) return ev::throwTypeError(err);
+        }
+    }
+
     if (xyz.empty() || indices.empty()) {
         return ev::throwTypeError("bakeNavMesh: no geometry supplied");
     }
@@ -338,6 +354,10 @@ Value aiBakeNavMesh(Value, std::span<const Value> a) {
         return ev::throwError("bakeNavMesh failed: " + mesh->lastError());
     }
 
+    if (mesh->supportsObstacles() && hooks.registerNavMeshForPump) {
+        hooks.registerNavMeshForPump(mesh);
+    }
+
     return makeNavMeshHandle(std::move(mesh));
 }
 
@@ -359,6 +379,12 @@ Value aiLoadNavMesh(Value, std::span<const Value> a) {
     if (!mesh->loadFrom(ptr, len)) {
         return ev::throwError("loadNavMesh failed: " + mesh->lastError());
     }
+
+    const auto& hooks = getNavMeshHooks();
+    if (mesh->supportsObstacles() && hooks.registerNavMeshForPump) {
+        hooks.registerNavMeshForPump(mesh);
+    }
+
     return makeNavMeshHandle(std::move(mesh));
 }
 

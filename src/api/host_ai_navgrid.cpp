@@ -1,3 +1,4 @@
+#include "api.h"
 #include "host_ai_internal.h"
 
 namespace brogameagent::api {
@@ -244,6 +245,23 @@ Value aiCreateNavGrid(Value, std::span<const Value> a) {
         auto boxes = parseAABBArray(obsArr);
         for (const auto& box : boxes) {
             grid->addObstacle(box, static_cast<float>(padding));
+        }
+    }
+
+    Value fromPhys = ev::getProperty(root.get(), "fromPhysics");
+    if (!ev::isUndefined(fromPhys) && !ev::isNull(fromPhys) &&
+        !(ev::isBool(fromPhys) && !ev::toBool(fromPhys))) {
+        const auto& hooks = getNavMeshHooks();
+        if (hooks.collectObstacles) {
+            std::vector<brogameagent::AABB> boxes;
+            std::string err;
+            if (!hooks.collectObstacles(root.get(), static_cast<float>(minX), static_cast<float>(maxX),
+                                        static_cast<float>(minZ), static_cast<float>(maxZ), boxes, err)) {
+                if (!err.empty()) return ev::throwError(err);
+            }
+            for (const auto& box : boxes) {
+                grid->addObstacle(box, static_cast<float>(padding));
+            }
         }
     }
 
