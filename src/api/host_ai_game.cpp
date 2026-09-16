@@ -593,12 +593,20 @@ Value aiComputeLeadAim(Value, std::span<const Value> a) {
 }
 
 Value gameComputeAim(Value, std::span<const Value> a) {
-    if (a.size() < 6) return ev::null();
-    brogameagent::AimResult aim = brogameagent::computeAim(
-        static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)),
-        static_cast<float>(numAt(a, 2)), static_cast<float>(numAt(a, 3)),
-        static_cast<float>(numAt(a, 4)), static_cast<float>(numAt(a, 5)));
+    if (a.empty()) return ev::null();
+    float ox = 0, oy = 0, oz = 0, tx = 0, ty = 0, tz = 0;
+    if (a.size() >= 6 && !ev::isObject(a[0]) && !ev::isObject(a[1])) {
+        ox = static_cast<float>(numAt(a, 0)); oy = static_cast<float>(numAt(a, 1)); oz = static_cast<float>(numAt(a, 2));
+        tx = static_cast<float>(numAt(a, 3)); ty = static_cast<float>(numAt(a, 4)); tz = static_cast<float>(numAt(a, 5));
+    } else if (a.size() >= 2) {
+        auto p1 = parseVec3(a[0]), p2 = parseVec3(a[1]);
+        ox = p1.x; oy = p1.y; oz = p1.z; tx = p2.x; ty = p2.y; tz = p2.z;
+    } else {
+        return ev::null();
+    }
+    brogameagent::AimResult aim = brogameagent::computeAim(ox, oy, oz, tx, ty, tz);
     ObjectBuilder o;
+    o.set("valid", ev::fromBool(true));
     o.set("yaw", ev::fromDouble(aim.yaw));
     o.set("pitch", ev::fromDouble(aim.pitch));
     return o.get();

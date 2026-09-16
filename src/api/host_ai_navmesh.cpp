@@ -82,6 +82,17 @@ void decorateNavMeshProto(ObjectBuilder& b) {
         return makeVec3Value(out.x, out.y, out.z);
     });
 
+    b.def("samplePosition", 2, [](Value self, std::span<const Value> a) -> Value {
+        auto* h = unwrapNavMesh(self);
+        if (!h || !h->mesh || a.empty()) return ev::null();
+        bromath::Vec3 pos = parseVec3(a[0]);
+        bromath::Vec3 extents = (a.size() >= 2) ? parseVec3(a[1], brogameagent::NavMesh::kDefaultExtents)
+                                                : brogameagent::NavMesh::kDefaultExtents;
+        bromath::Vec3 out;
+        if (!h->mesh->nearestPoint(pos, out, extents)) return ev::null();
+        return makeVec3Value(out.x, out.y, out.z);
+    });
+
     b.def("nearestPoint", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh || a.empty()) return ev::null();
