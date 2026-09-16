@@ -39,6 +39,37 @@ if(BROGAMEAGENT_WITH_NAVMESH)
     add_test(NAME brogameagent_nav_mesh_test COMMAND brogameagent_nav_mesh_test)
 endif()
 
+# Bronze JavaScript binding (brogameagent_api): mount points, TypeErrors on
+# bad arguments, a NavGrid findPath round trip. Core-only.
+if(BROGAMEAGENT_ENABLE_API AND TARGET brogameagent_api)
+    add_executable(brogameagent_test_api test_game_ai_api.cpp)
+    target_link_libraries(brogameagent_test_api PRIVATE brogameagent_api bronze_runtime_shared)
+    if(MSVC)
+        target_compile_options(brogameagent_test_api PRIVATE /W4)
+    else()
+        target_compile_options(brogameagent_test_api PRIVATE -Wall -Wextra)
+    endif()
+    # bronze's shared runtime is built into BRONZE_SHARED_RUNTIME_DIR, not
+    # beside this executable, and the PE loader only looks beside the .exe
+    # (0xc0000135 + a modal "dll was not found" otherwise). Stage it next to
+    # the test as a post-build step and put both dirs on ctest's PATH.
+    if(WIN32)
+        add_custom_command(TARGET brogameagent_test_api POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:bronze_runtime_shared>
+                $<TARGET_FILE_DIR:brogameagent_test_api>
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_LINKER_FILE:bronze_runtime_shared>
+                $<TARGET_FILE_DIR:brogameagent_test_api>
+        )
+    endif()
+    add_test(NAME brogameagent_test_api COMMAND brogameagent_test_api)
+    if(WIN32)
+        set_tests_properties(brogameagent_test_api PROPERTIES
+            ENVIRONMENT "PATH=$<TARGET_FILE_DIR:bronze_runtime_shared>;$<TARGET_FILE_DIR:brogameagent_test_api>;$ENV{PATH}")
+    endif()
+endif()
+
 # The current test suite exercises the NN + learning layer (test_main.cpp
 # itself includes nn/factored.h), so it only builds when that layer is on.
 if(NOT BROGAMEAGENT_WITH_NN)
