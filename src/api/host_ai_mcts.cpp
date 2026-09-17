@@ -217,7 +217,8 @@ HostOptionMcts* unwrapOptionMcts(Value v) {
 // ---------------------------------------------------------------------------
 
 void ensureAIMctsClassesInstalled() {
-    static bool installed = false;
+    // Per thread, like ensureAIClassesInstalled.
+    static thread_local bool installed = false;
     if (installed) return;
     installed = true;
 
