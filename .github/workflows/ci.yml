@@ -20,6 +20,15 @@ concurrency:
 #     brogameagent/  <- this repo, checked out into a named path
 #     bromath/
 #     brotensor/
+#     bronze/        <- the JavaScript runtime brogameagent_api binds
+#     brass/         <- bronze's code generator
+#
+# bronze and brass are laid out by bronze's checkout-toolchain action and
+# compiled inside this build tree (bronze add_subdirectory()s brass), with the
+# job's own compiler and CRT — the api is bound across bronze's C++ embed
+# boundary, so a prebuilt bronze would be an unverifiable ABI hazard. That is
+# what makes brogameagent_test_api the check that the library works the way
+# bro uses it.
 #
 # Ninja on Linux/macOS: `cmake --build --parallel` with no count passes a bare
 # `-j` to make (unbounded), which oversubscribes the small hosted runners once
@@ -51,6 +60,8 @@ jobs:
         with:
           repository: wlejon/brotensor
           path: brotensor
+
+      - uses: wlejon/bronze/.github/actions/checkout-toolchain@main
 
       - name: Install Ninja (Linux)
         if: runner.os == 'Linux'
@@ -100,6 +111,8 @@ jobs:
         with:
           repository: wlejon/brotensor
           path: brotensor
+
+      - uses: wlejon/bronze/.github/actions/checkout-toolchain@main
 
       - name: Install gcovr + Ninja
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gcovr ninja-build
