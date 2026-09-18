@@ -164,6 +164,7 @@ add_library(brogameagent STATIC
     src/vec_simulation.cpp
     src/mcts.cpp
     src/generic_mcts.cpp
+    src/tot_reasoning.cpp
     src/capability_set.cpp
     src/capabilities.cpp
     src/scripted_minion_policy.cpp

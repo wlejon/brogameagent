@@ -79,6 +79,18 @@ if(BROGAMEAGENT_ENABLE_API AND TARGET brogameagent_api)
     endif()
 endif()
 
+# Tree-of-Thought MCTS reasoning engine unit tests. Core-only.
+add_executable(test_tot_reasoning
+    test_tot_reasoning.cpp
+)
+target_link_libraries(test_tot_reasoning PRIVATE brogameagent)
+if(MSVC)
+    target_compile_options(test_tot_reasoning PRIVATE /W4)
+else()
+    target_compile_options(test_tot_reasoning PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME test_tot_reasoning COMMAND test_tot_reasoning)
+
 # The current test suite exercises the NN + learning layer (test_main.cpp
 # itself includes nn/factored.h), so it only builds when that layer is on.
 if(NOT BROGAMEAGENT_WITH_NN)
