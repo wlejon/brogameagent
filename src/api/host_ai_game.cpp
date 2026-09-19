@@ -202,6 +202,8 @@ void decorateHexNavProto(ObjectBuilder& b) {
         const std::vector<int32_t>& labels = h->nav->components(id, clr);
         return makeInt32Array(labels.data(), labels.size());
     });
+
+    decorateHexNavExtras(b);  // field() — host_ai_world_extra.cpp
 }
 
 Value aiCreateHexNav(Value, std::span<const Value> a) {
@@ -555,6 +557,9 @@ void decorateWorldProto(ObjectBuilder& b) {
         HostWorld* w = unwrapWorld(self);
         return ev::fromDouble(w ? static_cast<double>(w->world.agents().size()) : 0.0);
     }, nullptr);
+
+    // findById() / registerAbility() / seed() — host_ai_world_extra.cpp
+    decorateWorldExtras(b);
 }
 
 Value aiCreateWorld(Value, std::span<const Value>) {

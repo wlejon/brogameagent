@@ -130,6 +130,43 @@ struct HostWorld {
         ev::Persistent value;
     };
     std::vector<Roster> roster;
+
+    /// registerAbility() callbacks, keyed by abilityId, plus the world's own
+    /// wrapper (the `world` argument every ability fn is handed).
+    ///
+    /// The old binding parked these in an `__abilityFns` object ON the
+    /// wrapper and captured `this_val` raw, so QuickJS's cycle collector
+    /// could still reclaim the World. bronze has no weak handle and no
+    /// native trace hook — an ev::Persistent is an unconditional root — so
+    /// the wrapper is rooted from the first JS ability until the realm ends.
+    /// That is a deliberate trade: the alternative is handing the fn a
+    /// second, non-owning wrapper, which would break `w === world` identity
+    /// and dangle if an app stashed it.
+    ev::Persistent selfValue;
+    bool selfRooted = false;
+    std::vector<std::pair<int, ev::Persistent>> abilityFns;
+
+    /// Expires when this HostWorld is destroyed. An AbilitySpec::fn survives
+    /// a World copy (an MCTS rollout clones the World), so a clone can still
+    /// hold the callback after the wrapper it came from is gone; the callback
+    /// checks this token instead of dereferencing a dangling host.
+    std::shared_ptr<int> life = std::make_shared<int>(1);
+
+    /// The JS wrapper for `agent` if it is on the roster, else undefined.
+    Value agentValue(const brogameagent::Agent* agent) const {
+        for (const auto& r : roster) {
+            if (r.agent == agent) return r.value.get();
+        }
+        return ev::undefined();
+    }
+
+    /// The callback registered for `abilityId`, or undefined.
+    Value abilityFn(int abilityId) const {
+        for (const auto& e : abilityFns) {
+            if (e.first == abilityId) return e.second.get();
+        }
+        return ev::undefined();
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -566,6 +603,14 @@ void decorateWorldProto(ObjectBuilder& b);
 Value aiCreateHexNav(Value self, std::span<const Value> a);
 Value aiCreateWorld(Value self, std::span<const Value> a);
 void ensureAIClassesInstalled();
+
+// The tail of the pre-transition HexNav / Agent / World surface
+// (host_ai_world_extra.cpp). Split out so host_ai_game.cpp stays well under
+// the file-size ceiling.
+void decorateHexNavExtras(ObjectBuilder& b);
+void decorateAgentExtras(ObjectBuilder& b);
+void decorateWorldExtras(ObjectBuilder& b);
+
 Value makeAiGameValue();
 Value makeBroAiValue();
 

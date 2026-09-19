@@ -2,6 +2,7 @@
 // snapshots, projectiles, vectorized simulation, and evaluator/rollout primitives.
 
 #include "host_ai_internal.h"
+#include "host_ai_mcts_shared.h"
 #include <brogameagent/brogameagent.h>
 #include <brogameagent/reward.h>
 #include <brogameagent/vec_simulation.h>
@@ -17,16 +18,6 @@ HostClass g_rewardTrackerClass;
 
 namespace {
 
-struct HostAgentSnapshot {
-    uint32_t tag = kHostAgentSnapshotTag;
-    brogameagent::AgentSnapshot s;
-};
-
-struct HostWorldSnapshot {
-    uint32_t tag = kHostWorldSnapshotTag;
-    brogameagent::WorldSnapshot s;
-};
-
 struct HostVecSim {
     uint32_t tag = kHostVecSimTag;
     std::unique_ptr<brogameagent::VecSimulation> sim;
@@ -36,18 +27,6 @@ struct HostRewardTracker {
     uint32_t tag = kHostRewardTrackerTag;
     brogameagent::RewardTracker tracker;
 };
-
-HostAgentSnapshot* unwrapAgentSnapshot(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    auto* h = static_cast<HostAgentSnapshot*>(ev::handleData(v));
-    return (h && h->tag == kHostAgentSnapshotTag) ? h : nullptr;
-}
-
-HostWorldSnapshot* unwrapWorldSnapshot(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    auto* h = static_cast<HostWorldSnapshot*>(ev::handleData(v));
-    return (h && h->tag == kHostWorldSnapshotTag) ? h : nullptr;
-}
 
 HostVecSim* unwrapVecSim(Value v) {
     if (!ev::isObject(v)) return nullptr;
@@ -185,6 +164,15 @@ void ensureAIExtrasClassesInstalled() {
             o.set("deaths", ev::fromDouble(delta.deaths));
             o.set("distanceTravelled", ev::fromDouble(delta.distanceTravelled));
             return o.get();
+        });
+
+        b.def("reset", 2, [](Value self, std::span<const Value> a) -> Value {
+            auto* rt = unwrapRewardTracker(self);
+            if (!rt || a.size() < 2) return ev::undefined();
+            auto* ag = unwrapAgent(a[0]);
+            auto* w = unwrapWorld(a[1]);
+            if (ag && w) rt->tracker.reset(ag->agent, w->world);
+            return ev::undefined();
         });
     });
 
@@ -428,9 +416,8 @@ void installAIExtras(ObjectBuilder& game) {
         return ev::undefined();
     });
 
-    game.def("patchSnapshotWithParticles", 2, [](Value, std::span<const Value>) -> Value {
-        return ev::undefined();
-    });
+    // patchSnapshotWithParticles is installed by installAIBelief, which owns
+    // the particle-map marshalling.
 
     // ── Free Projectile Helpers ──────────────────────────────────────────────
     game.def("spawnProjectile", 2, [](Value, std::span<const Value> a) -> Value {
@@ -471,9 +458,15 @@ void installAIExtras(ObjectBuilder& game) {
             cfg.attackRange        = static_cast<float>(getDoubleProperty(root.get(), "attackRange", cfg.attackRange));
             cfg.attacksPerSec      = static_cast<float>(getDoubleProperty(root.get(), "attacksPerSec", cfg.attacksPerSec));
             cfg.moveSpeed          = static_cast<float>(getDoubleProperty(root.get(), "moveSpeed", cfg.moveSpeed));
+            cfg.maxAccel           = static_cast<float>(getDoubleProperty(root.get(), "maxAccel", cfg.maxAccel));
+            cfg.maxTurnRate        = static_cast<float>(getDoubleProperty(root.get(), "maxTurnRate", cfg.maxTurnRate));
+            cfg.radius             = static_cast<float>(getDoubleProperty(root.get(), "radius", cfg.radius));
             cfg.rewardDamageDealt  = static_cast<float>(getDoubleProperty(root.get(), "rewardDamageDealt", cfg.rewardDamageDealt));
+            cfg.rewardDamageTakenMul = static_cast<float>(getDoubleProperty(root.get(), "rewardDamageTakenMul", cfg.rewardDamageTakenMul));
             cfg.rewardKill         = static_cast<float>(getDoubleProperty(root.get(), "rewardKill", cfg.rewardKill));
             cfg.rewardDeath        = static_cast<float>(getDoubleProperty(root.get(), "rewardDeath", cfg.rewardDeath));
+            cfg.rewardStep         = static_cast<float>(getDoubleProperty(root.get(), "rewardStep", cfg.rewardStep));
+            cfg.rewardTimeout      = static_cast<float>(getDoubleProperty(root.get(), "rewardTimeout", cfg.rewardTimeout));
         }
         auto cell = std::make_unique<HostVecSim>();
         cell->sim = std::make_unique<brogameagent::VecSimulation>(cfg);
@@ -524,37 +517,10 @@ void installAIExtras(ObjectBuilder& game) {
         game.set("MOVE_DIR", m.get());
     }
 
-    // ── Stubs ────────────────────────────────────────────────────────────────
-    {
-        ObjectBuilder nn;
-        nn.set("available", ev::fromBool(false));
-        ObjectBuilder gpu;
-        gpu.set("available", ev::fromBool(false));
-        nn.set("gpu", gpu.get());
-        game.set("nn", nn.get());
-    }
-    {
-        ObjectBuilder learn;
-        learn.set("available", ev::fromBool(false));
-        game.set("learn", learn.get());
-    }
-    {
-        ObjectBuilder grid;
-        grid.set("available", ev::fromBool(false));
-        game.set("grid", grid.get());
-    }
-
-    // ── Primitives ───────────────────────────────────────────────────────────
-    game.def("createHpDeltaEvaluator", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
-    game.def("createTeamHpDeltaEvaluator", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
-    game.def("createTeamAdvantageEvaluator", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
-    game.def("createTeamPositionEvaluator", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
-    game.def("createRandomRollout", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
-    game.def("createAggressiveRollout", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
-    game.def("createScriptedRollout", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
-    game.def("createUniformPrior", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
-    game.def("createAttackBiasPrior", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
-    game.def("createTacticPrior", 0, [](Value, std::span<const Value>) -> Value { return ObjectBuilder{}.get(); });
+    // nn / learn / grid and the evaluator-prior-rollout factories are
+    // installed by installAINeural, installAILearn, installAIGrid and
+    // installAIPrimitives — this file used to publish `{available:false}`
+    // stubs and factories returning `{}` in their place.
 }
 
 } // namespace brogameagent::api

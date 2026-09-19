@@ -465,6 +465,8 @@ void decorateAgentProto(ObjectBuilder& b) {
         }
         return makeAgentBindingHandle(b);
     });
+
+    decorateAgentExtras(b);  // applyAction() — host_ai_world_extra.cpp
 }
 
 // ---------------------------------------------------------------------------

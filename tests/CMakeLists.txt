@@ -41,42 +41,71 @@ endif()
 
 # Bronze JavaScript binding (brogameagent_api): mount points, TypeErrors on
 # bad arguments, a NavGrid findPath round trip. Core-only.
+# brogameagent_test_api_restored covers the surface the bronze port dropped
+# and this tree restored: World.findById/registerAbility/seed,
+# Agent.applyAction, HexNav.field, and the nn / learn / grid namespaces.
 if(BROGAMEAGENT_ENABLE_API AND TARGET brogameagent_api)
-    add_executable(brogameagent_test_api test_game_ai_api.cpp)
-    target_link_libraries(brogameagent_test_api PRIVATE brogameagent_api bronze_runtime_shared)
-    if(MSVC)
-        target_compile_options(brogameagent_test_api PRIVATE /W4)
-    else()
-        target_compile_options(brogameagent_test_api PRIVATE -Wall -Wextra)
+    # With the NN layer on, brogameagent_api links brotensor_api, whose
+    # bronze-compiled tensor.o references brass_gc_write_barrier the way a
+    # loaded module would — and that symbol is defined BOTH by brass.lib and
+    # by bronze_runtime_shared.dll. Naming brass first and /INCLUDE-ing a
+    # symbol only brass's GC object defines forces that object in before any
+    # static reference exists, so the DLL's member is never pulled (LNK2005
+    # otherwise). Same recipe as bro's bronze_host and brotensor's own
+    # test_api.
+    set(_bga_brass "")
+    if(TARGET brass)
+        set(_bga_brass brass)
     endif()
-    # bronze's shared runtime is built into BRONZE_SHARED_RUNTIME_DIR, not
-    # beside this executable, and the PE loader only looks beside the .exe
-    # (0xc0000135 + a modal "dll was not found" otherwise). Stage it next to
-    # the test as a post-build step and put both dirs on ctest's PATH.
-    if(WIN32)
-        add_custom_command(TARGET brogameagent_test_api POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:bronze_runtime_shared>
-                $<TARGET_FILE_DIR:brogameagent_test_api>
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_LINKER_FILE:bronze_runtime_shared>
-                $<TARGET_FILE_DIR:brogameagent_test_api>
-        )
-    endif()
-    # It runs JavaScript, which brass compiles to machine code for the target;
-    # on one brass has no code generator for (BRASS_HOST_BACKEND, decided in
-    # brass's CMakeLists — Apple Silicon today) that code cannot run. The
-    # executable still builds there, which is the check that the embed links;
-    # the test is not registered rather than registered to bus-error.
-    if(NOT BRASS_HOST_BACKEND)
-        message(STATUS "brogameagent: brogameagent_test_api not registered (brass has no code generator for this target)")
-    else()
-        add_test(NAME brogameagent_test_api COMMAND brogameagent_test_api)
-        if(WIN32)
-            set_tests_properties(brogameagent_test_api PROPERTIES
-                ENVIRONMENT "PATH=$<TARGET_FILE_DIR:bronze_runtime_shared>;$<TARGET_FILE_DIR:brogameagent_test_api>;$ENV{PATH}")
+
+    foreach(_bga_api_test IN ITEMS
+            "brogameagent_test_api:test_game_ai_api.cpp"
+            "brogameagent_test_api_restored:test_game_ai_api_restored.cpp")
+        string(REPLACE ":" ";" _bga_pair "${_bga_api_test}")
+        list(GET _bga_pair 0 _t)
+        list(GET _bga_pair 1 _src)
+
+        add_executable(${_t} ${_src})
+        target_link_libraries(${_t} PRIVATE
+            ${_bga_brass} brogameagent_api bronze_runtime_shared)
+        if(MSVC AND _bga_brass)
+            target_link_options(${_t} PRIVATE "/INCLUDE:brass_gc_card_table_base")
         endif()
-    endif()
+        if(MSVC)
+            target_compile_options(${_t} PRIVATE /W4)
+        else()
+            target_compile_options(${_t} PRIVATE -Wall -Wextra)
+        endif()
+        # bronze's shared runtime is built into BRONZE_SHARED_RUNTIME_DIR, not
+        # beside this executable, and the PE loader only looks beside the .exe
+        # (0xc0000135 + a modal "dll was not found" otherwise). Stage it next to
+        # the test as a post-build step and put both dirs on ctest's PATH.
+        if(WIN32)
+            add_custom_command(TARGET ${_t} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:bronze_runtime_shared>
+                    $<TARGET_FILE_DIR:${_t}>
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_LINKER_FILE:bronze_runtime_shared>
+                    $<TARGET_FILE_DIR:${_t}>
+            )
+        endif()
+        # It runs JavaScript, which brass compiles to machine code for the
+        # target; on one brass has no code generator for (BRASS_HOST_BACKEND,
+        # decided in brass's CMakeLists — Apple Silicon today) that code cannot
+        # run. The executable still builds there, which is the check that the
+        # embed links; the test is not registered rather than registered to
+        # bus-error.
+        if(NOT BRASS_HOST_BACKEND)
+            message(STATUS "brogameagent: ${_t} not registered (brass has no code generator for this target)")
+        else()
+            add_test(NAME ${_t} COMMAND ${_t})
+            if(WIN32)
+                set_tests_properties(${_t} PROPERTIES
+                    ENVIRONMENT "PATH=$<TARGET_FILE_DIR:bronze_runtime_shared>;$<TARGET_FILE_DIR:${_t}>;$ENV{PATH}")
+            endif()
+        endif()
+    endforeach()
 endif()
 
 # Tree-of-Thought MCTS reasoning engine unit tests. Core-only.
