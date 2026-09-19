@@ -241,6 +241,10 @@ target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:bromath::bromath>)
 # layer is built.
 if(BROGAMEAGENT_WITH_NN)
     target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:brotensor::brotensor>)
+    # Lets consumers (notably src/api) compile the nn/learn/grid JS surface
+    # only when the layer behind it exists, the way BROGAMEAGENT_HAS_NAVMESH
+    # gates the navmesh surface.
+    target_compile_definitions(brogameagent PUBLIC BROGAMEAGENT_HAS_NN=1)
 endif()
 
 if(MSVC)
