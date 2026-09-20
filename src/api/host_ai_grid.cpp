@@ -135,9 +135,9 @@ Value createObsWindow(std::span<const Value> a) {
     if (ev::isObject(layersV)) {
         ev::Persistent arr(layersV);
         Value lenV = ev::getProperty(arr.get(), "length");
-        const uint32_t n = (ev::isUndefined(lenV) || ev::isObject(lenV))
-                               ? 0u
-                               : static_cast<uint32_t>(ev::toDouble(lenV));
+        const uint32_t n = ev::isNumber(lenV)
+                               ? static_cast<uint32_t>(ev::toDouble(lenV))
+                               : 0u;
         for (uint32_t i = 0; i < n; ++i) {
             Value loV = ev::getElement(arr.get(), i);
             if (!ev::isObject(loV)) continue;
@@ -157,9 +157,9 @@ Value createObsWindow(std::span<const Value> a) {
             L.enumerate_fn = [d, idx]() -> size_t {
                 bool ok = false;
                 Value r = callJs(d->enumerateFns[idx], ev::undefined(), {}, &ok);
-                if (!ok || ev::isObject(r)) return 0;
+                if (!ok || !ev::isNumber(r)) return 0;
                 const double n2 = ev::toDouble(r);
-                return n2 > 0 ? static_cast<size_t>(n2) : 0;
+                return (std::isfinite(n2) && n2 > 0) ? static_cast<size_t>(n2) : 0;
             };
             L.sample_fn = [d, idx, chan](size_t i) -> grid::EntityCell {
                 grid::EntityCell c;
@@ -436,8 +436,9 @@ Value generateBC(std::span<const Value> a) {
         Value args[2] = {makeFloat32Array(obs.data(), obs.size()), makeIntArrayValue(legal)};
         bool ok = false;
         Value r = callJs(heuristic, ev::undefined(), std::span<const Value>(args, 2), &ok);
-        if (!ok || ev::isObject(r)) return -1;
-        return static_cast<int>(ev::toDouble(r));
+        if (!ok || !ev::isNumber(r)) return -1;
+        double d = ev::toDouble(r);
+        return (!std::isfinite(d)) ? -1 : static_cast<int>(d);
     };
 
     grid::BCConfig cfg;
@@ -451,9 +452,9 @@ Value generateBC(std::span<const Value> a) {
     if (ev::isObject(startsV)) {
         ev::Persistent arr(startsV);
         Value lenV = ev::getProperty(arr.get(), "length");
-        const uint32_t n = (ev::isUndefined(lenV) || ev::isObject(lenV))
-                               ? 0u
-                               : static_cast<uint32_t>(ev::toDouble(lenV));
+        const uint32_t n = ev::isNumber(lenV)
+                               ? static_cast<uint32_t>(ev::toDouble(lenV))
+                               : 0u;
         starts.reserve(n);
         for (uint32_t i = 0; i < n; ++i) {
             starts.push_back(std::any{JsSnapshot(ev::getElement(arr.get(), i))});
@@ -490,7 +491,7 @@ std::vector<grid::FailureStep> readFailureTail(Value arr) {
     if (!ev::isObject(arr)) return out;
     ev::Persistent root(arr);
     Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return out;
+    if (!ev::isNumber(lenV)) return out;
     const uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
     out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {

@@ -125,9 +125,9 @@ void rewireGenericValue(HostGenericMcts* h) {
         ev::Persistent obsV(makeFloat32Array(obs.data(), obs.size()));
         Value arg = obsV.get();
         auto r = ev::call(fn.get(), ev::undefined(), std::span<const Value>(&arg, 1));
-        if (r.thrown) return 0.0f;
+        if (r.thrown || !ev::isNumber(r.value)) return 0.0f;
         double d = ev::toDouble(r.value);
-        return std::isnan(d) ? 0.0f : static_cast<float>(d);
+        return (!std::isfinite(d)) ? 0.0f : static_cast<float>(d);
     });
 }
 
@@ -559,7 +559,7 @@ void installAIMcts(ObjectBuilder& game) {
                 acts.reserve(n);
                 for (uint32_t i = 0; i < n; ++i) {
                     Value el = ev::getElement(arr.get(), i);
-                    if (!ev::isUndefined(el) && !ev::isObject(el)) {
+                    if (ev::isNumber(el)) {
                         acts.push_back(static_cast<int>(ev::toDouble(el)));
                     }
                 }

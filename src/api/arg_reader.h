@@ -16,7 +16,7 @@ using Value = bronze::Value;
 inline double numAt(std::span<const Value> args, size_t i) {
     if (i >= args.size()) return 0.0;
     Value v = args[i];
-    if (ev::isObject(v)) return 0.0;
+    if (!ev::isNumber(v)) return 0.0;
     double d = ev::toDouble(v);
     return std::isnan(d) ? 0.0 : d;
 }
@@ -36,7 +36,8 @@ inline int64_t i64At(std::span<const Value> args, size_t i) {
 inline uint64_t u64At(std::span<const Value> args, size_t i) {
     if (i >= args.size()) return 0;
     Value v = args[i];
-    if (ev::isObject(v)) return 0;
+    if (ev::isBigInt(v)) return ev::toUint64(v);
+    if (!ev::isNumber(v)) return 0;
     return ev::toUint64(v);
 }
 
@@ -63,13 +64,17 @@ public:
     explicit ArgReader(std::span<const Value> args) : args_(args) {}
 
     double getDouble(size_t i, double def = 0.0) const {
-        return hasArg(args_, i) ? numAt(args_, i) : def;
+        if (i >= args_.size() || !ev::isNumber(args_[i])) return def;
+        double d = ev::toDouble(args_[i]);
+        return std::isnan(d) ? def : d;
     }
     int getInt(size_t i, int def = 0) const {
-        return hasArg(args_, i) ? i32At(args_, i) : def;
+        if (i >= args_.size() || !ev::isNumber(args_[i])) return def;
+        return i32At(args_, i);
     }
     uint32_t getUint(size_t i, uint32_t def = 0) const {
-        return hasArg(args_, i) ? u32At(args_, i) : def;
+        if (i >= args_.size() || !ev::isNumber(args_[i])) return def;
+        return u32At(args_, i);
     }
     bool getBool(size_t i, bool def = false) const {
         return hasArg(args_, i) ? boolAt(args_, i) : def;

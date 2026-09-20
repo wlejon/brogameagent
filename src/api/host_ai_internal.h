@@ -339,9 +339,9 @@ inline double getDoubleProperty(Value obj, const char* key, double def = 0.0) {
     if (!ev::isObject(obj)) return def;
     ev::Persistent root(obj);
     Value v = ev::getProperty(root.get(), key);
-    if (ev::isUndefined(v) || ev::isNull(v) || ev::isObject(v)) return def;
+    if (!ev::isNumber(v)) return def;
     double d = ev::toDouble(v);
-    return std::isnan(d) ? def : d;
+    return (!std::isfinite(d)) ? def : d;
 }
 
 inline uint64_t getU64Property(Value obj, const char* key, uint64_t def = 0) {
@@ -366,16 +366,16 @@ inline bromath::Vec2 parseVec2(Value v, bromath::Vec2 def = {0.0f, 0.0f}) {
     Value xV = ev::getProperty(root.get(), "x");
     Value zV = ev::getProperty(root.get(), "z");
     if (ev::isUndefined(zV)) zV = ev::getProperty(root.get(), "y");
-    if (!ev::isUndefined(xV) || !ev::isUndefined(zV)) {
-        float x = (!ev::isUndefined(xV) && !ev::isObject(xV)) ? static_cast<float>(ev::toDouble(xV)) : def.x;
-        float z = (!ev::isUndefined(zV) && !ev::isObject(zV)) ? static_cast<float>(ev::toDouble(zV)) : def.y;
+    if (ev::isNumber(xV) || ev::isNumber(zV)) {
+        float x = ev::isNumber(xV) ? static_cast<float>(ev::toDouble(xV)) : def.x;
+        float z = ev::isNumber(zV) ? static_cast<float>(ev::toDouble(zV)) : def.y;
         return {x, z};
     }
     Value e0 = ev::getElement(root.get(), 0);
     Value e1 = ev::getElement(root.get(), 1);
     if (!ev::isUndefined(e0) && !ev::isUndefined(e1)) {
-        float x = !ev::isObject(e0) ? static_cast<float>(ev::toDouble(e0)) : def.x;
-        float z = !ev::isObject(e1) ? static_cast<float>(ev::toDouble(e1)) : def.y;
+        float x = ev::isNumber(e0) ? static_cast<float>(ev::toDouble(e0)) : def.x;
+        float z = ev::isNumber(e1) ? static_cast<float>(ev::toDouble(e1)) : def.y;
         return {x, z};
     }
     return def;
@@ -387,19 +387,19 @@ inline bromath::Vec3 parseVec3(Value v, bromath::Vec3 def = {0.0f, 0.0f, 0.0f}) 
     Value xV = ev::getProperty(root.get(), "x");
     Value yV = ev::getProperty(root.get(), "y");
     Value zV = ev::getProperty(root.get(), "z");
-    if (!ev::isUndefined(xV) || !ev::isUndefined(yV) || !ev::isUndefined(zV)) {
-        float x = (!ev::isUndefined(xV) && !ev::isObject(xV)) ? static_cast<float>(ev::toDouble(xV)) : def.x;
-        float y = (!ev::isUndefined(yV) && !ev::isObject(yV)) ? static_cast<float>(ev::toDouble(yV)) : def.y;
-        float z = (!ev::isUndefined(zV) && !ev::isObject(zV)) ? static_cast<float>(ev::toDouble(zV)) : def.z;
+    if (ev::isNumber(xV) || ev::isNumber(yV) || ev::isNumber(zV)) {
+        float x = ev::isNumber(xV) ? static_cast<float>(ev::toDouble(xV)) : def.x;
+        float y = ev::isNumber(yV) ? static_cast<float>(ev::toDouble(yV)) : def.y;
+        float z = ev::isNumber(zV) ? static_cast<float>(ev::toDouble(zV)) : def.z;
         return {x, y, z};
     }
     Value e0 = ev::getElement(root.get(), 0);
     Value e1 = ev::getElement(root.get(), 1);
     Value e2 = ev::getElement(root.get(), 2);
     if (!ev::isUndefined(e0) && !ev::isUndefined(e1) && !ev::isUndefined(e2)) {
-        float x = !ev::isObject(e0) ? static_cast<float>(ev::toDouble(e0)) : def.x;
-        float y = !ev::isObject(e1) ? static_cast<float>(ev::toDouble(e1)) : def.y;
-        float z = !ev::isObject(e2) ? static_cast<float>(ev::toDouble(e2)) : def.z;
+        float x = ev::isNumber(e0) ? static_cast<float>(ev::toDouble(e0)) : def.x;
+        float y = ev::isNumber(e1) ? static_cast<float>(ev::toDouble(e1)) : def.y;
+        float z = ev::isNumber(e2) ? static_cast<float>(ev::toDouble(e2)) : def.z;
         return {x, y, z};
     }
     return def;
@@ -414,7 +414,7 @@ inline brogameagent::AABB parseAABB(Value v) {
     Value minZV = ev::getProperty(root.get(), "minZ");
     Value maxXV = ev::getProperty(root.get(), "maxX");
     Value maxZV = ev::getProperty(root.get(), "maxZ");
-    if (!ev::isUndefined(minXV) && !ev::isUndefined(minZV) && !ev::isUndefined(maxXV) && !ev::isUndefined(maxZV)) {
+    if (ev::isNumber(minXV) && ev::isNumber(minZV) && ev::isNumber(maxXV) && ev::isNumber(maxZV)) {
         float x0 = static_cast<float>(ev::toDouble(minXV));
         float z0 = static_cast<float>(ev::toDouble(minZV));
         float x1 = static_cast<float>(ev::toDouble(maxXV));
@@ -435,21 +435,21 @@ inline brogameagent::AABB parseAABB(Value v) {
     Value wV = ev::getProperty(root.get(), "width");
     Value dV = ev::getProperty(root.get(), "depth");
 
-    if (!ev::isUndefined(hwV) || !ev::isUndefined(hdV)) {
-        box.hw = !ev::isUndefined(hwV) ? static_cast<float>(ev::toDouble(hwV)) : 0.5f;
-        box.hd = !ev::isUndefined(hdV) ? static_cast<float>(ev::toDouble(hdV)) : 0.5f;
-        box.cx = !ev::isUndefined(cxV) ? static_cast<float>(ev::toDouble(cxV)) : (!ev::isUndefined(xV) ? static_cast<float>(ev::toDouble(xV)) : 0.0f);
-        box.cz = !ev::isUndefined(czV) ? static_cast<float>(ev::toDouble(czV)) : (!ev::isUndefined(zV) ? static_cast<float>(ev::toDouble(zV)) : 0.0f);
+    if (ev::isNumber(hwV) || ev::isNumber(hdV)) {
+        box.hw = ev::isNumber(hwV) ? static_cast<float>(ev::toDouble(hwV)) : 0.5f;
+        box.hd = ev::isNumber(hdV) ? static_cast<float>(ev::toDouble(hdV)) : 0.5f;
+        box.cx = ev::isNumber(cxV) ? static_cast<float>(ev::toDouble(cxV)) : (ev::isNumber(xV) ? static_cast<float>(ev::toDouble(xV)) : 0.0f);
+        box.cz = ev::isNumber(czV) ? static_cast<float>(ev::toDouble(czV)) : (ev::isNumber(zV) ? static_cast<float>(ev::toDouble(zV)) : 0.0f);
         return box;
     }
 
-    if (!ev::isUndefined(wV) && !ev::isUndefined(dV)) {
+    if (ev::isNumber(wV) && ev::isNumber(dV)) {
         float w = static_cast<float>(ev::toDouble(wV));
         float d = static_cast<float>(ev::toDouble(dV));
-        float x = !ev::isUndefined(xV) ? static_cast<float>(ev::toDouble(xV)) : 0.0f;
-        float z = !ev::isUndefined(zV) ? static_cast<float>(ev::toDouble(zV)) : 0.0f;
-        box.cx = !ev::isUndefined(cxV) ? static_cast<float>(ev::toDouble(cxV)) : (x + 0.5f * w);
-        box.cz = !ev::isUndefined(czV) ? static_cast<float>(ev::toDouble(czV)) : (z + 0.5f * d);
+        float x = ev::isNumber(xV) ? static_cast<float>(ev::toDouble(xV)) : 0.0f;
+        float z = ev::isNumber(zV) ? static_cast<float>(ev::toDouble(zV)) : 0.0f;
+        box.cx = ev::isNumber(cxV) ? static_cast<float>(ev::toDouble(cxV)) : (x + 0.5f * w);
+        box.cz = ev::isNumber(czV) ? static_cast<float>(ev::toDouble(czV)) : (z + 0.5f * d);
         box.hw = 0.5f * w;
         box.hd = 0.5f * d;
         return box;
@@ -463,7 +463,7 @@ inline std::vector<brogameagent::AABB> parseAABBArray(Value v) {
     if (!ev::isObject(v)) return result;
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return result;
+    if (!ev::isNumber(lenV)) return result;
     uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
     result.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
@@ -515,13 +515,13 @@ inline bool readFloatVector(Value v, std::vector<float>& out) {
     if (!ev::isObject(v)) return false;
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
+    if (!ev::isNumber(lenV)) return false;
     uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
     out.clear();
     out.reserve(len);
     for (uint32_t i = 0; i < len; ++i) {
         Value e = ev::getElement(root.get(), i);
-        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
+        double d = ev::isNumber(e) ? ev::toDouble(e) : 0.0;
         out.push_back(static_cast<float>(d));
     }
     return true;
@@ -546,13 +546,13 @@ inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
     if (!ev::isObject(v)) return false;
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
+    if (!ev::isNumber(lenV)) return false;
     uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
     out.clear();
     out.reserve(len);
     for (uint32_t i = 0; i < len; ++i) {
         Value e = ev::getElement(root.get(), i);
-        uint32_t u = (!ev::isUndefined(e) && !ev::isObject(e)) ? static_cast<uint32_t>(ev::toDouble(e)) : 0u;
+        uint32_t u = ev::isNumber(e) ? static_cast<uint32_t>(ev::toDouble(e)) : 0u;
         out.push_back(u);
     }
     return true;

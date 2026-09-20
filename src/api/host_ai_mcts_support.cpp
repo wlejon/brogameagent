@@ -79,8 +79,8 @@ public:
             uint32_t n = std::min<uint32_t>(len, static_cast<uint32_t>(actions.size()));
             for (uint32_t i = 0; i < n; ++i) {
                 Value el = ev::getElement(res.get(), i);
-                double d = (!ev::isUndefined(el) && !ev::isObject(el)) ? ev::toDouble(el) : 0.0;
-                if (std::isnan(d)) d = 0.0;
+                double d = ev::isNumber(el) ? ev::toDouble(el) : 0.0;
+                if (!std::isfinite(d)) d = 0.0;
                 weights[i] = static_cast<float>(std::max(0.0, d));
             }
         }
@@ -99,9 +99,9 @@ public:
         ev::Persistent worldV(buildWorldView(world));
         Value args[2] = { worldV.get(), ev::fromDouble(heroId) };
         auto r = ev::call(fn_.get(), ev::undefined(), args);
-        if (r.thrown) return 0.0f;
+        if (r.thrown || !ev::isNumber(r.value)) return 0.0f;
         double d = ev::toDouble(r.value);
-        if (std::isnan(d)) return 0.0f;
+        if (!std::isfinite(d)) return 0.0f;
         return static_cast<float>(std::clamp(d, -1.0, 1.0));
     }
 
@@ -117,9 +117,9 @@ public:
         ev::Persistent worldV(buildWorldView(world));
         Value args[2] = { worldV.get(), ev::fromDouble(teamId) };
         auto r = ev::call(fn_.get(), ev::undefined(), args);
-        if (r.thrown) return 0.0f;
+        if (r.thrown || !ev::isNumber(r.value)) return 0.0f;
         double d = ev::toDouble(r.value);
-        if (std::isnan(d)) return 0.0f;
+        if (!std::isfinite(d)) return 0.0f;
         return static_cast<float>(std::clamp(d, -1.0, 1.0));
     }
 
@@ -495,8 +495,7 @@ bgm::Commander::AssignFn makeJsAssigner(Value fn) {
             uint32_t n = std::min<uint32_t>(len, static_cast<uint32_t>(heroes.size()));
             for (uint32_t i = 0; i < n; ++i) {
                 Value el = ev::getElement(res.get(), i);
-                out[i] = (!ev::isUndefined(el) && !ev::isObject(el))
-                    ? static_cast<int>(ev::toDouble(el)) : 0;
+                out[i] = ev::isNumber(el) ? static_cast<int>(ev::toDouble(el)) : 0;
             }
         }
         return out;
