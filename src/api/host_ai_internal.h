@@ -131,19 +131,11 @@ struct HostWorld {
     };
     std::vector<Roster> roster;
 
-    /// registerAbility() callbacks, keyed by abilityId, plus the world's own
-    /// wrapper (the `world` argument every ability fn is handed).
-    ///
-    /// The old binding parked these in an `__abilityFns` object ON the
-    /// wrapper and captured `this_val` raw, so QuickJS's cycle collector
-    /// could still reclaim the World. bronze has no weak handle and no
-    /// native trace hook — an ev::Persistent is an unconditional root — so
-    /// the wrapper is rooted from the first JS ability until the realm ends.
-    /// That is a deliberate trade: the alternative is handing the fn a
-    /// second, non-owning wrapper, which would break `w === world` identity
-    /// and dangle if an app stashed it.
-    ev::Persistent selfValue;
-    bool selfRooted = false;
+    /// registerAbility() callbacks, keyed by abilityId.
+    /// To avoid an uncollectable reference cycle (World handle -> HostWorld -> selfValue -> World handle),
+    /// the World handle is not permanently rooted in an ev::Persistent. Instead, activeSelf provides
+    /// the caller's receiver during dispatch, falling back to a non-owning wrapper if invoked standalone.
+    Value activeSelf = ev::undefined();
     std::vector<std::pair<int, ev::Persistent>> abilityFns;
 
     /// Expires when this HostWorld is destroyed. An AbilitySpec::fn survives
@@ -167,6 +159,24 @@ struct HostWorld {
         }
         return ev::undefined();
     }
+};
+
+struct ActiveWorldScope {
+    HostWorld* w = nullptr;
+    Value prev = ev::undefined();
+    ActiveWorldScope(HostWorld* world, Value self) : w(world) {
+        if (w) {
+            prev = w->activeSelf;
+            w->activeSelf = self;
+        }
+    }
+    ~ActiveWorldScope() {
+        if (w) {
+            w->activeSelf = prev;
+        }
+    }
+    ActiveWorldScope(const ActiveWorldScope&) = delete;
+    ActiveWorldScope& operator=(const ActiveWorldScope&) = delete;
 };
 
 // ---------------------------------------------------------------------------

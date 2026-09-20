@@ -117,13 +117,15 @@ void decorateGridRecorder(ObjectBuilder& b) {
     });
     b.def("writeRoster", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapGridRecorder(self);
-        if (!d || !d->rec || a.empty()) return ev::undefined();
+        if (!d || !d->rec) return ev::throwTypeError("GenericGridRecorder.prototype.writeRoster: invalid receiver");
+        if (a.empty()) return ev::throwTypeError("GenericGridRecorder.prototype.writeRoster: roster argument required");
         d->rec->write_roster(rowsFromValue(a[0], d->roster));
         return ev::undefined();
     });
     b.def("recordFrame", 4, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapGridRecorder(self);
-        if (!d || !d->rec || a.size() < 3) return ev::undefined();
+        if (!d || !d->rec) return ev::throwTypeError("GenericGridRecorder.prototype.recordFrame: invalid receiver");
+        if (a.size() < 3) return ev::throwTypeError("GenericGridRecorder.prototype.recordFrame: expected (stepIdx, elapsed, rows, events?)");
         auto rows = rowsFromValue(a[2], d->frame);
         std::vector<grid::Row> events;
         if (a.size() >= 4) events = rowsFromValue(a[3], d->events);
@@ -183,13 +185,15 @@ void decorateGridTrainer(ObjectBuilder& b) {
     });
     b.def("ingestSituation", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapGridTrainer(self);
-        if (!d || !d->tr || a.empty()) return ev::undefined();
+        if (!d || !d->tr) return ev::throwTypeError("GenericGridTrainer.prototype.ingestSituation: invalid receiver");
+        if (a.empty()) return ev::throwTypeError("GenericGridTrainer.prototype.ingestSituation: situation argument required");
         d->tr->ingest_situation(situationFromValue(a[0]));
         return ev::undefined();
     });
     b.def("ingestEpisode", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapGridTrainer(self);
-        if (!d || !d->tr || a.empty() || !ev::isObject(a[0])) return ev::undefined();
+        if (!d || !d->tr) return ev::throwTypeError("GenericGridTrainer.prototype.ingestEpisode: invalid receiver");
+        if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("GenericGridTrainer.prototype.ingestEpisode: expected episode object");
         ev::Persistent o(a[0]);
         grid::EpisodeSummary e;
         e.total_return = static_cast<float>(getDoubleProperty(o.get(), "totalReturn", 0.0));
@@ -206,10 +210,11 @@ void decorateGridTrainer(ObjectBuilder& b) {
     });
     b.def("warmupWith", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapGridTrainer(self);
-        if (!d || !d->tr || a.empty() || !ev::isObject(a[0])) return ev::undefined();
+        if (!d || !d->tr) return ev::throwTypeError("GenericGridTrainer.prototype.warmupWith: invalid receiver");
+        if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("GenericGridTrainer.prototype.warmupWith: expected array of situations");
         ev::Persistent arr(a[0]);
         Value lenV = ev::getProperty(arr.get(), "length");
-        if (ev::isUndefined(lenV) || ev::isObject(lenV)) return ev::undefined();
+        if (ev::isUndefined(lenV) || ev::isObject(lenV)) return ev::throwTypeError("GenericGridTrainer.prototype.warmupWith: expected array with length");
         const uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
         std::vector<learn::GenericSituation> sits;
         sits.reserve(n);

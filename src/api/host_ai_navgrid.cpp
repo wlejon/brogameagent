@@ -6,7 +6,7 @@ namespace brogameagent::api {
 void decorateNavGridProto(ObjectBuilder& b) {
     b.def("isWalkable", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
-        if (!h || !h->grid) return ev::fromBool(false);
+        if (!h || !h->grid) return ev::throwTypeError("NavGrid.prototype.isWalkable: invalid receiver");
         float x = 0.0f, z = 0.0f;
         if (a.size() >= 2) {
             x = static_cast<float>(numAt(a, 0));
@@ -14,13 +14,15 @@ void decorateNavGridProto(ObjectBuilder& b) {
         } else if (!a.empty() && ev::isObject(a[0])) {
             auto p = parseVec2(a[0]);
             x = p.x; z = p.y;
+        } else {
+            return ev::throwTypeError("NavGrid.prototype.isWalkable: expected (x, z) or (point)");
         }
         return ev::fromBool(h->grid->isWalkable(x, z));
     });
 
     b.def("setWalkable", 3, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
-        if (!h || !h->grid) return ev::undefined();
+        if (!h || !h->grid) return ev::throwTypeError("NavGrid.prototype.setWalkable: invalid receiver");
         if (a.size() >= 3) {
             float x = static_cast<float>(numAt(a, 0));
             float z = static_cast<float>(numAt(a, 1));
@@ -30,13 +32,15 @@ void decorateNavGridProto(ObjectBuilder& b) {
             auto p = parseVec2(a[0]);
             bool walkable = boolAt(a, 1);
             h->grid->setWalkable(p.x, p.y, walkable);
+        } else {
+            return ev::throwTypeError("NavGrid.prototype.setWalkable: expected (x, z, walkable) or (point, walkable)");
         }
         return ev::undefined();
     });
 
     b.def("setCellCost", 3, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
-        if (!h || !h->grid) return ev::undefined();
+        if (!h || !h->grid) return ev::throwTypeError("NavGrid.prototype.setCellCost: invalid receiver");
         if (a.size() >= 3) {
             float x = static_cast<float>(numAt(a, 0));
             float z = static_cast<float>(numAt(a, 1));
@@ -46,13 +50,16 @@ void decorateNavGridProto(ObjectBuilder& b) {
             auto p = parseVec2(a[0]);
             float cost = static_cast<float>(numAt(a, 1));
             h->grid->setCellCost(p.x, p.y, cost);
+        } else {
+            return ev::throwTypeError("NavGrid.prototype.setCellCost: expected (x, z, cost) or (point, cost)");
         }
         return ev::undefined();
     });
 
     b.def("addObstacle", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
-        if (!h || !h->grid || a.empty()) return ev::undefined();
+        if (!h || !h->grid) return ev::throwTypeError("NavGrid.prototype.addObstacle: invalid receiver");
+        if (a.empty()) return ev::throwTypeError("NavGrid.prototype.addObstacle: expected obstacle AABB");
         float padding = (a.size() >= 2) ? static_cast<float>(numAt(a, 1)) : 0.0f;
         h->grid->addObstacle(parseAABB(a[0]), padding);
         return ev::undefined();
@@ -60,7 +67,8 @@ void decorateNavGridProto(ObjectBuilder& b) {
 
     b.def("removeObstacle", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
-        if (!h || !h->grid || a.empty()) return ev::undefined();
+        if (!h || !h->grid) return ev::throwTypeError("NavGrid.prototype.removeObstacle: invalid receiver");
+        if (a.empty()) return ev::throwTypeError("NavGrid.prototype.removeObstacle: expected obstacle AABB");
         auto box = parseAABB(a[0]);
         float padding = (a.size() >= 2) ? static_cast<float>(numAt(a, 1)) : 0.0f;
         float minX = box.cx - box.hw - padding;

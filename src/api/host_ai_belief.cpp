@@ -232,7 +232,8 @@ void ensureAIBeliefClassesInstalled() {
 
         b.def("registerEnemy", 3, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapTeamBelief(self);
-            if (!h || !h->b || a.size() < 2) return ev::undefined();
+            if (!h || !h->b) return ev::throwTypeError("TeamBelief.prototype.registerEnemy: invalid receiver");
+            if (a.size() < 2) return ev::throwTypeError("TeamBelief.prototype.registerEnemy: expected (id, radius, pos?)");
             bromath::Vec2 pos{};
             const bromath::Vec2* posPtr = nullptr;
             if (a.size() >= 3 && ev::isObject(a[2])) {
@@ -246,7 +247,8 @@ void ensureAIBeliefClassesInstalled() {
 
         b.def("propagate", 3, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapTeamBelief(self);
-            if (!h || !h->b || a.size() < 3) return ev::undefined();
+            if (!h || !h->b) return ev::throwTypeError("TeamBelief.prototype.propagate: invalid receiver");
+            if (a.size() < 3) return ev::throwTypeError("TeamBelief.prototype.propagate: expected (world, config, dt)");
             auto* w = unwrapWorld(a[0]);
             if (!w) return ev::throwTypeError("propagate: expected a World");
             h->b->propagate(w->world, parseVisibilityConfig(a[1]),
@@ -256,7 +258,8 @@ void ensureAIBeliefClassesInstalled() {
 
         b.def("update", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapTeamBelief(self);
-            if (!h || !h->b || a.empty()) return ev::undefined();
+            if (!h || !h->b) return ev::throwTypeError("TeamBelief.prototype.update: invalid receiver");
+            if (a.empty()) return ev::throwTypeError("TeamBelief.prototype.update: expected observation argument");
             h->b->update(parseTeamObservation(a[0]));
             return ev::undefined();
         });

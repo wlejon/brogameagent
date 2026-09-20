@@ -256,6 +256,7 @@ void decorateWorldProto(ObjectBuilder& b) {
     b.def("tick", 1, [](Value self, std::span<const Value> a) -> Value {
         HostWorld* w = unwrapWorld(self);
         if (!w) return ev::undefined();
+        ActiveWorldScope scope(w, self);
         w->world.tick(static_cast<float>(numAt(a, 0)));
         return ev::undefined();
     });
@@ -263,6 +264,7 @@ void decorateWorldProto(ObjectBuilder& b) {
     b.def("step", 1, [](Value self, std::span<const Value> a) -> Value {
         HostWorld* w = unwrapWorld(self);
         if (!w) return ev::undefined();
+        ActiveWorldScope scope(w, self);
         w->world.tick(static_cast<float>(numAt(a, 0)));
         return ev::undefined();
     });
@@ -395,6 +397,7 @@ void decorateWorldProto(ObjectBuilder& b) {
         if (!w || a.size() < 3) return ev::fromBool(false);
         HostAgent* ag = unwrapAgent(a[0]);
         if (!ag) return ev::fromBool(false);
+        ActiveWorldScope scope(w, self);
         int slot = static_cast<int>(numAt(a, 1));
         int targetId = static_cast<int>(numAt(a, 2));
         return ev::fromBool(w->world.resolveAbility(ag->agent, slot, targetId));

@@ -168,18 +168,14 @@ void decorateWorldExtras(ObjectBuilder& b) {
 
         ev::Persistent fn(ev::getProperty(spec.get(), "fn"));
         if (ev::isFunction(fn.get())) {
-            // The callback and the wrapper are held by the HostWorld, never
-            // captured raw: a raw Value goes stale at the next collection.
-            // See HostWorld::selfValue for why this roots the wrapper.
+            // The callback is held by the HostWorld as a Persistent so it survives GC.
+            // The world wrapper is NOT permanently rooted to avoid reference cycles;
+            // instead, activeSelf is supplied dynamically during World method dispatch.
             bool replaced = false;
             for (auto& e : w->abilityFns) {
                 if (e.first == abilityId) { e.second.set(fn.get()); replaced = true; break; }
             }
             if (!replaced) w->abilityFns.emplace_back(abilityId, ev::Persistent(fn.get()));
-            if (!w->selfRooted) {
-                w->selfValue.set(self);
-                w->selfRooted = true;
-            }
 
             HostWorld* worldHost = w;
             std::weak_ptr<int> life = w->life;
@@ -191,7 +187,10 @@ void decorateWorldExtras(ObjectBuilder& b) {
                 if (life.expired()) return;
                 ev::Persistent callee(worldHost->abilityFn(abilityId));
                 if (!ev::isFunction(callee.get())) return;
-                ev::Persistent worldVal(worldHost->selfValue.get());
+                Value wVal = !worldHost->activeSelf.isUndefined()
+                    ? worldHost->activeSelf
+                    : g_worldClass.make(worldHost, [](void*) {});
+                ev::Persistent worldVal(wVal);
                 ev::Persistent casterVal(worldHost->agentValue(&caster));
                 const Value args[3] = {
                     casterVal.get(), worldVal.get(), ev::fromDouble(targetId),
