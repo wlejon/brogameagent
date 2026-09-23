@@ -5,6 +5,50 @@ namespace brogameagent::api {
 
 #if BROGAMEAGENT_HAS_NAVMESH
 
+namespace {
+
+/// The scalar bake knobs, shared by bakeNavMesh and both buildFromMesh
+/// spellings. `opts` must be rooted by the caller (each read allocates).
+void readBakeConfig(Value opts, brogameagent::NavMeshBakeConfig& cfg) {
+    ev::Persistent root(opts);
+    auto num = [&](const char* key, float def) {
+        return static_cast<float>(getDoubleProperty(root.get(), key, def));
+    };
+    cfg.cellSize = num("cellSize", cfg.cellSize);
+    cfg.cellHeight = num("cellHeight", cfg.cellHeight);
+    cfg.agentRadius = num("agentRadius", cfg.agentRadius);
+    cfg.agentHeight = num("agentHeight", cfg.agentHeight);
+    cfg.agentMaxClimb = num("agentMaxClimb", cfg.agentMaxClimb);
+    cfg.agentMaxSlopeDeg = num("agentMaxSlopeDeg", cfg.agentMaxSlopeDeg);
+    cfg.regionMinSize = num("regionMinSize", cfg.regionMinSize);
+    cfg.regionMergeSize = num("regionMergeSize", cfg.regionMergeSize);
+    cfg.edgeMaxLen = num("edgeMaxLen", cfg.edgeMaxLen);
+    cfg.edgeMaxError = num("edgeMaxError", cfg.edgeMaxError);
+    cfg.detailSampleDist = num("detailSampleDist", cfg.detailSampleDist);
+    cfg.detailSampleMaxError = num("detailSampleMaxError", cfg.detailSampleMaxError);
+    cfg.dynamicObstacles = getBoolProperty(root.get(), "dynamicObstacles", cfg.dynamicObstacles);
+    cfg.tileSize = num("tileSize", cfg.tileSize);
+    cfg.maxObstacles = static_cast<int>(getDoubleProperty(root.get(), "maxObstacles", cfg.maxObstacles));
+}
+
+/// `{ requireFullPath?, extents? }`, or a bare extents vector, as findPath
+/// and navigateTo take it. Every read is finished with before the next one
+/// allocates.
+void readPathOptions(Value opts, bromath::Vec3& extents, bool& requireFull) {
+    ev::Persistent root(opts);
+    Value reqV = ev::getProperty(root.get(), "requireFullPath");
+    const bool hasReq = !ev::isUndefined(reqV);
+    if (hasReq) requireFull = ev::toBool(reqV);
+    ev::Persistent extV(ev::getProperty(root.get(), "extents"));
+    if (ev::isObject(extV.get())) {
+        extents = parseVec3(extV.get(), extents);
+    } else if (!hasReq && ev::isUndefined(extV.get())) {
+        extents = parseVec3(root.get(), extents);
+    }
+}
+
+} // namespace
+
 void decorateNavMeshProto(ObjectBuilder& b) {
     b.accessor("valid", [](Value self_, std::span<const Value>) {
         HostNavMesh* h = unwrapNavMesh(self_);
@@ -22,15 +66,7 @@ void decorateNavMeshProto(ObjectBuilder& b) {
         bool requireFull = false;
 
         if (a.size() >= 3 && ev::isObject(a[2])) {
-            ev::Persistent root(a[2]);
-            Value reqV = ev::getProperty(root.get(), "requireFullPath");
-            Value extV = ev::getProperty(root.get(), "extents");
-            if (!ev::isUndefined(reqV) || !ev::isUndefined(extV)) {
-                if (!ev::isUndefined(reqV)) requireFull = ev::toBool(reqV);
-                if (ev::isObject(extV)) extents = parseVec3(extV, extents);
-            } else {
-                extents = parseVec3(root.get(), extents);
-            }
+            readPathOptions(a[2], extents, requireFull);
         }
 
         auto res = h->mesh->findPathEx(start, end, extents, requireFull);
@@ -127,6 +163,8 @@ void decorateNavMeshProto(ObjectBuilder& b) {
         if (!h || !h->mesh || a.size() < 2) {
             return ev::throwTypeError("buildFromMesh(positions, indices, [opts])");
         }
+        // Returned at the end, after reads that allocate.
+        ev::Persistent selfP(self);
         std::vector<float> verts;
         std::vector<uint32_t> idx;
         if (!readFloatVector(a[0], verts) || !readU32Vector(a[1], idx) ||
@@ -134,20 +172,16 @@ void decorateNavMeshProto(ObjectBuilder& b) {
             return ev::throwTypeError("buildFromMesh: positions must be flat xyz triples, indices triangle list");
         }
         brogameagent::NavMeshBakeConfig cfg;
-        if (a.size() >= 3 && ev::isObject(a[2])) {
-            ev::Persistent root(a[2]);
-            cfg.cellSize = static_cast<float>(getDoubleProperty(root.get(), "cellSize", cfg.cellSize));
-            cfg.cellHeight = static_cast<float>(getDoubleProperty(root.get(), "cellHeight", cfg.cellHeight));
-            cfg.agentRadius = static_cast<float>(getDoubleProperty(root.get(), "agentRadius", cfg.agentRadius));
-            cfg.agentHeight = static_cast<float>(getDoubleProperty(root.get(), "agentHeight", cfg.agentHeight));
-            cfg.agentMaxClimb = static_cast<float>(getDoubleProperty(root.get(), "agentMaxClimb", cfg.agentMaxClimb));
-            cfg.agentMaxSlopeDeg = static_cast<float>(getDoubleProperty(root.get(), "agentMaxSlopeDeg", cfg.agentMaxSlopeDeg));
-        }
+        if (a.size() >= 3 && ev::isObject(a[2])) readBakeConfig(a[2], cfg);
         bool ok = h->mesh->bake(verts.data(), verts.size() / 3, idx.data(), idx.size(), cfg);
         if (!ok) {
             return ev::throwError("buildFromMesh failed: " + h->mesh->lastError());
         }
-        return self;
+        if (h->mesh->supportsObstacles()) {
+            const auto& hooks = getNavMeshHooks();
+            if (hooks.registerNavMeshForPump) hooks.registerNavMeshForPump(h->mesh);
+        }
+        return selfP.get();
     });
 
     b.def("save", 0, [](Value self_, std::span<const Value>) -> Value {
@@ -223,17 +257,17 @@ void decorateNavMeshProto(ObjectBuilder& b) {
                 }
                 id = h->mesh->addObstacle(pos, radius, height);
             } else if (type == "box") {
-                Value minV = ev::getProperty(desc.get(), "min");
-                Value maxV = ev::getProperty(desc.get(), "max");
-                Value ctrV = ev::getProperty(desc.get(), "center");
-                Value extV = ev::getProperty(desc.get(), "halfExtents");
-                if (ev::isObject(minV) && ev::isObject(maxV)) {
-                    bromath::Vec3 minPt = parseVec3(minV);
-                    bromath::Vec3 maxPt = parseVec3(maxV);
+                ev::Persistent minV(ev::getProperty(desc.get(), "min"));
+                ev::Persistent maxV(ev::getProperty(desc.get(), "max"));
+                ev::Persistent ctrV(ev::getProperty(desc.get(), "center"));
+                ev::Persistent extV(ev::getProperty(desc.get(), "halfExtents"));
+                if (ev::isObject(minV.get()) && ev::isObject(maxV.get())) {
+                    bromath::Vec3 minPt = parseVec3(minV.get());
+                    bromath::Vec3 maxPt = parseVec3(maxV.get());
                     id = h->mesh->addBoxObstacle(minPt, maxPt);
-                } else if (ev::isObject(ctrV) && ev::isObject(extV)) {
-                    bromath::Vec3 center = parseVec3(ctrV);
-                    bromath::Vec3 halfExtents = parseVec3(extV);
+                } else if (ev::isObject(ctrV.get()) && ev::isObject(extV.get())) {
+                    bromath::Vec3 center = parseVec3(ctrV.get());
+                    bromath::Vec3 halfExtents = parseVec3(extV.get());
                     float yaw = static_cast<float>(getDoubleProperty(desc.get(), "yaw", 0.0));
                     id = h->mesh->addBoxObstacle(center, halfExtents, yaw);
                 } else {
@@ -285,22 +319,22 @@ Value aiBakeNavMesh(Value, std::span<const Value> a) {
     std::vector<float> xyz;
     std::vector<uint32_t> indices;
 
-    Value posV = ev::getProperty(root.get(), "positions");
-    if (ev::isUndefined(posV) || ev::isNull(posV)) {
-        posV = ev::getProperty(root.get(), "vertices");
+    ev::Persistent posV(ev::getProperty(root.get(), "positions"));
+    if (ev::isUndefined(posV.get()) || ev::isNull(posV.get())) {
+        posV.set(ev::getProperty(root.get(), "vertices"));
     }
-    Value idxV = ev::getProperty(root.get(), "indices");
+    ev::Persistent idxV(ev::getProperty(root.get(), "indices"));
 
-    const bool hasPos = !ev::isUndefined(posV) && !ev::isNull(posV);
-    const bool hasIdx = !ev::isUndefined(idxV) && !ev::isNull(idxV);
+    const bool hasPos = !ev::isUndefined(posV.get()) && !ev::isNull(posV.get());
+    const bool hasIdx = !ev::isUndefined(idxV.get()) && !ev::isNull(idxV.get());
     if (hasPos != hasIdx) {
         return ev::throwTypeError("bakeNavMesh: positions and indices must be passed together");
     }
     if (hasPos) {
         std::vector<float> verts;
         std::vector<uint32_t> idx;
-        bool okP = readFloatVector(posV, verts);
-        bool okI = readU32Vector(idxV, idx);
+        bool okP = readFloatVector(posV.get(), verts);
+        bool okI = readU32Vector(idxV.get(), idx);
         if (!okP || !okI || verts.size() % 3 != 0 || idx.size() % 3 != 0) {
             return ev::throwTypeError("bakeNavMesh: positions must be flat xyz triples and indices a triangle list");
         }
@@ -327,17 +361,12 @@ Value aiBakeNavMesh(Value, std::span<const Value> a) {
     }
 
     brogameagent::NavMeshBakeConfig cfg;
-    cfg.cellSize = static_cast<float>(getDoubleProperty(root.get(), "cellSize", cfg.cellSize));
-    cfg.cellHeight = static_cast<float>(getDoubleProperty(root.get(), "cellHeight", cfg.cellHeight));
-    cfg.agentRadius = static_cast<float>(getDoubleProperty(root.get(), "agentRadius", cfg.agentRadius));
-    cfg.agentHeight = static_cast<float>(getDoubleProperty(root.get(), "agentHeight", cfg.agentHeight));
-    cfg.agentMaxClimb = static_cast<float>(getDoubleProperty(root.get(), "agentMaxClimb", cfg.agentMaxClimb));
-    cfg.agentMaxSlopeDeg = static_cast<float>(getDoubleProperty(root.get(), "agentMaxSlopeDeg", cfg.agentMaxSlopeDeg));
-    cfg.dynamicObstacles = getBoolProperty(root.get(), "dynamicObstacles", cfg.dynamicObstacles);
-    cfg.tileSize = static_cast<float>(getDoubleProperty(root.get(), "tileSize", cfg.tileSize));
-    cfg.maxObstacles = static_cast<int>(getDoubleProperty(root.get(), "maxObstacles", cfg.maxObstacles));
+    readBakeConfig(root.get(), cfg);
 
     Value linksArr = ev::getProperty(root.get(), "offMeshLinks");
+    if (!ev::isUndefined(linksArr) && !ev::isNull(linksArr) && !ev::isObject(linksArr)) {
+        return ev::throwTypeError("bakeNavMesh: offMeshLinks must be an array");
+    }
     if (ev::isObject(linksArr)) {
         ev::Persistent lRoot(linksArr);
         Value lenV = ev::getProperty(lRoot.get(), "length");
@@ -350,14 +379,14 @@ Value aiBakeNavMesh(Value, std::span<const Value> a) {
                     return ev::throwTypeError("bakeNavMesh: offMeshLinks entry must be an object");
                 }
                 ev::Persistent eRoot(el);
-                Value sv = ev::getProperty(eRoot.get(), "start");
-                Value evVal = ev::getProperty(eRoot.get(), "end");
-                if (!ev::isObject(sv) || !ev::isObject(evVal)) {
+                ev::Persistent sv(ev::getProperty(eRoot.get(), "start"));
+                ev::Persistent evVal(ev::getProperty(eRoot.get(), "end"));
+                if (!ev::isObject(sv.get()) || !ev::isObject(evVal.get())) {
                     return ev::throwTypeError("bakeNavMesh: offMeshLink must have 'start' and 'end' objects");
                 }
                 brogameagent::NavMeshOffMeshLink link;
-                link.start = parseVec3(sv);
-                link.end   = parseVec3(evVal);
+                link.start = parseVec3(sv.get());
+                link.end   = parseVec3(evVal.get());
                 link.radius = static_cast<float>(getDoubleProperty(eRoot.get(), "radius", link.radius));
                 link.bidirectional = getBoolProperty(eRoot.get(), "bidirectional", link.bidirectional);
                 link.userId = static_cast<uint32_t>(getDoubleProperty(eRoot.get(), "userId", 0.0));
@@ -417,15 +446,7 @@ Value aiBuildFromMesh(Value, std::span<const Value> a) {
         return ev::throwTypeError("buildFromMesh: positions must be flat xyz triples, indices triangle list");
     }
     brogameagent::NavMeshBakeConfig cfg;
-    if (a.size() >= 3 && ev::isObject(a[2])) {
-        ev::Persistent root(a[2]);
-        cfg.cellSize = static_cast<float>(getDoubleProperty(root.get(), "cellSize", cfg.cellSize));
-        cfg.cellHeight = static_cast<float>(getDoubleProperty(root.get(), "cellHeight", cfg.cellHeight));
-        cfg.agentRadius = static_cast<float>(getDoubleProperty(root.get(), "agentRadius", cfg.agentRadius));
-        cfg.agentHeight = static_cast<float>(getDoubleProperty(root.get(), "agentHeight", cfg.agentHeight));
-        cfg.agentMaxClimb = static_cast<float>(getDoubleProperty(root.get(), "agentMaxClimb", cfg.agentMaxClimb));
-        cfg.agentMaxSlopeDeg = static_cast<float>(getDoubleProperty(root.get(), "agentMaxSlopeDeg", cfg.agentMaxSlopeDeg));
-    }
+    if (a.size() >= 3 && ev::isObject(a[2])) readBakeConfig(a[2], cfg);
     auto mesh = std::make_shared<brogameagent::NavMesh>();
     bool ok = mesh->bake(verts.data(), verts.size() / 3, idx.data(), idx.size(), cfg);
     if (!ok) {
