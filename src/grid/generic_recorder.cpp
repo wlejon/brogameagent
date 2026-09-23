@@ -251,12 +251,13 @@ void GenericRecorder::write_roster(const std::vector<Row>& rows) {
     // header section size: 8 magic + 4 ver + 8 episode + 8 seed + 4 dt
     // + roster schema + frame schema + event schema + 4 placeholder + 4
     // roster_row_bytes — but easiest is ftell back and forth.
-    long here = std::ftell(file_);
-    long count_offset = here - 8;   // placeholder was 8 bytes back: u32 count + u32 row_bytes
+    uint64_t here = 0;
+    if (!tell_at(file_, here) || here < 8) return;
+    const uint64_t count_offset = here - 8;  // placeholder was 8 bytes back: u32 count + u32 row_bytes
     uint32_t n = static_cast<uint32_t>(rows.size());
-    std::fseek(file_, count_offset, SEEK_SET);
+    if (!seek_to(file_, count_offset)) return;
     write_raw(file_, n);
-    std::fseek(file_, here, SEEK_SET);
+    if (!seek_to(file_, here)) return;
     for (const auto& r : rows) write_row(file_, roster_schema_, r);
     roster_written_ = true;
 }
@@ -270,7 +271,10 @@ void GenericRecorder::record_frame(uint64_t step_idx, float elapsed,
     if (!roster_written_) {
         roster_written_ = true; // count is already 0; nothing to backpatch.
     }
-    uint64_t off = static_cast<uint64_t>(std::ftell(file_));
+    // 64-bit: std::ftell's long is 32 bits on Windows, so a recording past
+    // 2 GiB would store wrapped offsets its own reader rejects.
+    uint64_t off = 0;
+    if (!tell_at(file_, off)) return;
     frame_offsets_.push_back(off);
     write_raw(file_, step_idx);
     write_raw(file_, elapsed);
@@ -284,7 +288,8 @@ void GenericRecorder::record_frame(uint64_t step_idx, float elapsed,
 
 bool GenericRecorder::close() {
     if (!file_) return false;
-    uint64_t footer_off = static_cast<uint64_t>(std::ftell(file_));
+    uint64_t footer_off = 0;
+    const bool placed = tell_at(file_, footer_off);
     uint32_t n = static_cast<uint32_t>(frame_offsets_.size());
     write_raw(file_, n);
     for (auto o : frame_offsets_) write_raw(file_, o);
@@ -292,7 +297,7 @@ bool GenericRecorder::close() {
     std::fwrite(MAGIC_END, 1, 8, file_);
     int rc = std::fclose(file_);
     file_ = nullptr;
-    return rc == 0;
+    return rc == 0 && placed;
 }
 
 // ─── Reader ────────────────────────────────────────────────────────────────

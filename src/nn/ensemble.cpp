@@ -90,9 +90,13 @@ bool EnsembleNet::save_file(const std::string& path) const {
 bool EnsembleNet::load_file(const std::string& path) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return false;
-    std::fseek(f, 0, SEEK_END);
-    const long sz = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
+    // A failed seek/tell reads as -1, which cast to size_t asked for an
+    // impossible allocation.
+    const long sz = std::fseek(f, 0, SEEK_END) == 0 ? std::ftell(f) : -1L;
+    if (sz < 0 || std::fseek(f, 0, SEEK_SET) != 0) {
+        std::fclose(f);
+        return false;
+    }
     std::vector<uint8_t> blob(static_cast<size_t>(sz));
     const size_t r = std::fread(blob.data(), 1, blob.size(), f);
     std::fclose(f);
