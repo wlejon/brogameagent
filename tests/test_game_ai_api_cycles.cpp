@@ -273,6 +273,44 @@ const char* kCheck = R"JS(
     })()
 )JS";
 
+// The other direction: a native half holding a raw pointer into another
+// handle's native object must keep it alive once the handle is collected.
+// An agent, binding and team belief each point at their NavGrid.
+const char* kNavGridSetup = R"JS(
+    (function() {
+        const G = bro.ai.game;
+        const grid = () => G.createNavGrid({
+            minX: -20, minZ: -20, maxX: 20, maxZ: 20, cellSize: 0.5,
+            obstacles: [{ x: 0, z: 0, hw: 2, hd: 2 }], padding: 0.4,
+        });
+        const g1 = grid(), g2 = grid(), g3 = grid();
+        globalThis.__grids = [new WeakRef(g1), new WeakRef(g2), new WeakRef(g3)];
+        globalThis.__navAgent = G.createAgent({ navGrid: g1, x: -16, z: -16, speed: 6 });
+        const walker = G.createAgent({ x: -16, z: 16, speed: 6 });
+        globalThis.__navBinding = walker.bind({ navGrid: g2 });
+        globalThis.__navBelief = G.createTeamBelief({ teamId: 0, numParticles: 8, navGrid: g3 });
+        return "SUCCESS";
+    })()
+)JS";
+
+const char* kNavGridCheck = R"JS(
+    (function() {
+        for (const w of globalThis.__grids) {
+            if (w.deref() !== undefined) return "a NavGrid handle was not collected; the check proves nothing";
+        }
+        const a = globalThis.__navAgent;
+        a.setTarget(10, 5);
+        for (let i = 0; i < 60; i++) a.update(1 / 30);
+        if (!(a.x > -16)) return "agent did not move on its collected grid's path: " + a.x;
+
+        const b = globalThis.__navBinding;
+        if (!b.navigateTo({ x: 10, y: 0, z: 5 })) return "binding found no path on its grid";
+        for (let i = 0; i < 60; i++) b.step(1 / 30);
+        if (!(b.agent.x > -16)) return "binding did not move its agent: " + b.agent.x;
+        return "SUCCESS";
+    })()
+)JS";
+
 } // namespace
 
 int main() {
@@ -286,6 +324,9 @@ int main() {
         runJs("build cycles", kSetup);
         collectNow();
         runJs("dropped cycles collected, kept ones still run", kCheck);
+        runJs("NavGrid users: setup", kNavGridSetup);
+        collectNow();
+        runJs("NavGrid users outlive the grid's handle", kNavGridCheck);
     }
     ev::destroyRealm(realm);
 

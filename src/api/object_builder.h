@@ -2,7 +2,9 @@
 
 #include "embed/embed.h"
 
+#include <exception>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +13,22 @@ namespace brogameagent::api {
 
 namespace ev = bronze::embed;
 using Value = bronze::Value;
+
+/// A native method body with every C++ exception turned into a JS Error. The
+/// caller may be compiled JS, whose frames carry no unwind metadata, so an
+/// exception escaping a body (bad_alloc on a corrupt replay's counts, a
+/// library's invalid_argument) would otherwise end the process.
+inline ev::NativeFn guardNative(ev::NativeFn fn) {
+    return [fn = std::move(fn)](Value self, std::span<const Value> args) -> Value {
+        try {
+            return fn(self, args);
+        } catch (const std::exception& e) {
+            return ev::throwError(e.what());
+        } catch (...) {
+            return ev::throwError("brogameagent: native error");
+        }
+    };
+}
 
 /// Helper to build objects and namespaces property by property using bronze::embed.
 /// Handles moving GC by rooting the target in an ev::Persistent.
@@ -41,15 +59,15 @@ struct ObjectBuilder {
     }
 
     void def(std::string_view name, uint32_t arity, ev::NativeFn fn) {
-        Value f = ev::makeFunction(std::move(fn), arity, name);
+        Value f = ev::makeFunction(guardNative(std::move(fn)), arity, name);
         obj.set(ev::setProperty(obj.get(), name, f));
     }
 
     void accessor(std::string_view name, ev::NativeFn getter, ev::NativeFn setter = nullptr) {
         const std::string getName = "get " + std::string(name);
         const std::string setName = "set " + std::string(name);
-        ev::Persistent g(ev::makeFunction(std::move(getter), 0, getName));
-        Value s = setter ? ev::makeFunction(std::move(setter), 1, setName)
+        ev::Persistent g(ev::makeFunction(guardNative(std::move(getter)), 0, getName));
+        Value s = setter ? ev::makeFunction(guardNative(std::move(setter)), 1, setName)
                          : ev::undefined();
         obj.set(ev::defineAccessor(obj.get(), name, g.get(), s, /*enumerable=*/true));
     }

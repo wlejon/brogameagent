@@ -469,7 +469,7 @@ void installAIBelief(ObjectBuilder& game) {
     game.def("createTeamBelief", 1, [](Value, std::span<const Value> a) -> Value {
         int teamId = 0;
         int numParticles = 32;
-        const brogameagent::NavGrid* nav = nullptr;
+        std::shared_ptr<const brogameagent::NavGrid> nav;
         belief::MotionParams mp{};
         uint64_t seed = 0xBE11EFCAFEULL;
 
@@ -479,7 +479,7 @@ void installAIBelief(ObjectBuilder& game) {
             numParticles = static_cast<int>(
                 getDoubleProperty(opts.get(), "numParticles", numParticles));
             if (auto* ng = unwrapNavGrid(ev::getProperty(opts.get(), "navGrid"))) {
-                nav = ng->grid.get();
+                nav = ng->grid;
             }
             ev::Persistent mpV(ev::getProperty(opts.get(), "motion"));
             if (ev::isObject(mpV.get())) {
@@ -492,7 +492,11 @@ void installAIBelief(ObjectBuilder& game) {
         }
 
         auto cell = std::make_unique<HostTeamBelief>();
-        cell->b = std::make_shared<belief::TeamBelief>(teamId, numParticles, nav, mp, seed);
+        // The belief holds a raw NavGrid* and is shared with InfoSetMcts, so
+        // its deleter is what keeps the grid alive.
+        cell->b = std::shared_ptr<belief::TeamBelief>(
+            new belief::TeamBelief(teamId, numParticles, nav.get(), mp, seed),
+            [nav](belief::TeamBelief* p) { delete p; });
         return g_teamBeliefClass.createInstance(std::move(cell));
     });
 

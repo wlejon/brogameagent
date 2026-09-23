@@ -302,7 +302,8 @@ void decorateAgentProto(ObjectBuilder& b) {
         auto* h = unwrapAgent(s);
         if (h) {
             h->destroyed = true; h->navActive = false; h->navPath.clear();
-            h->agent.clearTarget(); h->agent.setNavGrid(nullptr); h->navMesh.reset();
+            h->agent.clearTarget(); h->agent.setNavGrid(nullptr); h->navGridRef.reset();
+            h->navMesh.reset();
         }
         return ev::undefined();
     });
@@ -383,7 +384,9 @@ void decorateAgentProto(ObjectBuilder& b) {
 
     b.def("setNavGrid", 1, [](Value s, std::span<const Value> a) -> Value {
         auto* h = unwrapAgent(s); if (!h || a.empty()) return ev::undefined();
-        if (auto* ng = unwrapNavGrid(a[0])) h->agent.setNavGrid(ng->grid.get()); else h->agent.setNavGrid(nullptr);
+        auto* ng = unwrapNavGrid(a[0]);
+        h->navGridRef = ng ? ng->grid : nullptr;
+        h->agent.setNavGrid(h->navGridRef.get());
         return ev::undefined();
     });
 
@@ -461,7 +464,7 @@ void decorateAgentProto(ObjectBuilder& b) {
             Value nmV = ev::getProperty(root.get(), "navMesh");
             if (auto* nm = unwrapNavMesh(nmV)) b->navMesh = nm->mesh;
             Value ngV = ev::getProperty(root.get(), "navGrid");
-            if (auto* ng = unwrapNavGrid(ngV)) b->navGrid = ng->grid.get();
+            if (auto* ng = unwrapNavGrid(ngV)) { b->navGridRef = ng->grid; b->navGrid = ng->grid.get(); }
             b->yOffset = static_cast<float>(getDoubleProperty(root.get(), "yOffset", 0.0));
             b->repathInterval = static_cast<float>(getDoubleProperty(root.get(), "repathInterval", 0.0));
         }
@@ -672,31 +675,13 @@ Value aiCreateAgent(Value, std::span<const Value> a) {
         if (auto* nm = unwrapNavMesh(nmV)) h->navMesh = nm->mesh;
 
         Value ngV = ev::getProperty(root.get(), "navGrid");
-        if (auto* ng = unwrapNavGrid(ngV)) h->agent.setNavGrid(ng->grid.get());
+        if (auto* ng = unwrapNavGrid(ngV)) {
+            h->navGridRef = ng->grid;
+            h->agent.setNavGrid(ng->grid.get());
+        }
     }
     return makeAgentHandle(h);
 }
 
-Value aiCreateAgentBinding(Value, std::span<const Value> a) {
-    auto* b = new HostAgentBinding();
-    ev::Persistent agentP;
-    if (!a.empty() && ev::isObject(a[0])) {
-        ev::Persistent root(a[0]);
-        agentP.set(ev::getProperty(root.get(), "agent"));
-        if (auto* ag = unwrapAgent(agentP.get())) {
-            b->agentHost = ag;
-            b->agentLife = ag->life;
-        } else {
-            agentP.set(ev::undefined());
-        }
-        Value nmV = ev::getProperty(root.get(), "navMesh");
-        if (auto* nm = unwrapNavMesh(nmV)) b->navMesh = nm->mesh;
-        Value ngV = ev::getProperty(root.get(), "navGrid");
-        if (auto* ng = unwrapNavGrid(ngV)) b->navGrid = ng->grid.get();
-        b->yOffset = static_cast<float>(getDoubleProperty(root.get(), "yOffset", 0.0));
-        b->repathInterval = static_cast<float>(getDoubleProperty(root.get(), "repathInterval", 0.0));
-    }
-    return makeAgentBindingHandle(b, agentP);
-}
 
 } // namespace brogameagent::api

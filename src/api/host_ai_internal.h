@@ -55,7 +55,10 @@ inline constexpr uint32_t kHostRewardTrackerTag  = 0x41495254u;  // 'AIRT'
 
 struct HostNavGrid {
     uint32_t tag = kHostNavGridTag;
-    std::unique_ptr<brogameagent::NavGrid> grid;
+    // Shared: an Agent, AgentBinding or TeamBelief handed this grid keeps a
+    // reference, because the native side holds a raw NavGrid* that must
+    // outlive a collected NavGrid handle.
+    std::shared_ptr<brogameagent::NavGrid> grid;
 };
 
 struct HostNavMesh {
@@ -65,6 +68,7 @@ struct HostNavMesh {
 
 struct HostAgent {
     uint32_t tag = kHostAgentTag;
+    std::shared_ptr<const brogameagent::NavGrid> navGridRef;  // what agent.navGrid points at
     brogameagent::Agent agent;
     std::shared_ptr<brogameagent::NavMesh> navMesh;
 
@@ -99,6 +103,7 @@ struct HostAgentBinding {
     std::weak_ptr<int> agentLife;
     std::shared_ptr<brogameagent::NavMesh> navMesh;
     const brogameagent::NavGrid* navGrid = nullptr;
+    std::shared_ptr<const brogameagent::NavGrid> navGridRef;  // keeps navGrid alive
 
     bool active = false;
     bool partial = false;
@@ -635,7 +640,6 @@ Value makeAgentBindingHandle(HostAgentBinding* h);
 /// A binding handle whose `_agent` is `agent` (unless undefined). ALLOCATES.
 Value makeAgentBindingHandle(HostAgentBinding* h, const ev::Persistent& agent);
 Value aiCreateAgent(Value self, std::span<const Value> a);
-Value aiCreateAgentBinding(Value self, std::span<const Value> a);
 void applyAgentAvoidance(Value opts, brogameagent::Agent& agent);
 // bro.ai.game.registerCapability (host_ai_capability.cpp).
 void installRegisterCapability(ObjectBuilder& b);
