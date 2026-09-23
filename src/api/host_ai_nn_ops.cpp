@@ -27,6 +27,24 @@ Value guardedOp(Fn&& fn) {
     return ev::undefined();
 }
 
+// An optional mask argument: absent (undefined / null) is no mask; anything
+// else must be a Float32Array of at least `need` elements, because the
+// kernels read `need` floats from it unchecked. A wrong value used to be
+// silently treated as "no mask". Allocates nothing on success — the pointer
+// is into the moving heap, like the in-place Float32Array tensors before it.
+bool maskArg(std::span<const Value> a, size_t i, size_t need, const char* what, float*& out) {
+    out = nullptr;
+    if (i >= a.size() || ev::isUndefined(a[i]) || ev::isNull(a[i])) return true;
+    auto info = ev::typedArrayInfo(a[i]);
+    if (!info.data || info.elementKind != ev::elements::Float32 || info.elementCount < need) {
+        ev::throwTypeError(std::string(what) + " must be a Float32Array of at least " +
+                           std::to_string(need) + " entries");
+        return false;
+    }
+    out = reinterpret_cast<float*>(info.data);
+    return true;
+}
+
 std::vector<int> offsetsFromSizes(const std::vector<int>& sizes) {
     std::vector<int> offs;
     offs.reserve(sizes.size() + 1);
@@ -90,8 +108,9 @@ void installAINnOps(ObjectBuilder& nnNs) {
         if (a.size() < 2) return ev::throwTypeError("softmaxForward(logits,probs,mask?)");
         auto [l, p] = tensorArgs<2>(a, {0, 1});
         if (!l || !p) return ev::throwTypeError("expected Tensors");
-        size_t mn = 0;
-        float* mask = a.size() >= 3 ? floatPtr(a[2], mn) : nullptr;
+        float* mask = nullptr;
+        if (!maskArg(a, 2, static_cast<size_t>(l.ptr->size()), "softmaxForward: mask", mask))
+            return ev::undefined();
         return guardedOp([&] { brotensor::softmax_forward(*l.ptr, *p.ptr, mask); });
     });
 
@@ -106,8 +125,9 @@ void installAINnOps(ObjectBuilder& nnNs) {
         if (a.size() < 4) return ev::throwTypeError("softmaxXent(logits,target,probs,dLogits,mask?)");
         auto [l, t, p, dl] = tensorArgs<4>(a, {0, 1, 2, 3});
         if (!l || !t || !p || !dl) return ev::throwTypeError("expected Tensors");
-        size_t mn = 0;
-        float* mask = a.size() >= 5 ? floatPtr(a[4], mn) : nullptr;
+        float* mask = nullptr;
+        if (!maskArg(a, 4, static_cast<size_t>(l.ptr->size()), "softmaxXent: mask", mask))
+            return ev::undefined();
         float loss = 0.0f;
         try {
             loss = brotensor::softmax_xent(*l.ptr, *t.ptr, *p.ptr, *dl.ptr, mask);
@@ -163,9 +183,11 @@ void installAINnOps(ObjectBuilder& nnNs) {
         }
         auto [l, p] = tensorArgs<2>(a, {0, 1});
         if (!l || !p) return ev::throwTypeError("expected Tensors");
-        size_t amn = 0, bmn = 0;
-        float* aMask = a.size() >= 3 ? floatPtr(a[2], amn) : nullptr;
-        float* bMask = a.size() >= 4 ? floatPtr(a[3], bmn) : nullptr;
+        float* aMask = nullptr;
+        float* bMask = nullptr;
+        if (!maskArg(a, 2, nn::FactoredPolicyHead::N_ATTACK - 1, "factoredSoftmax: atkMask", aMask) ||
+            !maskArg(a, 3, nn::FactoredPolicyHead::N_ABILITY - 1, "factoredSoftmax: abilMask", bMask))
+            return ev::undefined();
         return guardedOp([&] { nn::factored_softmax(*l.ptr, *p.ptr, aMask, bMask); });
     });
 
@@ -176,9 +198,11 @@ void installAINnOps(ObjectBuilder& nnNs) {
         }
         auto [l, mt, at, abt, p, dl] = tensorArgs<6>(a, {0, 1, 2, 3, 4, 5});
         if (!l || !mt || !at || !abt || !p || !dl) return ev::throwTypeError("expected Tensors");
-        size_t amn = 0, bmn = 0;
-        float* aMask = a.size() >= 7 ? floatPtr(a[6], amn) : nullptr;
-        float* bMask = a.size() >= 8 ? floatPtr(a[7], bmn) : nullptr;
+        float* aMask = nullptr;
+        float* bMask = nullptr;
+        if (!maskArg(a, 6, nn::FactoredPolicyHead::N_ATTACK - 1, "factoredXent: atkMask", aMask) ||
+            !maskArg(a, 7, nn::FactoredPolicyHead::N_ABILITY - 1, "factoredXent: abilMask", bMask))
+            return ev::undefined();
         float loss = 0.0f;
         try {
             loss = nn::factored_xent(*l.ptr, *mt.ptr, *at.ptr, *abt.ptr, *p.ptr, *dl.ptr,

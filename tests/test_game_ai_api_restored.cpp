@@ -328,6 +328,25 @@ const char* kNnOps = R"JS(
         nn.softmaxForward(new Float32Array([1, 1, 1]), masked, new Float32Array([1, 0, 1]));
         if (masked[1] > 1e-6) return "masked softmax leaked probability: " + masked[1];
 
+        // A mask the kernel would read past, or that is not a Float32Array,
+        // is refused rather than read out of bounds or silently ignored.
+        const refuses = (fn, what) => {
+            try { fn(); } catch (e) { if (e instanceof TypeError) return null; return what + " threw " + e; }
+            return what + " did not throw";
+        };
+        let err = refuses(() => nn.softmaxForward(new Float32Array([1, 1, 1]), masked,
+                                                  new Float32Array([1, 0])), "short softmax mask");
+        if (err) return err;
+        err = refuses(() => nn.softmaxForward(new Float32Array([1, 1, 1]), masked,
+                                              new Int32Array([1, 0, 1])), "Int32Array softmax mask");
+        if (err) return err;
+        const fLogits = new Float32Array(nn.N_MOVE + nn.N_ATTACK + nn.N_ABILITY);
+        const fProbs = new Float32Array(fLogits.length);
+        err = refuses(() => nn.factoredSoftmax(fLogits, fProbs, new Float32Array(1)), "short atkMask");
+        if (err) return err;
+        nn.factoredSoftmax(fLogits, fProbs, new Float32Array(nn.N_ATTACK - 1).fill(1),
+                           new Float32Array(nn.N_ABILITY - 1).fill(1));
+
         const mse = nn.mseScalar(0.5, 1.0);
         if (!(mse.loss > 0) || typeof mse.dPred !== "number") return "mseScalar: " + JSON.stringify(mse);
 

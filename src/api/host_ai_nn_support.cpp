@@ -48,7 +48,7 @@ TensorArg tensorArg(Value v) {
     // so a plain typed array is how a caller hands over CPU-side floats
     // without allocating a GpuTensor for them.
     if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && info.bytesPerElement == sizeof(float)) {
+        if (info.data && info.elementKind == ev::elements::Float32) {
             out.view = brotensor::Tensor::view(brotensor::Device::CPU, info.data,
                                                static_cast<int>(info.elementCount), 1,
                                                brotensor::Dtype::FP32);
@@ -83,7 +83,7 @@ float* floatPtr(Value v, size_t& count) {
     count = 0;
     if (ev::isUndefined(v) || ev::isNull(v)) return nullptr;
     auto info = ev::typedArrayInfo(v);
-    if (!info.data || info.bytesPerElement != sizeof(float)) return nullptr;
+    if (!info.data || info.elementKind != ev::elements::Float32) return nullptr;
     count = info.elementCount;
     return reinterpret_cast<float*>(info.data);
 }
