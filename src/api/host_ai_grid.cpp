@@ -63,11 +63,31 @@ void decorateObsWindow(ObjectBuilder& b) {
     b.def("build", 3, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapObsWindow(self);
         if (!d || !d->win || a.size() < 2) return ev::undefined();
+        const int col = i32At(a, 0), row = i32At(a, 1);
+        ev::Persistent selfP(self);
         std::vector<float> selfBlock;
         if (a.size() >= 3) selfBlock = readFloats(a[2]);
+
+        HostObsWindow::Live live;
+        live.tile.set(ev::getProperty(selfP.get(), "_tileFn"));
+        ev::Persistent enums(ev::getProperty(selfP.get(), "_enumerateFns"));
+        ev::Persistent samples(ev::getProperty(selfP.get(), "_sampleFns"));
+        live.enumerate.resize(d->layerCount);
+        live.sample.resize(d->layerCount);
+        for (size_t i = 0; i < d->layerCount; ++i) {
+            const uint32_t k = static_cast<uint32_t>(i);
+            if (ev::isObject(enums.get())) live.enumerate[i].set(ev::getElement(enums.get(), k));
+            if (ev::isObject(samples.get())) live.sample[i].set(ev::getElement(samples.get(), k));
+        }
+        struct Scope {
+            HostObsWindow* d;
+            HostObsWindow::Live* prev;
+            ~Scope() { d->live = prev; }
+        } scope{d, d->live};
+        d->live = &live;
+
         std::vector<float> out(static_cast<size_t>(d->win->out_dim()), 0.0f);
-        d->win->build(i32At(a, 0), i32At(a, 1),
-                      selfBlock.empty() ? nullptr : selfBlock.data(), selfBlock.size(),
+        d->win->build(col, row, selfBlock.empty() ? nullptr : selfBlock.data(), selfBlock.size(),
                       out.data());
         return makeFloat32Array(out.data(), out.size());
     });
@@ -92,6 +112,10 @@ Value createObsWindow(std::span<const Value> a) {
     auto cell = std::make_unique<HostObsWindow>();
     HostObsWindow* d = cell.get();
 
+    // Rooted here only until they move onto the window's JS object.
+    ev::Persistent tileFnV;
+    std::vector<ev::Persistent> enumerateFns, sampleFns;
+
     Value tileV = ev::getProperty(opts.get(), "tile");
     if (ev::isObject(tileV)) {
         ev::Persistent tile(tileV);
@@ -99,16 +123,17 @@ Value createObsWindow(std::span<const Value> a) {
         spec.tile_normalize = readFloats(ev::getProperty(tile.get(), "normalize"));
         spec.oob_tile = readFloats(ev::getProperty(tile.get(), "oob"));
         Value sf = ev::getProperty(tile.get(), "sample");
-        if (ev::isFunction(sf)) d->tileFn.set(sf);
+        if (ev::isFunction(sf)) tileFnV.set(sf);
     }
 
     grid::TileSampleFn tileFn;
-    if (ev::isFunction(d->tileFn.get())) {
+    if (ev::isFunction(tileFnV.get())) {
         const int TC = spec.tile_channels;
         tileFn = [d, TC](int col, int row, float* out) -> bool {
+            if (!d->live) return false;
             Value args[2] = {ev::fromDouble(col), ev::fromDouble(row)};
             bool ok = false;
-            Value r = callJs(d->tileFn, ev::undefined(), std::span<const Value>(args, 2), &ok);
+            Value r = callJs(d->live->tile, ev::undefined(), std::span<const Value>(args, 2), &ok);
             if (!ok) return false;
             if (ev::isBool(r)) {
                 const float v = ev::toBool(r) ? 1.0f : 0.0f;
@@ -149,24 +174,26 @@ Value createObsWindow(std::span<const Value> a) {
 
             // Each read is rooted before the next one allocates.
             Value enumV = ev::getProperty(lo.get(), "enumerate");
-            d->enumerateFns.emplace_back(ev::isFunction(enumV) ? enumV : ev::undefined());
+            enumerateFns.emplace_back(ev::isFunction(enumV) ? enumV : ev::undefined());
             Value sampV = ev::getProperty(lo.get(), "sample");
-            d->sampleFns.emplace_back(ev::isFunction(sampV) ? sampV : ev::undefined());
-            const size_t idx = d->enumerateFns.size() - 1;
+            sampleFns.emplace_back(ev::isFunction(sampV) ? sampV : ev::undefined());
+            const size_t idx = enumerateFns.size() - 1;
             const int chan = L.channels;
 
             L.enumerate_fn = [d, idx]() -> size_t {
+                if (!d->live || idx >= d->live->enumerate.size()) return 0;
                 bool ok = false;
-                Value r = callJs(d->enumerateFns[idx], ev::undefined(), {}, &ok);
+                Value r = callJs(d->live->enumerate[idx], ev::undefined(), {}, &ok);
                 if (!ok || !ev::isNumber(r)) return 0;
                 const double n2 = ev::toDouble(r);
                 return (std::isfinite(n2) && n2 > 0) ? static_cast<size_t>(n2) : 0;
             };
             L.sample_fn = [d, idx, chan](size_t i) -> grid::EntityCell {
                 grid::EntityCell c;
+                if (!d->live || idx >= d->live->sample.size()) return c;
                 Value arg = ev::fromDouble(static_cast<double>(i));
                 bool ok = false;
-                Value r = callJs(d->sampleFns[idx], ev::undefined(),
+                Value r = callJs(d->live->sample[idx], ev::undefined(),
                                  std::span<const Value>(&arg, 1), &ok);
                 if (!ok || !ev::isObject(r)) return c;
                 ev::Persistent ro(r);
@@ -191,7 +218,14 @@ Value createObsWindow(std::span<const Value> a) {
     }
 
     d->win = std::make_unique<grid::ObsWindow>(spec, tileFn, std::move(layers));
-    return g_obsWindowClass.createInstance(std::move(cell));
+    d->layerCount = enumerateFns.size();
+    ev::Persistent self(g_obsWindowClass.createInstance(std::move(cell)));
+    ev::Persistent enumArr(hostArrayOf(enumerateFns.size(), [&](size_t i) { return enumerateFns[i].get(); }));
+    ev::Persistent sampleArr(hostArrayOf(sampleFns.size(), [&](size_t i) { return sampleFns[i].get(); }));
+    self.set(ev::setProperty(self.get(), "_tileFn", tileFnV.get()));
+    self.set(ev::setProperty(self.get(), "_enumerateFns", enumArr.get()));
+    self.set(ev::setProperty(self.get(), "_sampleFns", sampleArr.get()));
+    return self.get();
 }
 
 // ── FrameStack ────────────────────────────────────────────────────────────

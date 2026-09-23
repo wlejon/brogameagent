@@ -42,11 +42,17 @@ inline constexpr uint32_t kHostGridTrainerTag   = 0x47545252u;  // 'GTRR'
 struct HostObsWindow {
     uint32_t tag = kHostObsWindowTag;
     std::unique_ptr<grid::ObsWindow> win;
-    // The JS callbacks the spec's samplers call. A Persistent is a GC root,
-    // so holding one here is all the anchoring the old gc_mark achieved.
-    ev::Persistent tileFn;
-    std::vector<ev::Persistent> enumerateFns;
-    std::vector<ev::Persistent> sampleFns;
+    // The JS callbacks the spec's samplers call live on the window's own JS
+    // object (`_tileFn`, `_enumerateFns`, `_sampleFns`): a host root would
+    // pin a window whose sampler closes over its owner (`this.win` with
+    // `sample: (c, r) => this.level[r][c]`) forever. build() roots them in
+    // `live` for its duration; the samplers read them from there.
+    struct Live {
+        ev::Persistent tile;
+        std::vector<ev::Persistent> enumerate, sample;
+    };
+    Live* live = nullptr;
+    size_t layerCount = 0;
 };
 
 struct HostFrameStack {

@@ -684,6 +684,49 @@ const char* kGridRecording = R"JS(
     })()
 )JS";
 
+// An ObsWindow whose samplers close over its owner (`this.win`) is an
+// ordinary cycle; a kept one still samples after a GC.
+const char* kObsWindowCycleSetup = R"JS(
+    (function() {
+        const grid = bro.ai.game.grid;
+        class Level {
+            constructor(v) {
+                this.v = v;
+                this.win = grid.createObsWindow({
+                    colsBehind: 1, colsAhead: 1, rowsUp: 0, rowsDown: 0,
+                    tile: { channels: 1, sample: (c, r) => this.v },
+                    layers: [{ channels: 1,
+                               enumerate: () => 1,
+                               sample: (i) => ({ col: 0, row: 0, value: this.v + 1 }) }],
+                });
+            }
+        }
+        const dropped = new Level(1);
+        const o = dropped.win.build(0, 0);
+        if (!(o instanceof Float32Array) || o.length !== dropped.win.outDim) return "build";
+        globalThis.__droppedLevel = new WeakRef(dropped);
+        globalThis.__droppedWin = new WeakRef(dropped.win);
+        globalThis.__keptLevel = new Level(0.5);
+        return "SUCCESS";
+    })()
+)JS";
+
+const char* kObsWindowCycleCheck = R"JS(
+    (function() {
+        if (globalThis.__droppedLevel.deref() !== undefined) return "a level holding its ObsWindow leaked";
+        if (globalThis.__droppedWin.deref() !== undefined) return "its ObsWindow leaked";
+        const kept = globalThis.__keptLevel;
+        const o = kept.win.build(0, 0);
+        const L = kept.win.layout();
+        if (o[L.tileOffset] !== 0.5) return "kept tile sampler after GC: " + o[L.tileOffset];
+        const lay = L.layers[0];
+        let sawEntity = false;
+        for (let i = 0; i < lay.size; i++) if (o[lay.offset + i] === 1.5) sawEntity = true;
+        if (!sawEntity) return "kept entity sampler after GC";
+        return "SUCCESS";
+    })()
+)JS";
+
 #endif  // BROGAMEAGENT_HAS_NN
 
 // ---------------------------------------------------------------------------
@@ -794,6 +837,9 @@ int main() {
         runJs("learn", kLearn);
         runJs("grid", kGrid);
         runJs("grid recording", kGridRecording);
+        runJs("ObsWindow sampler cycle: setup", kObsWindowCycleSetup);
+        collectNow();
+        runJs("ObsWindow sampler cycle: collected / kept", kObsWindowCycleCheck);
 #else
         std::cout << "(nn / learn / grid skipped: built without the neural layer)" << std::endl;
 #endif
