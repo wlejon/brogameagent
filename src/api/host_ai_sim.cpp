@@ -28,8 +28,6 @@ struct HostSimulation {
     std::unique_ptr<brogameagent::Simulation> sim;
     HostWorld* world = nullptr;
     ev::Persistent worldValue;
-    // One root per registered policy; dropping a policy drops its root.
-    std::vector<std::pair<int, ev::Persistent>> policies;
 };
 
 struct HostRecorder {
@@ -113,16 +111,11 @@ void ensureAISimClassesInstalled() {
             int agentId = i32At(a, 0);
             if (!ev::isFunction(a[1])) return ev::throwTypeError("policy must be a function");
 
-            // Root the callback for as long as the policy is registered; the
-            // lambda below captures the raw pointer to that stable slot.
-            for (auto& entry : h->policies) {
-                if (entry.first == agentId) {
-                    entry.second.set(a[1]);
-                    return ev::undefined();
-                }
-            }
-            h->policies.emplace_back(agentId, ev::Persistent(a[1]));
-
+            // The lambda's own Persistent roots the callback for as long as
+            // the policy is registered; Simulation::addPolicy replaces an
+            // agent's previous policy (and so drops its root), which is what
+            // re-adding one must do — the old code only swapped a side-table
+            // root and kept calling the first function.
             ev::Persistent fn(a[1]);
             HostWorld* world = h->world;
             ev::Persistent worldValue = h->worldValue;
@@ -143,12 +136,6 @@ void ensureAISimClassesInstalled() {
             if (!h || !h->sim || a.empty()) return ev::undefined();
             int agentId = i32At(a, 0);
             h->sim->removePolicy(agentId);
-            for (size_t i = 0; i < h->policies.size(); ++i) {
-                if (h->policies[i].first == agentId) {
-                    h->policies.erase(h->policies.begin() + static_cast<std::ptrdiff_t>(i));
-                    break;
-                }
-            }
             return ev::undefined();
         });
     });
