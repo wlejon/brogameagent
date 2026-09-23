@@ -83,7 +83,8 @@ struct HostGenericTrainer {
 
 struct HostInferenceServer {
     uint32_t tag = kHostInferServerTag;
-    std::unique_ptr<learn::BatchedInferenceServer> server;
+    // Shared with every ServerBackend made over it (see HostServerBackend).
+    std::shared_ptr<learn::BatchedInferenceServer> server;
     std::shared_ptr<learn::BatchedNet> netRef;
 };
 
@@ -97,7 +98,11 @@ struct HostServerBackend {
     uint32_t tag = kHostServerBackendTag;
     std::unique_ptr<learn::IInferenceBackend> backend;
     std::shared_ptr<learn::BatchedNet> netRef;
-    ev::Persistent serverRef;
+    // The backend calls the server through a raw pointer, so it co-owns it:
+    // a JS `server.shutdown()` (which resets the server cell) must not free a
+    // server a live backend still dispatches to. The server's worker thread
+    // stops when the last owner goes.
+    std::shared_ptr<learn::BatchedInferenceServer> serverRef;
 };
 
 inline HostReplayBuffer* unwrapReplayBuffer(Value v) {

@@ -312,10 +312,14 @@ Value makeGenericSituationObject(const learn::GenericSituation& s) {
 
 bool readGenericSituationValue(Value v, learn::GenericSituation& out) {
     if (!ev::isObject(v)) return false;
-    if (!readFloatVecProp(v, "obs", out.obs, /*required=*/true)) return false;
-    if (!readFloatVecProp(v, "policyTarget", out.policy_target, /*required=*/true)) return false;
-    readFloatVecProp(v, "actionMask", out.action_mask, /*required=*/false);
-    out.value_target = static_cast<float>(getDoubleProperty(v, "valueTarget", 0.0));
+    // Each property read allocates; `v` is re-read from a root between them.
+    ev::Persistent root(v);
+    if (!readFloatVecProp(root.get(), "obs", out.obs, /*required=*/true)) return false;
+    if (!readFloatVecProp(root.get(), "policyTarget", out.policy_target, /*required=*/true)) {
+        return false;
+    }
+    readFloatVecProp(root.get(), "actionMask", out.action_mask, /*required=*/false);
+    out.value_target = static_cast<float>(getDoubleProperty(root.get(), "valueTarget", 0.0));
     return true;
 }
 
@@ -422,7 +426,7 @@ void installAILearnGeneric(ObjectBuilder& learnNs) {
         }
         auto cell = std::make_unique<HostInferenceServer>();
         cell->netRef = net;
-        cell->server = std::make_unique<learn::BatchedInferenceServer>(net.get(), cfg);
+        cell->server = std::make_shared<learn::BatchedInferenceServer>(net.get(), cfg);
         return g_inferenceServerClass.createInstance(std::move(cell));
     });
 
@@ -452,7 +456,9 @@ void installAILearnGeneric(ObjectBuilder& learnNs) {
         }
         auto cell = std::make_unique<HostServerBackend>();
         cell->netRef = net;
-        cell->serverRef.set(a[0]);
+        // Shares ownership: server.shutdown() drops only the server's own
+        // reference, so a backend still in use never calls a freed server.
+        cell->serverRef = sd->server;
         cell->backend = std::make_unique<learn::ServerBackend>(sd->server.get(), net.get());
         return g_serverBackendClass.createInstance(std::move(cell));
     });
