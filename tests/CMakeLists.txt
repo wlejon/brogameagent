@@ -37,6 +37,18 @@ else()
 endif()
 add_test(NAME brogameagent_replay_reader_test COMMAND brogameagent_replay_reader_test)
 
+# Simulation add/removePolicy from inside a policy during step(). Core-only.
+add_executable(brogameagent_simulation_test
+    test_simulation.cpp
+)
+target_link_libraries(brogameagent_simulation_test PRIVATE brogameagent)
+if(MSVC)
+    target_compile_options(brogameagent_simulation_test PRIVATE /W4)
+else()
+    target_compile_options(brogameagent_simulation_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME brogameagent_simulation_test COMMAND brogameagent_simulation_test)
+
 # Polygon navmesh (Recast/Detour). Core-only — builds with the NN layer off,
 # but needs the navmesh feature compiled in.
 if(BROGAMEAGENT_WITH_NAVMESH)

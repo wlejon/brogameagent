@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <unordered_map>
+#include <vector>
 
 namespace brogameagent {
 
@@ -31,10 +32,20 @@ public:
     /// Register / replace a policy for the agent with this Unit::id.
     /// Policy agents are skipped by World::tick's scripted update — the
     /// Simulation drives them via applyAction instead.
+    ///
+    /// Called from inside a policy while step() runs, the change is queued
+    /// and applied, in call order, when the outermost step() returns: the
+    /// step finishes with the policy set it started with (a policy may
+    /// replace or remove itself without destroying the function running).
     void addPolicy(int agentId, PolicyFn fn);
 
     /// Remove a policy (the agent will fall back to scripted World::tick).
+    /// Deferred like addPolicy when called during step().
     void removePolicy(int agentId);
+
+    /// Whether `agentId` has a policy, counting changes queued by a step in
+    /// progress.
+    bool hasPolicy(int agentId) const;
 
     /// One fixed-dt step. Order: policies → applyAction → world.tick.
     void step(float dt);
@@ -49,8 +60,17 @@ public:
     void resetCounters();
 
 private:
+    struct PendingChange {
+        int agentId;
+        PolicyFn fn;   // empty = remove
+    };
+
+    void applyPending_();
+
     World& world_;
     std::unordered_map<int, PolicyFn> policies_;
+    std::vector<PendingChange> pending_;
+    int stepDepth_ = 0;   // > 0 while step() runs (re-entrant steps nest)
     int   steps_ = 0;
     float elapsed_ = 0.0f;
 };

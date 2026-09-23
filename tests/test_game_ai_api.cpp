@@ -281,6 +281,58 @@ static void test_register_capability() {
     TEST_CHECK(!cap->gate(ctx));
 }
 
+// A policy that adds, replaces or removes policies (its own included) while
+// step() runs: the changes land when the step ends, the running function
+// keeps running, and nothing it closes over is lost.
+static void test_policy_mutation_during_step() {
+    std::cout << "[5] Simulation policies mutated from inside a step..." << std::endl;
+
+    const std::string got = evalString(R"JS(
+        (function() {
+            const G = bro.ai.game;
+            const w = G.createWorld();
+            w.addAgent(G.createAgent({ id: 1, x: 0, z: 0 }));
+            w.addAgent(G.createAgent({ id: 2, x: 3, z: 0 }));
+            const sim = G.createSimulation(w);
+            const log = [];
+            const hold = { moveX: 0, moveZ: 0 };
+
+            sim.addPolicy(1, function first(agent) {
+                log.push("first:" + agent.unit.id);
+                // Replace myself and add a policy for agent 2 (later in the
+                // roster): neither runs until the next step.
+                sim.addPolicy(1, function second(a) {
+                    log.push("second:" + a.unit.id);
+                    sim.removePolicy(1);          // remove myself mid-call
+                    sim.removePolicy(2);
+                    log.push("second still running");
+                    return hold;
+                });
+                sim.addPolicy(2, function (a) { log.push("two:" + a.unit.id); return hold; });
+                return hold;
+            });
+
+            sim.step(1 / 60);
+            if (log.join("|") !== "first:1") return "step 1: " + log.join("|");
+            sim.step(1 / 60);
+            if (log.join("|") !== "first:1|second:1|second still running|two:2")
+                return "step 2: " + log.join("|");
+            sim.step(1 / 60);
+            if (log.length !== 4) return "step 3 ran a removed policy: " + log.join("|");
+            if (sim.steps !== 3) return "steps: " + sim.steps;
+
+            // Adding back after removal works outside a step.
+            let again = 0;
+            sim.addPolicy(2, function () { again++; return hold; });
+            sim.runSteps(1 / 60, 2);
+            if (again !== 2) return "re-added policy ran " + again + " times";
+            return "SUCCESS";
+        })()
+    )JS");
+    if (got != "SUCCESS") std::cerr << "policy mutation: " << got << std::endl;
+    TEST_CHECK(got == "SUCCESS");
+}
+
 int main() {
     std::cout << "Running brogameagent API test..." << std::endl;
 
@@ -292,6 +344,7 @@ int main() {
         test_bad_args();
         test_navgrid_path();
         test_register_capability();
+        test_policy_mutation_during_step();
     }
     ev::destroyRealm(realm);
 
