@@ -686,6 +686,84 @@ const char* kGridRecording = R"JS(
 
 #endif  // BROGAMEAGENT_HAS_NN
 
+// ---------------------------------------------------------------------------
+// GenericMcts: the env and the prior/value callbacks ride on the search's JS
+// object, so a game that is its own env and keeps `this.mcts` is an ordinary
+// cycle the collector can free, and a kept one still searches after a GC.
+// ---------------------------------------------------------------------------
+
+const char* kGenericMctsCycleSetup = R"JS(
+    (function() {
+        const G = bro.ai.game;
+        class Game {
+            constructor() {
+                this.s = 0;
+                this.priorCalls = 0;
+                this.valueCalls = 0;
+                const self = this;
+                this.mcts = G.createGenericMcts({
+                    env: this, iterations: 24,
+                    priorFn(obs, legal) { self.priorCalls++; return new Float32Array([0.2, 0.8]); },
+                    valueFn(obs) { self.valueCalls++; return obs[0] > 1 ? 1 : 0; },
+                });
+            }
+            get numActions() { return 2; }
+            snapshot() { return { s: this.s }; }
+            restore(v) { this.s = v.s; }
+            step(a) { this.s += a; return { reward: a, done: this.s >= 3 }; }
+            legalActions() { return this.s >= 3 ? [] : [0, 1]; }
+            observe() { return new Float32Array([this.s, 1]); }
+        }
+
+        const dropped = new Game();
+        const p0 = dropped.mcts.search();
+        if (p0 !== 0 && p0 !== 1) return "search: " + p0;
+        if (dropped.priorCalls === 0 || dropped.valueCalls === 0) return "callbacks not called";
+        globalThis.__droppedGame = new WeakRef(dropped);
+        globalThis.__droppedMcts = new WeakRef(dropped.mcts);
+
+        const kept = new Game();
+        kept.mcts.search();
+        kept.mcts.advanceRoot(1);
+        globalThis.__keptGame = kept;
+        return "SUCCESS";
+    })()
+)JS";
+
+const char* kGenericMctsCycleCheck = R"JS(
+    (function() {
+        if (globalThis.__droppedGame.deref() !== undefined) return "a game that is its own env leaked";
+        if (globalThis.__droppedMcts.deref() !== undefined) return "its GenericMcts leaked";
+
+        const kept = globalThis.__keptGame;
+        kept.s = 0;
+        kept.priorCalls = 0; kept.valueCalls = 0;
+        kept.mcts.reset();
+        const pick = kept.mcts.search();
+        if (pick !== 0 && pick !== 1) return "kept search after GC: " + pick;
+        if (kept.priorCalls === 0 || kept.valueCalls === 0) return "kept callbacks lost after GC";
+
+        // Clearing the callbacks falls back to uniform priors / rollouts.
+        kept.mcts.setPriorFn(null);
+        kept.mcts.setValueFn(null);
+        kept.priorCalls = 0; kept.valueCalls = 0;
+        kept.s = 0; kept.mcts.reset();
+        const p2 = kept.mcts.search();
+        if (p2 !== 0 && p2 !== 1) return "search without callbacks: " + p2;
+        if (kept.priorCalls !== 0 || kept.valueCalls !== 0) return "cleared callbacks still called";
+        return "SUCCESS";
+    })()
+)JS";
+
+// A full collection with no script frame on the stack: drain the microtask
+// checkpoint so WeakRef targets held for the current job are released.
+void collectNow() {
+    ev::drainMicrotasks();
+    ev::collectGarbage();
+    ev::drainFinalizers();
+    ev::collectGarbage();
+}
+
 } // namespace
 
 int main() {
@@ -706,6 +784,9 @@ int main() {
         runJs("Agent.applyAction", kAgentApplyAction);
         runJs("HexNav.field", kHexNavField);
         runJs("binding fixes (GC audit)", kBindingFixes);
+        runJs("GenericMcts env cycle: setup", kGenericMctsCycleSetup);
+        collectNow();
+        runJs("GenericMcts env cycle: collected / kept", kGenericMctsCycleCheck);
 #ifdef BROGAMEAGENT_HAS_NN
         runJs("nn circuits", kNnCircuits);
         runJs("nn ops", kNnOps);

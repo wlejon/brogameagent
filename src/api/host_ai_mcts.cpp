@@ -17,21 +17,62 @@ namespace {
 
 // ─── GenericMcts Host Wrapper ──────────────────────────────────────────────
 
+// The env and the prior/value callbacks live on the GenericMcts's own JS
+// object (`_env`, `_priorFn`, `_valueFn`), not in the native half: a host
+// root is invisible to the collector as an edge, so the everyday shape —
+// a game object that is its own env and keeps `this.mcts` — would pin both
+// forever. A LiveScope roots them only while a method that can run the env
+// is on the stack; the search closures read them from `live`.
+struct GenericLive {
+    ev::Persistent self;  // the search object stays alive while it runs
+    ev::Persistent env, snapshot, restore, step, legal, observe, prior, value;
+};
+
 struct HostGenericMcts {
     uint32_t tag = kHostGenericMctsTag;
     std::unique_ptr<bgm::GenericMcts> mcts;
+    GenericLive* live = nullptr;  // non-null only inside a LiveScope
 
-    ev::Persistent envObj;
-    ev::Persistent snapshotFn;
-    ev::Persistent restoreFn;
-    ev::Persistent stepFn;
-    ev::Persistent legalFn;
-    ev::Persistent observeFn;
-    ev::Persistent priorFn;
-    ev::Persistent valueFn;
+    // The backend never refers back to the search, so holding it natively
+    // makes no cycle; it keeps the raw backend pointer the native
+    // prior/value closures use alive.
     ev::Persistent backendRef;
 
     int numActions = 0;
+};
+
+Value envMethod(Value env, const char* name) {
+    ev::Persistent envP(env);
+    Value fn = ev::getProperty(envP.get(), name);
+    return ev::isFunction(fn) ? fn : ev::undefined();
+}
+
+class LiveScope {
+public:
+    LiveScope(HostGenericMcts* h, Value self) : h_(h), prev_(h->live) {
+        live_.self.set(self);
+        const ev::Persistent& selfP = live_.self;
+        live_.env.set(ev::getProperty(selfP.get(), "_env"));
+        live_.snapshot.set(envMethod(live_.env.get(), "snapshot"));
+        live_.restore.set(envMethod(live_.env.get(), "restore"));
+        live_.step.set(envMethod(live_.env.get(), "step"));
+        live_.legal.set(envMethod(live_.env.get(), "legalActions"));
+        if (!ev::isFunction(live_.legal.get())) live_.legal.set(envMethod(live_.env.get(), "legal"));
+        live_.observe.set(envMethod(live_.env.get(), "observe"));
+        Value p = ev::getProperty(selfP.get(), "_priorFn");
+        live_.prior.set(ev::isFunction(p) ? p : ev::undefined());
+        Value v = ev::getProperty(selfP.get(), "_valueFn");
+        live_.value.set(ev::isFunction(v) ? v : ev::undefined());
+        h_->live = &live_;
+    }
+    ~LiveScope() { h_->live = prev_; }
+    LiveScope(const LiveScope&) = delete;
+    LiveScope& operator=(const LiveScope&) = delete;
+
+private:
+    HostGenericMcts* h_;
+    GenericLive* prev_;
+    GenericLive live_;
 };
 
 HostGenericMcts* unwrapGenericMcts(Value v) {
@@ -96,35 +137,37 @@ Value makeInt32ArrayFromInts(const std::vector<int>& v) {
     return makeInt32Array(tmp.data(), tmp.size());
 }
 
-void rewireGenericPrior(HostGenericMcts* h) {
+// Point the search's prior at the JS `_priorFn` (read through `live` at
+// call time), or at nothing. The closure holds no JS value.
+void rewireGenericPrior(HostGenericMcts* h, bool hasFn) {
     if (!h || !h->mcts) return;
-    if (!ev::isFunction(h->priorFn.get())) {
+    if (!hasFn) {
         h->mcts->set_prior_fn(nullptr);
         return;
     }
-    ev::Persistent fn = h->priorFn;
-    h->mcts->set_prior_fn([fn](const std::vector<float>& obs,
-                               const std::vector<int>& legal) -> std::vector<float> {
+    h->mcts->set_prior_fn([h](const std::vector<float>& obs,
+                              const std::vector<int>& legal) -> std::vector<float> {
+        if (!h->live || !ev::isFunction(h->live->prior.get())) return {};
         ev::Persistent obsV(makeFloat32Array(obs.data(), obs.size()));
         ev::Persistent legV(makeInt32ArrayFromInts(legal));
         Value args[2] = { obsV.get(), legV.get() };
-        auto r = ev::call(fn.get(), ev::undefined(), args);
+        auto r = ev::call(h->live->prior.get(), ev::undefined(), args);
         if (r.thrown) return {};
         return readFloatsFromValue(r.value);
     });
 }
 
-void rewireGenericValue(HostGenericMcts* h) {
+void rewireGenericValue(HostGenericMcts* h, bool hasFn) {
     if (!h || !h->mcts) return;
-    if (!ev::isFunction(h->valueFn.get())) {
+    if (!hasFn) {
         h->mcts->set_value_fn(nullptr);
         return;
     }
-    ev::Persistent fn = h->valueFn;
-    h->mcts->set_value_fn([fn](const std::vector<float>& obs) -> float {
+    h->mcts->set_value_fn([h](const std::vector<float>& obs) -> float {
+        if (!h->live || !ev::isFunction(h->live->value.get())) return 0.0f;
         ev::Persistent obsV(makeFloat32Array(obs.data(), obs.size()));
         Value arg = obsV.get();
-        auto r = ev::call(fn.get(), ev::undefined(), std::span<const Value>(&arg, 1));
+        auto r = ev::call(h->live->value.get(), ev::undefined(), std::span<const Value>(&arg, 1));
         if (r.thrown || !ev::isNumber(r.value)) return 0.0f;
         double d = ev::toDouble(r.value);
         return (!std::isfinite(d)) ? 0.0f : static_cast<float>(d);
@@ -195,8 +238,9 @@ void ensureAIMctsClassesInstalled() {
         b.def("search", 0, [](Value self, std::span<const Value>) -> Value {
             auto* h = unwrapGenericMcts(self);
             if (!h || !h->mcts) return ev::fromDouble(-1);
-            if (ev::isFunction(h->legalFn.get())) {
-                ev::CallResult lres = ev::call(h->legalFn.get(), h->envObj.get(), {});
+            LiveScope scope(h, self);
+            if (ev::isFunction(h->live->legal.get())) {
+                ev::CallResult lres = ev::call(h->live->legal.get(), h->live->env.get(), {});
                 if (!lres.thrown && ev::isObject(lres.value)) {
                     Value lenV = ev::getProperty(lres.value, "length");
                     if (ev::isNumber(lenV) && ev::toDouble(lenV) == 0) return ev::fromDouble(-1);
@@ -221,7 +265,11 @@ void ensureAIMctsClassesInstalled() {
 
         b.def("advanceRoot", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapGenericMcts(self);
-            if (h && h->mcts) h->mcts->advance_root(i32At(a, 0));
+            if (h && h->mcts) {
+                const int action = i32At(a, 0);
+                LiveScope scope(h, self);
+                h->mcts->advance_root(action);
+            }
             return ev::undefined();
         });
 
@@ -254,16 +302,18 @@ void ensureAIMctsClassesInstalled() {
         b.def("setPriorFn", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapGenericMcts(self);
             if (!h) return ev::undefined();
-            h->priorFn.set((!a.empty() && ev::isFunction(a[0])) ? a[0] : ev::undefined());
-            rewireGenericPrior(h);
+            const bool hasFn = !a.empty() && ev::isFunction(a[0]);
+            ev::setProperty(self, "_priorFn", hasFn ? a[0] : ev::undefined());
+            rewireGenericPrior(h, hasFn);
             return ev::undefined();
         });
 
         b.def("setValueFn", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapGenericMcts(self);
             if (!h) return ev::undefined();
-            h->valueFn.set((!a.empty() && ev::isFunction(a[0])) ? a[0] : ev::undefined());
-            rewireGenericValue(h);
+            const bool hasFn = !a.empty() && ev::isFunction(a[0]);
+            ev::setProperty(self, "_valueFn", hasFn ? a[0] : ev::undefined());
+            rewireGenericValue(h, hasFn);
             return ev::undefined();
         });
     });
@@ -497,31 +547,25 @@ void installAIMcts(ObjectBuilder& game) {
 
         // The env is opts.env, or opts itself when the env is passed inline.
         auto h = std::make_unique<HostGenericMcts>();
+        ev::Persistent envObj;
         {
             Value env = ev::getProperty(opts.get(), "env");
-            h->envObj = ev::Persistent(ev::isObject(env) ? env : opts.get());
+            envObj.set(ev::isObject(env) ? env : opts.get());
         }
 
-        // Every read goes through the rooted envObj: each getProperty
-        // allocates, so a local copy of the env would be stale by the second.
-        auto method = [&](const char* name) -> Value {
-            Value fn = ev::getProperty(h->envObj.get(), name);
-            return ev::isFunction(fn) ? fn : ev::undefined();
-        };
-        h->snapshotFn = ev::Persistent(method("snapshot"));
-        h->restoreFn = ev::Persistent(method("restore"));
-        h->stepFn = ev::Persistent(method("step"));
-        h->legalFn = ev::Persistent(method("legalActions"));
-        if (!ev::isFunction(h->legalFn.get())) h->legalFn = ev::Persistent(method("legal"));
-        h->observeFn = ev::Persistent(method("observe"));
+        // Checked here; read again from the env at every search (LiveScope).
+        const bool envOk = ev::isFunction(envMethod(envObj.get(), "snapshot")) &&
+                           ev::isFunction(envMethod(envObj.get(), "restore")) &&
+                           ev::isFunction(envMethod(envObj.get(), "step")) &&
+                           (ev::isFunction(envMethod(envObj.get(), "legalActions")) ||
+                            ev::isFunction(envMethod(envObj.get(), "legal"))) &&
+                           ev::isFunction(envMethod(envObj.get(), "observe"));
 
-        Value numActV = ev::getProperty(h->envObj.get(), "numActions");
+        Value numActV = ev::getProperty(envObj.get(), "numActions");
         if (!ev::isNumber(numActV)) numActV = ev::getProperty(opts.get(), "numActions");
         h->numActions = ev::isNumber(numActV) ? static_cast<int>(ev::toDouble(numActV)) : 0;
 
-        if (!ev::isFunction(h->snapshotFn.get()) || !ev::isFunction(h->restoreFn.get()) ||
-            !ev::isFunction(h->stepFn.get()) || !ev::isFunction(h->legalFn.get()) ||
-            !ev::isFunction(h->observeFn.get())) {
+        if (!envOk) {
             return ev::throwTypeError(
                 "createGenericMcts: env must define snapshot/restore/step/legalActions/observe");
         }
@@ -531,8 +575,11 @@ void installAIMcts(ObjectBuilder& game) {
 
         bgm::GenericEnv envBridge;
         envBridge.num_actions = h->numActions;
+        // Each bridge runs only inside a LiveScope (search / advanceRoot);
+        // outside one there is no env to call and it answers a default.
         envBridge.snapshot_fn = [ptr = h.get()]() -> std::any {
-            auto res = ev::call(ptr->snapshotFn.get(), ptr->envObj.get(), {});
+            if (!ptr->live) return {};
+            auto res = ev::call(ptr->live->snapshot.get(), ptr->live->env.get(), {});
             if (res.thrown) return {};
             // The snapshot is a JS value, so it has to be held as a root while
             // the search keeps it — a bare Value would go stale at the next
@@ -540,15 +587,16 @@ void installAIMcts(ObjectBuilder& game) {
             return std::any(std::make_shared<ev::Persistent>(res.value));
         };
         envBridge.restore_fn = [ptr = h.get()](const std::any& s) {
-            if (!s.has_value()) return;
+            if (!ptr->live || !s.has_value()) return;
             const auto* held = std::any_cast<std::shared_ptr<ev::Persistent>>(&s);
             if (!held || !*held) return;
             Value sv = (*held)->get();
-            ev::call(ptr->restoreFn.get(), ptr->envObj.get(), std::span<const Value>(&sv, 1));
+            ev::call(ptr->live->restore.get(), ptr->live->env.get(), std::span<const Value>(&sv, 1));
         };
         envBridge.step_fn = [ptr = h.get()](int action) -> bgm::GenericStepResult {
+            if (!ptr->live) return {};
             Value av = ev::fromDouble(action);
-            auto res = ev::call(ptr->stepFn.get(), ptr->envObj.get(),
+            auto res = ev::call(ptr->live->step.get(), ptr->live->env.get(),
                                 std::span<const Value>(&av, 1));
             if (res.thrown || !ev::isObject(res.value)) return {};
             ev::Persistent r(res.value);
@@ -558,7 +606,8 @@ void installAIMcts(ObjectBuilder& game) {
             return sr;
         };
         envBridge.legal_actions_fn = [ptr = h.get()]() -> std::vector<int> {
-            auto res = ev::call(ptr->legalFn.get(), ptr->envObj.get(), {});
+            if (!ptr->live) return {};
+            auto res = ev::call(ptr->live->legal.get(), ptr->live->env.get(), {});
             if (res.thrown || !ev::isObject(res.value)) return {};
             ev::Persistent arr(res.value);
             std::vector<int> acts;
@@ -576,7 +625,8 @@ void installAIMcts(ObjectBuilder& game) {
             return acts;
         };
         envBridge.observe_fn = [ptr = h.get()]() -> std::vector<float> {
-            auto res = ev::call(ptr->observeFn.get(), ptr->envObj.get(), {});
+            if (!ptr->live) return {};
+            auto res = ev::call(ptr->live->observe.get(), ptr->live->env.get(), {});
             if (res.thrown || !ev::isObject(res.value)) return {};
             return readFloatsFromValue(res.value);
         };
@@ -584,13 +634,13 @@ void installAIMcts(ObjectBuilder& game) {
         h->mcts = std::make_unique<bgm::GenericMcts>(std::move(envBridge));
         h->mcts->set_config(parseGenericConfig(opts.get(), h->mcts->config()));
 
-        Value pv = ev::getProperty(opts.get(), "priorFn");
-        if (ev::isFunction(pv)) h->priorFn = ev::Persistent(pv);
-        rewireGenericPrior(h.get());
+        ev::Persistent priorFn(ev::getProperty(opts.get(), "priorFn"));
+        const bool hasPrior = ev::isFunction(priorFn.get());
+        rewireGenericPrior(h.get(), hasPrior);
 
-        Value vv = ev::getProperty(opts.get(), "valueFn");
-        if (ev::isFunction(vv)) h->valueFn = ev::Persistent(vv);
-        rewireGenericValue(h.get());
+        ev::Persistent valueFn(ev::getProperty(opts.get(), "valueFn"));
+        const bool hasValue = ev::isFunction(valueFn.get());
+        rewireGenericValue(h.get(), hasValue);
 
         // A DirectBackend / ServerBackend fills in whichever of prior/value
         // was not given explicitly — an explicit priorFn/valueFn always wins.
@@ -603,12 +653,17 @@ void installAIMcts(ObjectBuilder& game) {
                     "(bro.ai.game.learn.createDirectBackend/createServerBackend)");
             }
             h->backendRef = ev::Persistent(bv);
-            if (!ev::isFunction(h->priorFn.get())) h->mcts->set_prior_fn(makeNativePriorFn(backend));
-            if (!ev::isFunction(h->valueFn.get())) h->mcts->set_value_fn(makeNativeValueFn(backend));
+            if (!hasPrior) h->mcts->set_prior_fn(makeNativePriorFn(backend));
+            if (!hasValue) h->mcts->set_value_fn(makeNativeValueFn(backend));
         }
 
         auto* raw = h.release();
-        return g_genericMctsClass.make(raw, [](void* p) { delete static_cast<HostGenericMcts*>(p); });
+        ev::Persistent self(g_genericMctsClass.make(
+            raw, [](void* p) { delete static_cast<HostGenericMcts*>(p); }));
+        self.set(ev::setProperty(self.get(), "_env", envObj.get()));
+        self.set(ev::setProperty(self.get(), "_priorFn", hasPrior ? priorFn.get() : ev::undefined()));
+        self.set(ev::setProperty(self.get(), "_valueFn", hasValue ? valueFn.get() : ev::undefined()));
+        return self.get();
     });
 
     game.def("createMcts", 1, [](Value, std::span<const Value> a) -> Value {
