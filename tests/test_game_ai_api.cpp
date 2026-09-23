@@ -7,6 +7,8 @@
 #include "embed/embed.h"
 #include "eval/eval.h"
 
+#include <brogameagent/capability.h>
+
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -175,6 +177,110 @@ static void test_navgrid_path() {
     TEST_CHECK(ev::toUtf8(res.value) == "SUCCESS");
 }
 
+static std::string evalString(const char* script) {
+    ev::CallResult res = bronze::eval::evalScript(script);
+    if (res.thrown) {
+        std::cerr << "eval threw: " << ev::toUtf8(ev::getProperty(res.value, "message")) << std::endl;
+        std::exit(1);
+    }
+    return ev::toUtf8(res.value);
+}
+
+// registerCapability stores the spec, and the host that builds bindings gets
+// a working Capability for the name through makeRegisteredCapability.
+static void test_register_capability() {
+    std::cout << "[4/4] registerCapability drives gate/start/advance/cancel..." << std::endl;
+
+    TEST_CHECK(evalString(R"JS(
+        (function() {
+            const G = bro.ai.game;
+            globalThis.capLog = [];
+            const spec = {
+                ready: false,
+                gate() { return this.ready; },
+                start(a0, a1) { capLog.push("start " + a0 + " " + a1); },
+                advance(dt, elapsed) { capLog.push("adv " + elapsed.toFixed(2)); return elapsed >= 0.2; },
+                cancel() { capLog.push("cancel"); },
+            };
+            globalThis.kiteSpec = spec;
+            const id = G.registerCapability("kite", spec);
+            if (id < 100) throw new Error("auto id below 100: " + id);
+            const again = G.registerCapability("kite", spec);
+            if (again !== id) throw new Error("re-registration changed the id");
+            if (G.registerCapability("dash", { id: 150 }) !== 150) throw new Error("explicit id");
+            const bad = (fn, name, what) => {
+                try { fn(); } catch (e) { if (e.name === name) return; throw new Error(what + " threw " + e.name); }
+                throw new Error(what + " did not throw");
+            };
+            bad(() => G.registerCapability("x", { id: 5 }), "RangeError", "id in the built-in range");
+            bad(() => G.registerCapability("y", { id: 150 }), "RangeError", "duplicate id");
+            bad(() => G.registerCapability("z", { gate: 3 }), "TypeError", "non-function gate");
+            bad(() => G.registerCapability("", {}), "TypeError", "empty name");
+            return String(id);
+        })();
+    )JS") != "");
+
+    TEST_CHECK(brogameagent::api::makeRegisteredCapability("nope") == nullptr);
+    TEST_CHECK(brogameagent::api::registeredCapabilityId("nope") == -1);
+    TEST_CHECK(brogameagent::api::registeredCapabilityId("dash") == 150);
+
+    auto cap = brogameagent::api::makeRegisteredCapability("kite");
+    TEST_CHECK(cap != nullptr);
+    TEST_CHECK(cap->id() == brogameagent::api::registeredCapabilityId("kite"));
+    TEST_CHECK(std::string(cap->name()) == "kite");
+
+    brogameagent::CapContext ctx;
+    TEST_CHECK(!cap->gate(ctx));
+    evalString("kiteSpec.ready = true; 'ok'");
+    TEST_CHECK(cap->gate(ctx));
+
+    brogameagent::Action act;
+    act.capId = cap->id();
+    act.i0 = 7;
+    act.i1 = 9;
+    cap->start(ctx, act);
+    TEST_CHECK(!act.done);  // an advance keeps it in flight
+    cap->advance(ctx, act, 0.1f);
+    TEST_CHECK(!act.done);
+    cap->advance(ctx, act, 0.1f);
+    TEST_CHECK(act.done);
+    cap->cancel(ctx, act);
+    TEST_CHECK(evalString("capLog.join('|')") == "start 7 9|adv 0.10|adv 0.20|cancel");
+
+    // No advance: the action lasts its duration. A throwing advance ends it.
+    evalString(R"JS(
+        bro.ai.game.registerCapability("blink", {});
+        bro.ai.game.registerCapability("broken", { advance() { throw new Error("boom"); } });
+        'ok'
+    )JS");
+    auto blink = brogameagent::api::makeRegisteredCapability("blink");
+    brogameagent::Action b;
+    blink->start(ctx, b);
+    TEST_CHECK(b.done);
+    b = brogameagent::Action{};
+    b.dur = 0.15f;
+    blink->start(ctx, b);
+    TEST_CHECK(!b.done);
+    blink->advance(ctx, b, 0.1f);
+    TEST_CHECK(!b.done);
+    blink->advance(ctx, b, 0.1f);
+    TEST_CHECK(b.done);
+
+    auto broken = brogameagent::api::makeRegisteredCapability("broken");
+    brogameagent::Action c;
+    broken->start(ctx, c);
+    TEST_CHECK(!c.done);
+    broken->advance(ctx, c, 0.1f);
+    TEST_CHECK(c.done);
+
+    // A spec replaced by re-registration takes over existing instances.
+    evalString(R"JS(
+        bro.ai.game.registerCapability("kite", { gate() { return false; } });
+        'ok'
+    )JS");
+    TEST_CHECK(!cap->gate(ctx));
+}
+
 int main() {
     std::cout << "Running brogameagent API test..." << std::endl;
 
@@ -185,6 +291,7 @@ int main() {
         test_mounts();
         test_bad_args();
         test_navgrid_path();
+        test_register_capability();
     }
     ev::destroyRealm(realm);
 

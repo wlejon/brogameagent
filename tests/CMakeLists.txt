@@ -108,10 +108,10 @@ if(BROGAMEAGENT_ENABLE_API AND TARGET brogameagent_api)
                 set_tests_properties(${_t} PROPERTIES
                     ENVIRONMENT "PATH=$<TARGET_FILE_DIR:bronze_runtime_shared>;$<TARGET_FILE_DIR:${_t}>;$ENV{PATH}")
                 set_tests_properties(${_t}_gcstress PROPERTIES
-                    ENVIRONMENT "BRONZE_GC_STRESS=1;PATH=$<TARGET_FILE_DIR:bronze_runtime_shared>;$<TARGET_FILE_DIR:${_t}>;$ENV{PATH}")
+                    ENVIRONMENT "BRONZE_GC_STRESS=1;BRONZE_GC_POISON=1;PATH=$<TARGET_FILE_DIR:bronze_runtime_shared>;$<TARGET_FILE_DIR:${_t}>;$ENV{PATH}")
             else()
                 set_tests_properties(${_t}_gcstress PROPERTIES
-                    ENVIRONMENT "BRONZE_GC_STRESS=1")
+                    ENVIRONMENT "BRONZE_GC_STRESS=1;BRONZE_GC_POISON=1")
             endif()
         endif()
     endforeach()

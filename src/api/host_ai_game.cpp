@@ -624,19 +624,6 @@ Value gameComputeAim(Value, std::span<const Value> a) {
     return o.get();
 }
 
-static void installRegisterCapability(ObjectBuilder& b) {
-    b.def("registerCapability", 2, [](Value, std::span<const Value> a) -> Value {
-        if (a.size() < 2 || !ev::isString(a[0]) || !ev::isObject(a[1])) {
-            return ev::throwTypeError("registerCapability(name, spec)");
-        }
-        static uint32_t s_nextId = 100;
-        ev::Persistent specRoot(a[1]);
-        Value idVal = ev::getProperty(specRoot.get(), "id");
-        uint32_t id = ev::isNumber(idVal) ? static_cast<uint32_t>(ev::toDouble(idVal)) : s_nextId++;
-        return ev::fromDouble(id);
-    });
-}
-
 // ---------------------------------------------------------------------------
 // Class Registration
 // ---------------------------------------------------------------------------

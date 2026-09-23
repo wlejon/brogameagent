@@ -5,6 +5,7 @@ add_library(brogameagent_api STATIC
     host_ai_navgrid.cpp
     host_ai_navmesh.cpp
     host_ai_agent.cpp
+    host_ai_capability.cpp
     host_ai_unit.cpp
     host_ai_extras.cpp
     host_ai_mcts.cpp

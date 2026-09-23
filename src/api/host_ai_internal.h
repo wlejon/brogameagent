@@ -597,8 +597,8 @@ Value makeAgentBindingHandle(HostAgentBinding* h);
 Value aiCreateAgent(Value self, std::span<const Value> a);
 Value aiCreateAgentBinding(Value self, std::span<const Value> a);
 void applyAgentAvoidance(Value opts, brogameagent::Agent& agent);
-void installSteering(ObjectBuilder& b);
-void installPerception(ObjectBuilder& b);
+// bro.ai.game.registerCapability (host_ai_capability.cpp).
+void installRegisterCapability(ObjectBuilder& b);
 
 // AIUnit (host_ai_unit.cpp)
 void decorateUnitProto(ObjectBuilder& b);
