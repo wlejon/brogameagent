@@ -225,7 +225,9 @@ Value aiCreateNavGrid(Value, std::span<const Value> a) {
 
     Value widthV = ev::getProperty(root.get(), "width");
     Value heightV = ev::getProperty(root.get(), "height");
-    if (!ev::isUndefined(widthV) && !ev::isUndefined(heightV) && !ev::isObject(widthV) && !ev::isObject(heightV)) {
+    // Numbers only: they are immediates, so widthV survives the heightV read;
+    // a heap value (a numeric string) would not.
+    if (ev::isNumber(widthV) && ev::isNumber(heightV)) {
         double w = ev::toDouble(widthV);
         double h = ev::toDouble(heightV);
         double ox = getDoubleProperty(root.get(), "originX", 0.0);

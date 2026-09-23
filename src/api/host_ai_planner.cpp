@@ -302,15 +302,15 @@ void installAIPlanner(ObjectBuilder& game) {
         std::string name = readStringProp(spec.get(), "name");
         if (name.empty()) return ev::throwTypeError("createTeamOption: name required");
 
-        Value ci = ev::getProperty(spec.get(), "canInitiate");
-        Value st = ev::getProperty(spec.get(), "step");
-        Value te = ev::getProperty(spec.get(), "shouldTerminate");
-        if (!ev::isFunction(ci)) return ev::throwTypeError("createTeamOption: canInitiate must be a function");
-        if (!ev::isFunction(st)) return ev::throwTypeError("createTeamOption: step must be a function");
-        if (!ev::isFunction(te)) return ev::throwTypeError("createTeamOption: shouldTerminate must be a function");
+        ev::Persistent ci(ev::getProperty(spec.get(), "canInitiate"));
+        ev::Persistent st(ev::getProperty(spec.get(), "step"));
+        ev::Persistent te(ev::getProperty(spec.get(), "shouldTerminate"));
+        if (!ev::isFunction(ci.get())) return ev::throwTypeError("createTeamOption: canInitiate must be a function");
+        if (!ev::isFunction(st.get())) return ev::throwTypeError("createTeamOption: step must be a function");
+        if (!ev::isFunction(te.get())) return ev::throwTypeError("createTeamOption: shouldTerminate must be a function");
 
         auto cell = std::make_unique<HostTeamOptionCell>();
-        cell->opt = makeJsTeamOption(std::move(name), ci, st, te);
+        cell->opt = makeJsTeamOption(std::move(name), ci.get(), st.get(), te.get());
         return g_teamOptionClass.createInstance(std::move(cell));
     });
 

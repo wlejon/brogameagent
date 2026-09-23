@@ -187,10 +187,10 @@ void decorateWorldExtras(ObjectBuilder& b) {
                 if (life.expired()) return;
                 ev::Persistent callee(worldHost->abilityFn(abilityId));
                 if (!ev::isFunction(callee.get())) return;
-                Value wVal = !worldHost->activeSelf.isUndefined()
-                    ? worldHost->activeSelf
-                    : g_worldClass.make(worldHost, [](void*) {});
-                ev::Persistent worldVal(wVal);
+                ev::Persistent worldVal(worldHost->activeSelf.get());
+                if (worldVal.get().isUndefined()) {
+                    worldVal.set(g_worldClass.make(worldHost, [](void*) {}));
+                }
                 ev::Persistent casterVal(worldHost->agentValue(&caster));
                 const Value args[3] = {
                     casterVal.get(), worldVal.get(), ev::fromDouble(targetId),

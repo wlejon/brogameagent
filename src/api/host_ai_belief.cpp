@@ -481,12 +481,12 @@ void installAIBelief(ObjectBuilder& game) {
             if (auto* ng = unwrapNavGrid(ev::getProperty(opts.get(), "navGrid"))) {
                 nav = ng->grid.get();
             }
-            Value mpV = ev::getProperty(opts.get(), "motion");
-            if (ev::isObject(mpV)) {
-                mp.max_speed = static_cast<float>(getDoubleProperty(mpV, "maxSpeed", mp.max_speed));
-                mp.accel_std = static_cast<float>(getDoubleProperty(mpV, "accelStd", mp.accel_std));
+            ev::Persistent mpV(ev::getProperty(opts.get(), "motion"));
+            if (ev::isObject(mpV.get())) {
+                mp.max_speed = static_cast<float>(getDoubleProperty(mpV.get(), "maxSpeed", mp.max_speed));
+                mp.accel_std = static_cast<float>(getDoubleProperty(mpV.get(), "accelStd", mp.accel_std));
                 mp.spread_on_loss = static_cast<float>(
-                    getDoubleProperty(mpV, "spreadOnLoss", mp.spread_on_loss));
+                    getDoubleProperty(mpV.get(), "spreadOnLoss", mp.spread_on_loss));
             }
             seed = getU64Property(opts.get(), "seed", seed);
         }

@@ -17,44 +17,46 @@ void installGameAi() {
     ensureAIClassesInstalled();
     ensureAIMctsClassesInstalled();
 
-    Value globalThisVal = ev::undefined();
-    auto gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
-        globalThisVal = gt.value;
+    // Every Value below is rooted in a Persistent before the next allocating
+    // call (globalValue, getProperty, createObject, setProperty and
+    // makeAiGameValue all may move the heap), and each allocating call's
+    // argument is built in its own statement (embed.h's GC contract).
+    ev::Persistent globalThisP;
+    {
+        auto gt = ev::globalValue("globalThis");
+        if (gt.found && ev::isObject(gt.value)) globalThisP.set(gt.value);
     }
+    const bool hasGlobalThis = ev::isObject(globalThisP.get());
 
-    Value broVal = ev::globalValue("bro").found ? ev::globalValue("bro").value : ev::undefined();
-    if (!ev::isObject(broVal)) {
-        if (!ev::isUndefined(globalThisVal)) {
-            Value candidate = ev::getProperty(globalThisVal, "bro");
-            if (ev::isObject(candidate)) {
-                broVal = candidate;
-            }
+    ev::Persistent broP;
+    {
+        auto b = ev::globalValue("bro");
+        if (b.found && ev::isObject(b.value)) broP.set(b.value);
+    }
+    if (!ev::isObject(broP.get()) && hasGlobalThis) {
+        Value candidate = ev::getProperty(globalThisP.get(), "bro");
+        if (ev::isObject(candidate)) broP.set(candidate);
+    }
+    if (!ev::isObject(broP.get())) {
+        broP.set(ev::createObject());
+        ev::registerGlobal("bro", broP.get());
+        if (hasGlobalThis) {
+            globalThisP.set(ev::setProperty(globalThisP.get(), "bro", broP.get()));
         }
     }
-    if (!ev::isObject(broVal)) {
-        broVal = ev::createObject();
-        ev::registerGlobal("bro", broVal);
-        if (!ev::isUndefined(globalThisVal)) {
-            ev::setProperty(globalThisVal, "bro", broVal);
-        }
+
+    ev::Persistent aiP(ev::getProperty(broP.get(), "ai"));
+    if (!ev::isObject(aiP.get())) {
+        aiP.set(ev::createObject());
+        broP.set(ev::setProperty(broP.get(), "ai", aiP.get()));
     }
 
-    ev::Persistent broP(broVal);
+    ev::Persistent gameP(makeAiGameValue());
+    aiP.set(ev::setProperty(aiP.get(), "game", gameP.get()));
 
-    Value aiVal = ev::getProperty(broP.get(), "ai");
-    if (!ev::isObject(aiVal)) {
-        aiVal = ev::createObject();
-        broP.set(ev::setProperty(broP.get(), "ai", aiVal));
-    }
-
-    ev::Persistent aiP(aiVal);
-    Value gameVal = makeAiGameValue();
-    aiP.set(ev::setProperty(aiP.get(), "game", gameVal));
-
-    ev::registerGlobal("AI", gameVal);
-    if (!ev::isUndefined(globalThisVal)) {
-        ev::setProperty(globalThisVal, "AI", gameVal);
+    ev::registerGlobal("AI", gameP.get());
+    if (hasGlobalThis) {
+        globalThisP.set(ev::setProperty(globalThisP.get(), "AI", gameP.get()));
     }
 }
 

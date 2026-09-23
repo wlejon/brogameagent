@@ -75,7 +75,6 @@ struct HostAgent {
     int navWaypoint = 0;
     float navY = 0.0f;
     bool destroyed = false;
-    ev::Persistent unitProxy;
 };
 
 struct HostUnit {
@@ -135,7 +134,10 @@ struct HostWorld {
     /// To avoid an uncollectable reference cycle (World handle -> HostWorld -> selfValue -> World handle),
     /// the World handle is not permanently rooted in an ev::Persistent. Instead, activeSelf provides
     /// the caller's receiver during dispatch, falling back to a non-owning wrapper if invoked standalone.
-    Value activeSelf = ev::undefined();
+    /// Rooted only for the span of an ActiveWorldScope (undefined otherwise),
+    /// so it stays current across the allocations a dispatched callback makes
+    /// without making the wrapper permanently uncollectable.
+    ev::Persistent activeSelf;
     std::vector<std::pair<int, ev::Persistent>> abilityFns;
 
     /// Expires when this HostWorld is destroyed. An AbilitySpec::fn survives
@@ -161,18 +163,21 @@ struct HostWorld {
     }
 };
 
+/// `self` must be current (taken before any allocation in the caller). Both
+/// it and the value it shadows are held in Persistents, so nested dispatch
+/// restores a current address rather than a pre-collection one.
 struct ActiveWorldScope {
     HostWorld* w = nullptr;
-    Value prev = ev::undefined();
+    ev::Persistent prev;
     ActiveWorldScope(HostWorld* world, Value self) : w(world) {
         if (w) {
-            prev = w->activeSelf;
-            w->activeSelf = self;
+            prev.set(w->activeSelf.get());
+            w->activeSelf.set(self);
         }
     }
     ~ActiveWorldScope() {
         if (w) {
-            w->activeSelf = prev;
+            w->activeSelf.set(prev.get());
         }
     }
     ActiveWorldScope(const ActiveWorldScope&) = delete;

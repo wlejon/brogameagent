@@ -20,6 +20,8 @@ namespace brogameagent::api {
 bool isGpuTensorValue(Value v) {
     if (!ev::isObject(v) || ev::isTypedArray(v)) return false;
     if (!ev::handleData(v)) return false;
+    // Rooted before anything below allocates.
+    ev::Persistent subject(v);
 
     ev::GlobalValue proto = ev::nativeClassPrototype("__bro_native.tensor.GpuTensor");
     if (!proto.found || !ev::isObject(proto.value)) return false;
@@ -32,7 +34,6 @@ bool isGpuTensorValue(Value v) {
     ev::Persistent getProto(ev::getProperty(objectSlot.get(), "getPrototypeOf"));
     if (!ev::isFunction(getProto.get())) return false;
 
-    ev::Persistent subject(v);
     Value arg = subject.get();
     ev::CallResult r = ev::call(getProto.get(), objectSlot.get(), std::span<const Value>(&arg, 1));
     if (r.thrown) return false;
@@ -57,8 +58,10 @@ TensorArg tensorArg(Value v) {
         return out;
     }
 
-    if (!isGpuTensorValue(v)) return out;
-    out.ptr = brotensor::api::getTensorFromHandle(v);
+    // isGpuTensorValue allocates; the handle is re-read from a root after it.
+    ev::Persistent root(v);
+    if (!isGpuTensorValue(root.get())) return out;
+    out.ptr = brotensor::api::getTensorFromHandle(root.get());
     return out;
 }
 

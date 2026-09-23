@@ -25,18 +25,28 @@ static std::string errorName(Value thrown) {
     return ev::isObject(thrown) ? ev::toUtf8(ev::getProperty(thrown, "name")) : std::string();
 }
 
+// Every Value the test keeps across an allocating embed call lives in a
+// Persistent (embed.h's GC contract), so the test is itself clean under
+// BRONZE_GC_STRESS=1 and a crash there points at the binding.
+static ev::Persistent gameNamespace() {
+    ev::Persistent bro(ev::globalValue("bro").value);
+    ev::Persistent ai(ev::getProperty(bro.get(), "ai"));
+    return ev::Persistent(ev::getProperty(ai.get(), "game"));
+}
+
 static void test_mounts() {
     std::cout << "[1/3] mount points..." << std::endl;
 
     ev::GlobalValue broG = ev::globalValue("bro");
     TEST_CHECK(broG.found);
     TEST_CHECK(ev::isObject(broG.value));
+    ev::Persistent broP(broG.value);
 
-    Value aiV = ev::getProperty(broG.value, "ai");
-    TEST_CHECK(ev::isObject(aiV));
+    ev::Persistent aiP(ev::getProperty(broP.get(), "ai"));
+    TEST_CHECK(ev::isObject(aiP.get()));
 
-    Value gameV = ev::getProperty(aiV, "game");
-    TEST_CHECK(ev::isObject(gameV));
+    ev::Persistent gameP(ev::getProperty(aiP.get(), "game"));
+    TEST_CHECK(ev::isObject(gameP.get()));
 
     // The `AI` alias is the same namespace object.
     ev::GlobalValue aliasG = ev::globalValue("AI");
@@ -49,14 +59,14 @@ static void test_mounts() {
         "computeAim", "computeLeadAim",
     };
     for (const char* name : fns) {
-        Value fn = ev::getProperty(gameV, name);
+        Value fn = ev::getProperty(gameP.get(), name);
         if (!ev::isFunction(fn)) {
             std::cerr << "missing bro.ai.game." << name << std::endl;
             std::exit(1);
         }
     }
 
-    Value navMeshAvail = ev::getProperty(gameV, "navMeshAvailable");
+    Value navMeshAvail = ev::getProperty(gameP.get(), "navMeshAvailable");
     TEST_CHECK(ev::isBool(navMeshAvail));
 
     // Class constructors the namespace installs.
@@ -73,33 +83,33 @@ static void test_mounts() {
 static void test_bad_args() {
     std::cout << "[2/3] bad arguments throw TypeError..." << std::endl;
 
-    Value gameV = ev::getProperty(ev::getProperty(ev::globalValue("bro").value, "ai"), "game");
+    ev::Persistent gameP = gameNamespace();
 
     // createNavGrid() with no options object.
-    Value createNavGrid = ev::getProperty(gameV, "createNavGrid");
-    ev::CallResult r0 = ev::call(createNavGrid, gameV, {});
+    ev::Persistent createNavGrid(ev::getProperty(gameP.get(), "createNavGrid"));
+    ev::CallResult r0 = ev::call(createNavGrid.get(), gameP.get(), {});
     TEST_CHECK(r0.thrown);
     TEST_CHECK(errorName(r0.value) == "TypeError");
 
     // createNavGrid(42): a non-object argument.
     Value num = ev::fromDouble(42.0);
-    ev::CallResult r1 = ev::call(createNavGrid, gameV, std::span<const Value>(&num, 1));
+    ev::CallResult r1 = ev::call(createNavGrid.get(), gameP.get(), std::span<const Value>(&num, 1));
     TEST_CHECK(r1.thrown);
     TEST_CHECK(errorName(r1.value) == "TypeError");
 
     // createHexNav() with no options object.
-    Value createHexNav = ev::getProperty(gameV, "createHexNav");
-    ev::CallResult r2 = ev::call(createHexNav, gameV, {});
+    ev::Persistent createHexNav(ev::getProperty(gameP.get(), "createHexNav"));
+    ev::CallResult r2 = ev::call(createHexNav.get(), gameP.get(), {});
     TEST_CHECK(r2.thrown);
     TEST_CHECK(errorName(r2.value) == "TypeError");
 
     // loadNavMesh() with no buffer: TypeError when the feature is compiled in,
     // a plain Error explaining the missing feature otherwise. Never a silent
     // null.
-    Value loadNavMesh = ev::getProperty(gameV, "loadNavMesh");
-    ev::CallResult r3 = ev::call(loadNavMesh, gameV, {});
+    bool navMeshAvail = ev::toBool(ev::getProperty(gameP.get(), "navMeshAvailable"));
+    ev::Persistent loadNavMesh(ev::getProperty(gameP.get(), "loadNavMesh"));
+    ev::CallResult r3 = ev::call(loadNavMesh.get(), gameP.get(), {});
     TEST_CHECK(r3.thrown);
-    bool navMeshAvail = ev::toBool(ev::getProperty(gameV, "navMeshAvailable"));
     TEST_CHECK(errorName(r3.value) == (navMeshAvail ? "TypeError" : "Error"));
 }
 

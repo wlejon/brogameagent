@@ -229,15 +229,16 @@ void ensureAIExtrasClassesInstalled() {
             auto* vs = unwrapVecSim(self);
             if (!vs || !vs->sim || a.size() < 2) return ev::undefined();
             int agentId = static_cast<int>(numAt(a, 0));
-            Value arr = a[1];
-            if (!ev::isObject(arr)) return ev::throwTypeError("applyActions: actions must be an array");
+            // a[1] is a rooted slot and is re-read each time; a local copy
+            // would be stale after the first getProperty.
+            if (!ev::isObject(a[1])) return ev::throwTypeError("applyActions: actions must be an array");
             int N = vs->sim->numEnvs();
             std::vector<brogameagent::AgentAction> acts(static_cast<size_t>(N));
-            Value lenV = ev::getProperty(arr, "length");
+            Value lenV = ev::getProperty(a[1], "length");
             int len = ev::isNumber(lenV) ? static_cast<int>(ev::toDouble(lenV)) : 0;
             int n = std::min(len, N);
             for (int i = 0; i < n; i++) {
-                Value e = ev::getElement(arr, static_cast<uint32_t>(i));
+                Value e = ev::getElement(a[1], static_cast<uint32_t>(i));
                 if (ev::isObject(e)) acts[i] = parseAgentAction(e);
             }
             vs->sim->applyActions(agentId, acts.data());

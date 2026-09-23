@@ -127,15 +127,13 @@ void decorateLinear(ObjectBuilder& b) {
     });
     b.def("forward", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapLinear(self);
-        TensorArg x = tensorArg(argAt(a, 0));
-        TensorArg y = tensorArg(argAt(a, 1));
+        auto [x, y] = tensorArgs<2>(a, {0, 1});
         if (!d || !x || !y) return ev::throwTypeError("Linear.forward(x,y) expects Tensors");
         return guarded([&] { d->l.forward(*x.ptr, *y.ptr); });
     });
     b.def("backward", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapLinear(self);
-        TensorArg dY = tensorArg(argAt(a, 0));
-        TensorArg dX = tensorArg(argAt(a, 1));
+        auto [dY, dX] = tensorArgs<2>(a, {0, 1});
         if (!d || !dY || !dX) return ev::throwTypeError("Linear.backward(dY,dX) expects Tensors");
         return guarded([&] { d->l.backward(*dY.ptr, *dX.ptr); });
     });
@@ -176,15 +174,13 @@ void decorateActivation(ObjectBuilder& b, const char* label) {
     });
     b.def("forward", 2, [label](Value self, std::span<const Value> a) -> Value {
         auto* d = Unwrap(self);
-        TensorArg x = tensorArg(argAt(a, 0));
-        TensorArg y = tensorArg(argAt(a, 1));
+        auto [x, y] = tensorArgs<2>(a, {0, 1});
         if (!d || !x || !y) return ev::throwTypeError(std::string(label) + ".forward(x,y)");
         return guarded([&] { (d->*Field).forward(*x.ptr, *y.ptr); });
     });
     b.def("backward", 2, [label](Value self, std::span<const Value> a) -> Value {
         auto* d = Unwrap(self);
-        TensorArg dY = tensorArg(argAt(a, 0));
-        TensorArg dX = tensorArg(argAt(a, 1));
+        auto [dY, dX] = tensorArgs<2>(a, {0, 1});
         if (!d || !dY || !dX) return ev::throwTypeError(std::string(label) + ".backward(dY,dX)");
         return guarded([&] { (d->*Field).backward(*dY.ptr, *dX.ptr); });
     });
@@ -213,10 +209,11 @@ void decorateDeepSets(ObjectBuilder& b) {
         auto* d = unwrapDeepSets(self);
         if (!d) return ev::throwTypeError("DeepSetsEncoder.init: bad receiver");
         nn::DeepSetsEncoder::Config cfg{};
-        Value cfgV = argAt(a, 0);
-        if (ev::isObject(cfgV)) {
-            cfg.hidden = getIntProp(cfgV, "hidden", cfg.hidden);
-            cfg.embed_dim = getIntProp(cfgV, "embedDim", cfg.embed_dim);
+        // a[0] is a rooted slot, current across the first read's allocation;
+        // a local copy of it would not be.
+        if (!a.empty() && ev::isObject(a[0])) {
+            cfg.hidden = getIntProp(a[0], "hidden", cfg.hidden);
+            cfg.embed_dim = getIntProp(a[0], "embedDim", cfg.embed_dim);
         }
         uint64_t s = readSeedArg(argAt(a, 1), kDefaultSeed);
         try {
@@ -228,15 +225,13 @@ void decorateDeepSets(ObjectBuilder& b) {
     });
     b.def("forward", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapDeepSets(self);
-        TensorArg x = tensorArg(argAt(a, 0));
-        TensorArg y = tensorArg(argAt(a, 1));
+        auto [x, y] = tensorArgs<2>(a, {0, 1});
         if (!d || !x || !y) return ev::throwTypeError("DeepSetsEncoder.forward(x,y)");
         return guarded([&] { d->e.forward(*x.ptr, *y.ptr); });
     });
     b.def("backward", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapDeepSets(self);
-        TensorArg dY = tensorArg(argAt(a, 0));
-        TensorArg dX = tensorArg(argAt(a, 1));
+        auto [dY, dX] = tensorArgs<2>(a, {0, 1});
         if (!d || !dY || !dX) return ev::throwTypeError("DeepSetsEncoder.backward(dY,dX)");
         return guarded([&] { d->e.backward(*dY.ptr, *dX.ptr); });
     });
@@ -354,15 +349,13 @@ void decorateFactoredHead(ObjectBuilder& b) {
     });
     b.def("forward", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapFactoredHead(self);
-        TensorArg e = tensorArg(argAt(a, 0));
-        TensorArg l = tensorArg(argAt(a, 1));
+        auto [e, l] = tensorArgs<2>(a, {0, 1});
         if (!d || !e || !l) return ev::throwTypeError("FactoredPolicyHead.forward(embed,logits)");
         return guarded([&] { d->h.forward(*e.ptr, *l.ptr); });
     });
     b.def("backward", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapFactoredHead(self);
-        TensorArg dl = tensorArg(argAt(a, 0));
-        TensorArg de = tensorArg(argAt(a, 1));
+        auto [dl, de] = tensorArgs<2>(a, {0, 1});
         if (!d || !dl || !de) return ev::throwTypeError("FactoredPolicyHead.backward(dLogits,dEmbed)");
         return guarded([&] { d->h.backward(*dl.ptr, *de.ptr); });
     });
@@ -445,10 +438,11 @@ void installAINnCircuits(ObjectBuilder& nnNs) {
     nnNs.def("createDeepSetsEncoder", 2, [](Value, std::span<const Value> a) -> Value {
         auto cell = std::make_unique<HostDeepSets>();
         nn::DeepSetsEncoder::Config cfg{};
-        Value cfgV = argAt(a, 0);
-        if (ev::isObject(cfgV)) {
-            cfg.hidden = getIntProp(cfgV, "hidden", cfg.hidden);
-            cfg.embed_dim = getIntProp(cfgV, "embedDim", cfg.embed_dim);
+        // a[0] is a rooted slot, current across the first read's allocation;
+        // a local copy of it would not be.
+        if (!a.empty() && ev::isObject(a[0])) {
+            cfg.hidden = getIntProp(a[0], "hidden", cfg.hidden);
+            cfg.embed_dim = getIntProp(a[0], "embedDim", cfg.embed_dim);
         }
         uint64_t s = a.size() >= 2 ? readSeedArg(a[1], kDefaultSeed) : kDefaultSeed;
         try {

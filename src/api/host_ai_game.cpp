@@ -318,14 +318,17 @@ void decorateWorldProto(ObjectBuilder& b) {
         if (!ag) return hostArrayOf(0, [](size_t) { return ev::null(); });
         float range = static_cast<float>(numAt(a, 1));
         auto enemies = w->world.enemiesInRange(ag->agent, range);
-        std::vector<Value> found;
+        // Collect roster entries, not their Values: building the array
+        // allocates, so each wrapper is read from its Persistent only as it
+        // is pushed.
+        std::vector<const HostWorld::Roster*> found;
         found.reserve(enemies.size());
         for (auto* e : enemies) {
             for (const auto& r : w->roster) {
-                if (r.agent == e) { found.push_back(r.value.get()); break; }
+                if (r.agent == e) { found.push_back(&r); break; }
             }
         }
-        return hostArrayOf(found.size(), [&](size_t i) { return found[i]; });
+        return hostArrayOf(found.size(), [&](size_t i) { return found[i]->value.get(); });
     });
 
     b.def("alliesInRange", 2, [](Value self, std::span<const Value> a) -> Value {
@@ -336,17 +339,17 @@ void decorateWorldProto(ObjectBuilder& b) {
         float range = static_cast<float>(numAt(a, 1));
         float rangeSq = range * range;
         auto allies = w->world.alliesOf(ag->agent);
-        std::vector<Value> found;
+        std::vector<const HostWorld::Roster*> found;
         for (auto* al : allies) {
             float dx = al->x() - ag->agent.x();
             float dz = al->z() - ag->agent.z();
             if (dx * dx + dz * dz <= rangeSq) {
                 for (const auto& r : w->roster) {
-                    if (r.agent == al) { found.push_back(r.value.get()); break; }
+                    if (r.agent == al) { found.push_back(&r); break; }
                 }
             }
         }
-        return hostArrayOf(found.size(), [&](size_t i) { return found[i]; });
+        return hostArrayOf(found.size(), [&](size_t i) { return found[i]->value.get(); });
     });
 
     b.accessor("damageEvents", [](Value self, std::span<const Value>) -> Value {
@@ -519,33 +522,34 @@ void decorateWorldProto(ObjectBuilder& b) {
         if (!w || a.empty() || !ev::isObject(a[0])) return ev::undefined();
         ev::Persistent root(a[0]);
         brogameagent::WorldSnapshot snap;
-        Value agentsArr = ev::getProperty(root.get(), "agents");
-        if (ev::isObject(agentsArr)) {
-            Value lenV = ev::getProperty(agentsArr, "length");
+        ev::Persistent agentsArr(ev::getProperty(root.get(), "agents"));
+        if (ev::isObject(agentsArr.get())) {
+            Value lenV = ev::getProperty(agentsArr.get(), "length");
             if (ev::isNumber(lenV)) {
                 int n = static_cast<int>(ev::toDouble(lenV));
                 for (int i = 0; i < n; i++) {
-                    Value ao = ev::getElement(agentsArr, i);
-                    if (ev::isObject(ao)) {
+                    // Rooted: every getDoubleProperty below allocates.
+                    ev::Persistent aoP(ev::getElement(agentsArr.get(), static_cast<uint32_t>(i)));
+                    if (ev::isObject(aoP.get())) {
                         brogameagent::AgentSnapshot as;
-                        as.id = static_cast<int>(getDoubleProperty(ao, "id", 0));
-                        as.x = static_cast<float>(getDoubleProperty(ao, "x", 0));
-                        as.z = static_cast<float>(getDoubleProperty(ao, "z", 0));
-                        as.vx = static_cast<float>(getDoubleProperty(ao, "vx", 0));
-                        as.vz = static_cast<float>(getDoubleProperty(ao, "vz", 0));
-                        as.yaw = static_cast<float>(getDoubleProperty(ao, "yaw", 0));
-                        as.aimYaw = static_cast<float>(getDoubleProperty(ao, "aimYaw", 0));
-                        as.aimPitch = static_cast<float>(getDoubleProperty(ao, "aimPitch", 0));
-                        as.speed = static_cast<float>(getDoubleProperty(ao, "speed", 6));
-                        as.radius = static_cast<float>(getDoubleProperty(ao, "radius", 0.4));
-                        as.unit.hp = static_cast<float>(getDoubleProperty(ao, "hp", 100));
-                        as.unit.maxHp = static_cast<float>(getDoubleProperty(ao, "maxHp", 100));
-                        as.unit.mana = static_cast<float>(getDoubleProperty(ao, "mana", 0));
-                        as.unit.teamId = static_cast<int>(getDoubleProperty(ao, "teamId", 0));
+                        as.id = static_cast<int>(getDoubleProperty(aoP.get(),"id", 0));
+                        as.x = static_cast<float>(getDoubleProperty(aoP.get(),"x", 0));
+                        as.z = static_cast<float>(getDoubleProperty(aoP.get(),"z", 0));
+                        as.vx = static_cast<float>(getDoubleProperty(aoP.get(),"vx", 0));
+                        as.vz = static_cast<float>(getDoubleProperty(aoP.get(),"vz", 0));
+                        as.yaw = static_cast<float>(getDoubleProperty(aoP.get(),"yaw", 0));
+                        as.aimYaw = static_cast<float>(getDoubleProperty(aoP.get(),"aimYaw", 0));
+                        as.aimPitch = static_cast<float>(getDoubleProperty(aoP.get(),"aimPitch", 0));
+                        as.speed = static_cast<float>(getDoubleProperty(aoP.get(),"speed", 6));
+                        as.radius = static_cast<float>(getDoubleProperty(aoP.get(),"radius", 0.4));
+                        as.unit.hp = static_cast<float>(getDoubleProperty(aoP.get(),"hp", 100));
+                        as.unit.maxHp = static_cast<float>(getDoubleProperty(aoP.get(),"maxHp", 100));
+                        as.unit.mana = static_cast<float>(getDoubleProperty(aoP.get(),"mana", 0));
+                        as.unit.teamId = static_cast<int>(getDoubleProperty(aoP.get(),"teamId", 0));
                         as.unit.id = as.id;
-                        as.hasTarget = getBoolProperty(ao, "hasTarget", false);
-                        as.targetX = static_cast<float>(getDoubleProperty(ao, "targetX", 0));
-                        as.targetZ = static_cast<float>(getDoubleProperty(ao, "targetZ", 0));
+                        as.hasTarget = getBoolProperty(aoP.get(),"hasTarget", false);
+                        as.targetX = static_cast<float>(getDoubleProperty(aoP.get(),"targetX", 0));
+                        as.targetZ = static_cast<float>(getDoubleProperty(aoP.get(),"targetZ", 0));
                         snap.agents.push_back(as);
                     }
                 }

@@ -44,16 +44,14 @@ std::vector<int> offsetsFromSizes(const std::vector<int>& sizes) {
 void installAINnOps(ObjectBuilder& nnNs) {
     nnNs.def("linearForward", 4, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 4) return ev::throwTypeError("linearForward(W,b,x,y)");
-        TensorArg W = tensorArg(a[0]), b = tensorArg(a[1]);
-        TensorArg x = tensorArg(a[2]), y = tensorArg(a[3]);
+        auto [W, b, x, y] = tensorArgs<4>(a, {0, 1, 2, 3});
         if (!W || !b || !x || !y) return ev::throwTypeError("expected Tensors");
         return guardedOp([&] { brotensor::linear_forward(*W.ptr, *b.ptr, *x.ptr, *y.ptr); });
     });
 
     nnNs.def("linearBackward", 6, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 6) return ev::throwTypeError("linearBackward(W,x,dY,dX,dW,dB)");
-        TensorArg W = tensorArg(a[0]), x = tensorArg(a[1]), dY = tensorArg(a[2]);
-        TensorArg dX = tensorArg(a[3]), dW = tensorArg(a[4]), dB = tensorArg(a[5]);
+        auto [W, x, dY, dX, dW, dB] = tensorArgs<6>(a, {0, 1, 2, 3, 4, 5});
         if (!W || !x || !dY || !dX || !dW || !dB) return ev::throwTypeError("expected Tensors");
         return guardedOp([&] {
             brotensor::linear_backward(*W.ptr, *x.ptr, *dY.ptr, *dX.ptr, *dW.ptr, *dB.ptr);
@@ -62,35 +60,35 @@ void installAINnOps(ObjectBuilder& nnNs) {
 
     nnNs.def("reluForward", 2, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::throwTypeError("reluForward(x,y)");
-        TensorArg x = tensorArg(a[0]), y = tensorArg(a[1]);
+        auto [x, y] = tensorArgs<2>(a, {0, 1});
         if (!x || !y) return ev::throwTypeError("expected Tensors");
         return guardedOp([&] { brotensor::relu_forward(*x.ptr, *y.ptr); });
     });
 
     nnNs.def("reluBackward", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3) return ev::throwTypeError("reluBackward(x,dY,dX)");
-        TensorArg x = tensorArg(a[0]), dY = tensorArg(a[1]), dX = tensorArg(a[2]);
+        auto [x, dY, dX] = tensorArgs<3>(a, {0, 1, 2});
         if (!x || !dY || !dX) return ev::throwTypeError("expected Tensors");
         return guardedOp([&] { brotensor::relu_backward(*x.ptr, *dY.ptr, *dX.ptr); });
     });
 
     nnNs.def("tanhForward", 2, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::throwTypeError("tanhForward(x,y)");
-        TensorArg x = tensorArg(a[0]), y = tensorArg(a[1]);
+        auto [x, y] = tensorArgs<2>(a, {0, 1});
         if (!x || !y) return ev::throwTypeError("expected Tensors");
         return guardedOp([&] { brotensor::tanh_forward(*x.ptr, *y.ptr); });
     });
 
     nnNs.def("tanhBackward", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3) return ev::throwTypeError("tanhBackward(y,dY,dX)");
-        TensorArg y = tensorArg(a[0]), dY = tensorArg(a[1]), dX = tensorArg(a[2]);
+        auto [y, dY, dX] = tensorArgs<3>(a, {0, 1, 2});
         if (!y || !dY || !dX) return ev::throwTypeError("expected Tensors");
         return guardedOp([&] { brotensor::tanh_backward(*y.ptr, *dY.ptr, *dX.ptr); });
     });
 
     nnNs.def("softmaxForward", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::throwTypeError("softmaxForward(logits,probs,mask?)");
-        TensorArg l = tensorArg(a[0]), p = tensorArg(a[1]);
+        auto [l, p] = tensorArgs<2>(a, {0, 1});
         if (!l || !p) return ev::throwTypeError("expected Tensors");
         size_t mn = 0;
         float* mask = a.size() >= 3 ? floatPtr(a[2], mn) : nullptr;
@@ -99,15 +97,14 @@ void installAINnOps(ObjectBuilder& nnNs) {
 
     nnNs.def("softmaxBackward", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3) return ev::throwTypeError("softmaxBackward(probs,dProbs,dLogits)");
-        TensorArg p = tensorArg(a[0]), dp = tensorArg(a[1]), dl = tensorArg(a[2]);
+        auto [p, dp, dl] = tensorArgs<3>(a, {0, 1, 2});
         if (!p || !dp || !dl) return ev::throwTypeError("expected Tensors");
         return guardedOp([&] { brotensor::softmax_backward(*p.ptr, *dp.ptr, *dl.ptr); });
     });
 
     nnNs.def("softmaxXent", 5, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 4) return ev::throwTypeError("softmaxXent(logits,target,probs,dLogits,mask?)");
-        TensorArg l = tensorArg(a[0]), t = tensorArg(a[1]);
-        TensorArg p = tensorArg(a[2]), dl = tensorArg(a[3]);
+        auto [l, t, p, dl] = tensorArgs<4>(a, {0, 1, 2, 3});
         if (!l || !t || !p || !dl) return ev::throwTypeError("expected Tensors");
         size_t mn = 0;
         float* mask = a.size() >= 5 ? floatPtr(a[4], mn) : nullptr;
@@ -133,7 +130,7 @@ void installAINnOps(ObjectBuilder& nnNs) {
 
     nnNs.def("addInplace", 2, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::throwTypeError("addInplace(y,x)");
-        TensorArg y = tensorArg(a[0]), x = tensorArg(a[1]);
+        auto [y, x] = tensorArgs<2>(a, {0, 1});
         if (!x || !y) return ev::throwTypeError("expected Tensors");
         return guardedOp([&] { brotensor::add_inplace(*y.ptr, *x.ptr); });
     });
@@ -164,7 +161,7 @@ void installAINnOps(ObjectBuilder& nnNs) {
         if (a.size() < 2) {
             return ev::throwTypeError("factoredSoftmax(logits,probs,atkMask?,abilMask?)");
         }
-        TensorArg l = tensorArg(a[0]), p = tensorArg(a[1]);
+        auto [l, p] = tensorArgs<2>(a, {0, 1});
         if (!l || !p) return ev::throwTypeError("expected Tensors");
         size_t amn = 0, bmn = 0;
         float* aMask = a.size() >= 3 ? floatPtr(a[2], amn) : nullptr;
@@ -177,8 +174,7 @@ void installAINnOps(ObjectBuilder& nnNs) {
             return ev::throwTypeError(
                 "factoredXent(logits,mTgt,aTgt,abTgt,probs,dLogits,atkMask?,abilMask?)");
         }
-        TensorArg l = tensorArg(a[0]), mt = tensorArg(a[1]), at = tensorArg(a[2]);
-        TensorArg abt = tensorArg(a[3]), p = tensorArg(a[4]), dl = tensorArg(a[5]);
+        auto [l, mt, at, abt, p, dl] = tensorArgs<6>(a, {0, 1, 2, 3, 4, 5});
         if (!l || !mt || !at || !abt || !p || !dl) return ev::throwTypeError("expected Tensors");
         size_t amn = 0, bmn = 0;
         float* aMask = a.size() >= 7 ? floatPtr(a[6], amn) : nullptr;
@@ -201,10 +197,12 @@ void installAINnOps(ObjectBuilder& nnNs) {
         if (a.size() < 3) {
             return ev::throwTypeError("factoredToFlat(logits, headSizes, flatPrior, headMasks?)");
         }
+        // headSizes first: reading an array allocates, and every float* below
+        // points into the moving heap, so none may be taken before it.
+        auto sizes = readIntArrayValue(a[1]);
         size_t lN = 0;
         float* logits = floatPtr(a[0], lN);
         if (!logits) return ev::throwTypeError("logits must be Float32Array");
-        auto sizes = readIntArrayValue(a[1]);
         if (sizes.empty()) return ev::throwTypeError("headSizes must be a non-empty int array");
         auto offsets = offsetsFromSizes(sizes);
         if (static_cast<int>(lN) < offsets.back()) {

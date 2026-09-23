@@ -30,6 +30,7 @@
 #include <brogameagent/nn/net_tx.h>
 #include <brogameagent/nn/policy_value_net.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -108,9 +109,38 @@ inline std::shared_ptr<nn::WeightsHandle> weightsHandleShared(Value v) {
 /// A tensor argument: a bro.tensor GpuTensor handle, or a Float32Array the
 /// helper views in place (rank-1, `n x 1`). Holds the view so the pointer
 /// stays valid for the duration of the call.
+///
+/// Copying re-points `ptr` at the copy's own view: a TensorArg is returned by
+/// value, and without NRVO (MSVC Debug) a defaulted copy would leave `ptr`
+/// aimed at the dead temporary's view.
+///
+/// A view's data points INTO THE MOVING BRONZE HEAP (embed.h's typed-array
+/// pointer contract): it is valid only until the next allocating embed call.
+/// Resolve every tensor argument of a call with tensorArgs(), which does the
+/// allocating GpuTensor checks first and takes the in-place views last, and
+/// take nothing else that allocates before the op runs.
 struct TensorArg {
     brotensor::Tensor* ptr = nullptr;
     brotensor::Tensor view;
+
+    TensorArg() = default;
+    // A copy must alias the same caller memory. brotensor::Tensor's own copy
+    // is a deep clone, so the view is rebuilt from the source view's fields
+    // rather than copied, and `ptr` re-pointed at this object's view (the
+    // source's would dangle once it is destroyed).
+    TensorArg(const TensorArg& o) { *this = o; }
+    TensorArg& operator=(const TensorArg& o) {
+        if (this == &o) return *this;
+        if (o.ptr == &o.view) {
+            view = brotensor::Tensor::view(o.view.device, o.view.data, o.view.rows,
+                                           o.view.cols, o.view.dtype);
+            ptr = &view;
+        } else {
+            ptr = o.ptr;
+        }
+        return *this;
+    }
+
     explicit operator bool() const { return ptr != nullptr; }
     brotensor::Tensor& operator*() const { return *ptr; }
 };
@@ -118,9 +148,36 @@ struct TensorArg {
 /// True for an instance of bro.tensor's native GpuTensor class. Checked by
 /// prototype rather than by a tag, because brotensor's handle carries
 /// brotensor's tag, not one of ours — and `getTensorFromHandle` casts blind.
+/// ALLOCATES (it calls Object.getPrototypeOf).
 bool isGpuTensorValue(Value v);
 
+/// One tensor argument. Allocates when `v` is not a typed array, so a
+/// Float32Array view taken by an EARLIER tensorArg in the same call may be
+/// stale afterwards — prefer tensorArgs() whenever a call takes more than one.
 TensorArg tensorArg(Value v);
+
+/// Every tensor argument of a call, resolved so no view goes stale: the
+/// GpuTensor checks (which allocate) run first over the rooted `args` slots,
+/// then the Float32Array views are taken with no allocation in between.
+/// `idx` names the argument positions; a position past the end is an empty
+/// TensorArg.
+template <size_t N>
+std::array<TensorArg, N> tensorArgs(std::span<const Value> args, const std::array<size_t, N>& idx) {
+    std::array<TensorArg, N> out{};
+    for (size_t k = 0; k < N; ++k) {
+        const size_t i = idx[k];
+        if (i >= args.size() || ev::isTypedArray(args[i])) continue;
+        // args[i] is re-read from its rooted slot each time, so it is current
+        // across the previous iteration's allocation.
+        out[k] = tensorArg(args[i]);
+    }
+    for (size_t k = 0; k < N; ++k) {
+        const size_t i = idx[k];
+        if (i >= args.size() || !ev::isTypedArray(args[i])) continue;
+        out[k] = tensorArg(args[i]);  // a typed array: a view, no allocation
+    }
+    return out;
+}
 
 /// Read a TypedArray's bytes. Returns {nullptr, 0} when `v` is not one.
 struct RawBytes {

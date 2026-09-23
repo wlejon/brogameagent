@@ -489,14 +489,16 @@ void installAIMcts(ObjectBuilder& game) {
         ev::Persistent opts(a[0]);
 
         // The env is opts.env, or opts itself when the env is passed inline.
-        Value env = ev::getProperty(opts.get(), "env");
-        if (!ev::isObject(env)) env = opts.get();
-
         auto h = std::make_unique<HostGenericMcts>();
-        h->envObj = ev::Persistent(env);
+        {
+            Value env = ev::getProperty(opts.get(), "env");
+            h->envObj = ev::Persistent(ev::isObject(env) ? env : opts.get());
+        }
 
+        // Every read goes through the rooted envObj: each getProperty
+        // allocates, so a local copy of the env would be stale by the second.
         auto method = [&](const char* name) -> Value {
-            Value fn = ev::getProperty(env, name);
+            Value fn = ev::getProperty(h->envObj.get(), name);
             return ev::isFunction(fn) ? fn : ev::undefined();
         };
         h->snapshotFn = ev::Persistent(method("snapshot"));
@@ -506,7 +508,7 @@ void installAIMcts(ObjectBuilder& game) {
         if (!ev::isFunction(h->legalFn.get())) h->legalFn = ev::Persistent(method("legal"));
         h->observeFn = ev::Persistent(method("observe"));
 
-        Value numActV = ev::getProperty(env, "numActions");
+        Value numActV = ev::getProperty(h->envObj.get(), "numActions");
         if (!ev::isNumber(numActV)) numActV = ev::getProperty(opts.get(), "numActions");
         h->numActions = ev::isNumber(numActV) ? static_cast<int>(ev::toDouble(numActV)) : 0;
 
@@ -649,15 +651,15 @@ void installAIMcts(ObjectBuilder& game) {
         std::string name = readStringProp(opts.get(), "name");
         if (name.empty()) return ev::throwTypeError("createOption: name required");
 
-        Value canInit = ev::getProperty(opts.get(), "canInitiate");
-        Value step = ev::getProperty(opts.get(), "step");
-        Value term = ev::getProperty(opts.get(), "shouldTerminate");
-        if (!ev::isFunction(canInit)) return ev::throwTypeError("createOption: canInitiate must be a function");
-        if (!ev::isFunction(step)) return ev::throwTypeError("createOption: step must be a function");
-        if (!ev::isFunction(term)) return ev::throwTypeError("createOption: shouldTerminate must be a function");
+        ev::Persistent canInit(ev::getProperty(opts.get(), "canInitiate"));
+        ev::Persistent step(ev::getProperty(opts.get(), "step"));
+        ev::Persistent term(ev::getProperty(opts.get(), "shouldTerminate"));
+        if (!ev::isFunction(canInit.get())) return ev::throwTypeError("createOption: canInitiate must be a function");
+        if (!ev::isFunction(step.get())) return ev::throwTypeError("createOption: step must be a function");
+        if (!ev::isFunction(term.get())) return ev::throwTypeError("createOption: shouldTerminate must be a function");
 
         auto cell = std::make_unique<HostOptionCell>();
-        cell->opt = makeJsOption(std::move(name), canInit, step, term);
+        cell->opt = makeJsOption(std::move(name), canInit.get(), step.get(), term.get());
         return g_optionClass.createInstance(std::move(cell));
     });
 
@@ -717,28 +719,28 @@ void installAIMcts(ObjectBuilder& game) {
     game.def("rootParallelSearch", 1, [](Value, std::span<const Value> a) -> Value {
         if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("rootParallelSearch(opts): opts required");
         ev::Persistent opts(a[0]);
-        Value worldsArr = ev::getProperty(opts.get(), "worlds");
-        if (!ev::isObject(worldsArr)) return ev::throwTypeError("rootParallelSearch: opts.worlds required");
-        Value lenV = ev::getProperty(worldsArr, "length");
+        ev::Persistent worldsArr(ev::getProperty(opts.get(), "worlds"));
+        if (!ev::isObject(worldsArr.get())) return ev::throwTypeError("rootParallelSearch: opts.worlds required");
+        Value lenV = ev::getProperty(worldsArr.get(), "length");
         if (!ev::isNumber(lenV) || ev::toDouble(lenV) <= 0) return ev::throwTypeError("opts.worlds must be non-empty");
+        int nWorlds = static_cast<int>(ev::toDouble(lenV));
 
         // A JS callback would be run from the worker threads root-parallel
         // search spawns, and bronze's runtime is per-thread — so a function
         // here is still refused, exactly as before.
-        Value evalV = ev::getProperty(opts.get(), "evaluator");
-        if (ev::isFunction(evalV)) {
+        ev::Persistent evalV(ev::getProperty(opts.get(), "evaluator"));
+        if (ev::isFunction(evalV.get())) {
             return ev::throwTypeError("rootParallelSearch: opts.evaluator cannot be a JS function");
         }
-        Value rollV = ev::getProperty(opts.get(), "rolloutPolicy");
-        if (ev::isFunction(rollV)) {
+        ev::Persistent rollV(ev::getProperty(opts.get(), "rolloutPolicy"));
+        if (ev::isFunction(rollV.get())) {
             return ev::throwTypeError("rootParallelSearch: opts.rolloutPolicy cannot be a JS function");
         }
 
-        int nWorlds = static_cast<int>(ev::toDouble(lenV));
         std::vector<brogameagent::World*> worlds;
         worlds.reserve(nWorlds);
         for (int i = 0; i < nWorlds; i++) {
-            auto* w = unwrapWorld(ev::getElement(worldsArr, static_cast<uint32_t>(i)));
+            auto* w = unwrapWorld(ev::getElement(worldsArr.get(), static_cast<uint32_t>(i)));
             if (!w) return ev::throwTypeError("invalid World in worlds array");
             worlds.push_back(&w->world);
         }
@@ -748,11 +750,11 @@ void installAIMcts(ObjectBuilder& game) {
 
         auto cfg = parseMctsConfig(opts.get());
         std::shared_ptr<bgm::IEvaluator> evaluator;
-        if (auto* cell = unwrapEvaluatorCell(evalV)) evaluator = cell->p;
-        if (!evaluator) evaluator = extractHeroEvaluatorShared(evalV);
+        if (auto* cell = unwrapEvaluatorCell(evalV.get())) evaluator = cell->p;
+        if (!evaluator) evaluator = extractHeroEvaluatorShared(evalV.get());
         if (!evaluator) evaluator = std::make_shared<bgm::HpDeltaEvaluator>();
 
-        auto rollout = rolloutFromValueOrDefault(rollV);
+        auto rollout = rolloutFromValueOrDefault(rollV.get());
 
         bgm::OpponentPolicy oppPolicy = bgm::policy_aggressive;
         if (auto op = parseOpponentPolicy(opts.get())) oppPolicy = std::move(op);
@@ -770,21 +772,21 @@ void installAIMcts(ObjectBuilder& game) {
     game.def("rootParallelSearchDecoupled", 1, [](Value, std::span<const Value> a) -> Value {
         if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("rootParallelSearchDecoupled(opts): opts required");
         ev::Persistent opts(a[0]);
-        Value worldsArr = ev::getProperty(opts.get(), "worlds");
-        if (!ev::isObject(worldsArr)) return ev::throwTypeError("opts.worlds required");
-        Value lenV = ev::getProperty(worldsArr, "length");
+        ev::Persistent worldsArr(ev::getProperty(opts.get(), "worlds"));
+        if (!ev::isObject(worldsArr.get())) return ev::throwTypeError("opts.worlds required");
+        Value lenV = ev::getProperty(worldsArr.get(), "length");
         if (!ev::isNumber(lenV) || ev::toDouble(lenV) <= 0) return ev::throwTypeError("opts.worlds must be non-empty");
-
-        Value evalV = ev::getProperty(opts.get(), "evaluator");
-        if (ev::isFunction(evalV)) return ev::throwTypeError("rootParallelSearchDecoupled: opts.evaluator cannot be a JS function");
-        Value rollV = ev::getProperty(opts.get(), "rolloutPolicy");
-        if (ev::isFunction(rollV)) return ev::throwTypeError("rootParallelSearchDecoupled: opts.rolloutPolicy cannot be a JS function");
-
         int nWorlds = static_cast<int>(ev::toDouble(lenV));
+
+        ev::Persistent evalV(ev::getProperty(opts.get(), "evaluator"));
+        if (ev::isFunction(evalV.get())) return ev::throwTypeError("rootParallelSearchDecoupled: opts.evaluator cannot be a JS function");
+        ev::Persistent rollV(ev::getProperty(opts.get(), "rolloutPolicy"));
+        if (ev::isFunction(rollV.get())) return ev::throwTypeError("rootParallelSearchDecoupled: opts.rolloutPolicy cannot be a JS function");
+
         std::vector<brogameagent::World*> worlds;
         worlds.reserve(nWorlds);
         for (int i = 0; i < nWorlds; i++) {
-            auto* w = unwrapWorld(ev::getElement(worldsArr, static_cast<uint32_t>(i)));
+            auto* w = unwrapWorld(ev::getElement(worldsArr.get(), static_cast<uint32_t>(i)));
             if (!w) return ev::throwTypeError("invalid World in worlds array");
             worlds.push_back(&w->world);
         }
@@ -795,11 +797,11 @@ void installAIMcts(ObjectBuilder& game) {
 
         auto cfg = parseMctsConfig(opts.get());
         std::shared_ptr<bgm::IEvaluator> evaluator;
-        if (auto* cell = unwrapEvaluatorCell(evalV)) evaluator = cell->p;
-        if (!evaluator) evaluator = extractHeroEvaluatorShared(evalV);
+        if (auto* cell = unwrapEvaluatorCell(evalV.get())) evaluator = cell->p;
+        if (!evaluator) evaluator = extractHeroEvaluatorShared(evalV.get());
         if (!evaluator) evaluator = std::make_shared<bgm::HpDeltaEvaluator>();
 
-        auto rollout = rolloutFromValueOrDefault(rollV);
+        auto rollout = rolloutFromValueOrDefault(rollV.get());
 
         bgm::ParallelSearchStats stats{};
         auto joint = bgm::root_parallel_search_decoupled(

@@ -29,8 +29,7 @@ Value intArrayMethod(const std::vector<int>& v) { return makeIntArrayValue(v); }
 template <typename Net>
 Value netForward(Net* net, std::span<const Value> a, const char* label) {
     if (!net) return ev::throwError("net not initialized");
-    TensorArg x = tensorArg(argAt(a, 0));
-    TensorArg l = tensorArg(argAt(a, 1));
+    auto [x, l] = tensorArgs<2>(a, {0, 1});
     if (!x || !l) return ev::throwTypeError(std::string(label) + ".forward(x,logits)");
     float v = 0.0f;
     try {
@@ -57,9 +56,7 @@ Value netBackward(Net* net, std::span<const Value> a, const char* label) {
 template <typename Net>
 Value netForwardBatched(Net* net, std::span<const Value> a, const char* label) {
     if (!net) return ev::throwError("net not initialized");
-    TensorArg x = tensorArg(argAt(a, 0));
-    TensorArg l = tensorArg(argAt(a, 1));
-    TensorArg v = tensorArg(argAt(a, 2));
+    auto [x, l, v] = tensorArgs<3>(a, {0, 1, 2});
     if (!x || !l || !v) {
         return ev::throwTypeError(std::string(label) + ".forwardBatched(x,logits,values) expects Tensors");
     }
@@ -373,10 +370,10 @@ void installAINnNets(ObjectBuilder& nnNs) {
         Value opts = argAt(a, 0);
         if (ev::isObject(opts)) {
             ev::Persistent root(opts);
-            Value encV = ev::getProperty(root.get(), "enc");
-            if (ev::isObject(encV)) {
-                cfg.enc.hidden = getIntProp(encV, "hidden", cfg.enc.hidden);
-                cfg.enc.embed_dim = getIntProp(encV, "embedDim", cfg.enc.embed_dim);
+            ev::Persistent encP(ev::getProperty(root.get(), "enc"));
+            if (ev::isObject(encP.get())) {
+                cfg.enc.hidden = getIntProp(encP.get(), "hidden", cfg.enc.hidden);
+                cfg.enc.embed_dim = getIntProp(encP.get(), "embedDim", cfg.enc.embed_dim);
             }
             cfg.trunk_hidden = getIntProp(root.get(), "trunkHidden", cfg.trunk_hidden);
             cfg.value_hidden = getIntProp(root.get(), "valueHidden", cfg.value_hidden);

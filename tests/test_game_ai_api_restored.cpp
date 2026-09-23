@@ -125,6 +125,93 @@ const char* kAgentApplyAction = R"JS(
     })()
 )JS";
 
+// Paths the GC-stress audit touched: each one used to hold a raw Value across
+// an allocating call, or carried a behavioural bug found along the way.
+const char* kBindingFixes = R"JS(
+    (function() {
+        const G = bro.ai.game;
+        const w = G.createWorld();
+        const a1 = G.createAgent({ id: 1, teamId: 0, x: 0, z: 0 });
+        const a2 = G.createAgent({ id: 2, teamId: 1, x: 3, z: 0 });
+        const a3 = G.createAgent({ id: 3, teamId: 0, x: 1, z: 0 });
+        w.addAgent(a1); w.addAgent(a2); w.addAgent(a3);
+
+        const en = w.enemiesInRange(a1, 10);
+        if (en.length !== 1 || en[0] !== a2) return "enemiesInRange: " + en.length;
+        const al = w.alliesInRange(a1, 10);
+        if (al.length !== 1 || al[0] !== a3) return "alliesInRange: " + al.length;
+
+        // agent.unit answers a live view each read, not a cached one.
+        const u1 = a1.unit, u2 = a1.unit;
+        if (u1.id !== 1 || u2.id !== 1) return "agent.unit id";
+
+        // snapshot / restore round-trips positions.
+        const snap = w.snapshot();
+        a1.x = 7;
+        w.restore(snap);
+        if (Math.abs(a1.x) > 1e-6) return "restore did not put a1 back: " + a1.x;
+
+        // Re-adding a policy replaces the old one.
+        const sim = G.createSimulation(w);
+        let first = 0, second = 0;
+        sim.addPolicy(1, function () { first++; return { moveX: 0, moveZ: 0 }; });
+        sim.step(1 / 60);
+        sim.addPolicy(1, function () { second++; return { moveX: 0, moveZ: 0 }; });
+        sim.step(1 / 60);
+        if (first !== 1 || second !== 1) return "addPolicy replace: " + first + "/" + second;
+        sim.removePolicy(1);
+        sim.step(1 / 60);
+        if (second !== 1) return "removePolicy still ran the policy";
+
+        const opt = G.createOption({
+            name: "hold",
+            canInitiate: () => true,
+            step: () => ({ moveDir: 0, attackSlot: -1, abilitySlot: -1 }),
+            shouldTerminate: (_s, _w, t) => t >= 1,
+        });
+        if (opt.name !== "hold") return "createOption name: " + opt.name;
+        const topt = G.createTeamOption({
+            name: "push",
+            canInitiate: () => true,
+            step: (h) => h.map(() => ({ moveDir: 0, attackSlot: -1, abilitySlot: -1 })),
+            shouldTerminate: (_h, _w, t) => t >= 1,
+        });
+        if (topt.name !== "push") return "createTeamOption name: " + topt.name;
+
+        let threw = false;
+        if (G.navMeshAvailable) {
+            const positions = [-10,0,-10,  10,0,-10,  10,0,10,  -10,0,10];
+            const indices = [0,2,1, 0,3,2];
+            const m = G.bakeNavMesh({ positions, indices, regionMinSize: 2,
+                                      regionMergeSize: 10, edgeMaxLen: 8,
+                                      edgeMaxError: 1.1, detailSampleDist: 4,
+                                      detailSampleMaxError: 0.5 });
+            if (!m.findPath({x:-5,y:0,z:-5}, {x:5,y:0,z:5})) return "static bake: no path";
+
+            threw = false;
+            try { G.bakeNavMesh({ positions, indices, offMeshLinks: 5 }); }
+            catch (e) { threw = e instanceof TypeError; }
+            if (!threw) return "offMeshLinks: 5 should throw TypeError";
+
+            const linked = G.bakeNavMesh({ positions, indices, offMeshLinks: [
+                { start: {x:-5,y:0,z:0}, end: {x:5,y:0,z:0}, radius: 0.5 } ] });
+            if (!linked.findPath({x:-5,y:0,z:-5}, {x:5,y:0,z:5})) return "linked bake: no path";
+
+            const dyn = G.bakeNavMesh({ positions, indices, dynamicObstacles: true,
+                                        tileSize: 8, maxObstacles: 4 });
+            if (!dyn.supportsObstacles) return "dynamicObstacles ignored";
+            const h1 = dyn.addObstacle({ type: "box", min: {x:-1,y:0,z:-1}, max: {x:1,y:2,z:1} });
+            const h2 = dyn.addObstacle({ type: "box", center: {x:4,y:1,z:4},
+                                         halfExtents: {x:1,y:1,z:1}, yaw: 0.3 });
+            while (!dyn.update()) {}
+            if (dyn.obstacleCount !== 2) return "obstacleCount: " + dyn.obstacleCount;
+            if (!dyn.removeObstacle(h1) || !dyn.removeObstacle(h2)) return "removeObstacle";
+            while (!dyn.update()) {}
+        }
+        return "SUCCESS";
+    })()
+)JS";
+
 const char* kHexNavField = R"JS(
     (function() {
         const G = bro.ai.game;
@@ -384,7 +471,7 @@ const char* kLearn = R"JS(
         trainer.setNet(net);
         trainer.setBuffer(buf);
         trainer.setWeightsHandle(handle);
-        trainer.setConfig({ batchSize: 2, lr: 1e-3, publishEvery: 1 });
+        trainer.setConfig({ batch: 2, lr: 1e-3, publishEvery: 1 });
         if (trainer.totalSteps !== 0) return "fresh trainer totalSteps: " + trainer.totalSteps;
         for (let i = 0; i < 4; i++) buf.push({ obs: new Float32Array([i]), valueTarget: 0.5 });
         trainer.stepN(2);
@@ -405,7 +492,7 @@ const char* kLearn = R"JS(
         const backend = learn.createDirectBackend(pvnet);
         if (backend.numActions !== 2 || backend.inDim !== 2) return "direct backend dims";
 
-        const server = learn.createInferenceServer(pvnet, { maxBatch: 4 });
+        const server = learn.createInferenceServer(pvnet, { maxBatchSize: 4 });
         const one = server.evaluate(new Float32Array([0.5, 0.5]));
         if (!one || !(one.logits instanceof Float32Array)) return "server.evaluate logits";
         if (typeof one.value !== "number") return "server.evaluate value";
@@ -414,6 +501,22 @@ const char* kLearn = R"JS(
         const sbackend = learn.createServerBackend(server, pvnet);
         if (sbackend.numActions !== 2) return "server backend numActions";
         server.shutdown();
+
+        // A ServerBackend co-owns its server: shutdown() drops the server
+        // handle's reference only, so a search still driving the backend
+        // afterwards must work rather than call a freed server.
+        let s = 0;
+        const env = {
+            numActions: 2,
+            snapshot() { return s; },
+            restore(v) { s = v; },
+            step(a) { s += 1; return { reward: a === 1 ? 1 : 0, done: s >= 3 }; },
+            legalActions() { return s >= 3 ? [] : [0, 1]; },
+            observe() { return new Float32Array([s, 1]); },
+        };
+        const gm = G.createGenericMcts({ env, iterations: 16, backend: sbackend });
+        const pick = gm.search();
+        if (pick !== 0 && pick !== 1) return "search through a shut-down server's backend: " + pick;
 
         return "SUCCESS";
     })()
@@ -519,15 +622,18 @@ const char* kGridRecording = R"JS(
         if (traj[2] !== 2) return "trajectory values: " + JSON.stringify(traj);
 
         // The trainer: the harness the grid apps drive.
+        // The documented nested shape (docs/ai-game-tools.js).
         const trainer = grid.createGridTrainer({
-            inDim: 4, numActions: 3, hidden: [8], valueHidden: 8, seed: 1,
-            batchSize: 2, bufferCapacity: 16,
+            net: { inDim: 4, numActions: 3, hidden: [8], valueHidden: 8, seed: 1 },
+            buffer: { capacity: 16 },
+            trainer: { batch: 2, lr: 1e-3 },
         });
         if (trainer.running) return "a fresh trainer should not be running";
         trainer.ingestSituation({ obs: new Float32Array([0, 0, 0, 0]),
-                                  policy: new Float32Array([1, 0, 0]), valueTarget: 1 });
-        trainer.ingestEpisode([{ obs: new Float32Array([1, 0, 0, 0]),
-                                 policy: new Float32Array([0, 1, 0]), valueTarget: 0 }]);
+                                  policyTarget: new Float32Array([1, 0, 0]), valueTarget: 1 });
+        trainer.ingestSituation({ obs: new Float32Array([1, 0, 0, 0]),
+                                  policyTarget: new Float32Array([0, 1, 0]), valueTarget: 0 });
+        trainer.ingestEpisode({ totalReturn: 1, depth: 2, failed: false, prefix: [0, 1] });
         trainer.stepSync(1);
         const stats = trainer.stats();
         if (!stats || typeof stats.totalSteps !== "number" || stats.totalSteps < 1) {
@@ -562,6 +668,7 @@ int main() {
         runJs("World.findById / registerAbility / seed", kWorldExtras);
         runJs("Agent.applyAction", kAgentApplyAction);
         runJs("HexNav.field", kHexNavField);
+        runJs("binding fixes (GC audit)", kBindingFixes);
 #ifdef BROGAMEAGENT_HAS_NN
         runJs("nn circuits", kNnCircuits);
         runJs("nn ops", kNnOps);

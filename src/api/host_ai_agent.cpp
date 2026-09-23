@@ -160,10 +160,11 @@ void decorateAgentProto(ObjectBuilder& b) {
     b.accessor("unit", [](Value self_, std::span<const Value>) -> Value {
         HostAgent* h = unwrapAgent(self_);
         if (!h) return ev::undefined();
-        if (ev::isUndefined(h->unitProxy.get())) {
-            h->unitProxy = ev::Persistent(makeUnitHandle(h, self_));
-        }
-        return h->unitProxy.get();
+        // A fresh proxy per read. The proxy roots its agent (so a detached
+        // `const u = agent.unit` never outlives the agent it edits); caching
+        // it in a Persistent on the agent closed a root cycle that made every
+        // agent whose .unit was ever read uncollectable.
+        return makeUnitHandle(h, self_);
     }, nullptr);
 
     auto speedGetter = [](Value s, std::span<const Value>) -> Value {
@@ -485,9 +486,10 @@ void decorateAgentBindingProto(ObjectBuilder& b) {
         bool requireFull = false;
         if (a.size() >= 2 && ev::isObject(a[1])) {
             ev::Persistent root(a[1]);
+            // Each read is consumed before the next one allocates.
             Value reqV = ev::getProperty(root.get(), "requireFullPath");
-            Value extV = ev::getProperty(root.get(), "extents");
             if (!ev::isUndefined(reqV)) requireFull = ev::toBool(reqV);
+            Value extV = ev::getProperty(root.get(), "extents");
             if (ev::isObject(extV)) extents = parseVec3(extV, extents);
             Value nmV = ev::getProperty(root.get(), "navMesh");
             if (auto* nm = unwrapNavMesh(nmV)) bd->navMesh = nm->mesh;

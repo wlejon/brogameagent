@@ -100,9 +100,18 @@ if(BROGAMEAGENT_ENABLE_API AND TARGET brogameagent_api)
             message(STATUS "brogameagent: ${_t} not registered (brass has no code generator for this target)")
         else()
             add_test(NAME ${_t} COMMAND ${_t})
+            # The same run with bronze collecting on every allocation: a raw
+            # Value held across an allocating call in the binding crashes
+            # here instead of once in a blue moon in an app.
+            add_test(NAME ${_t}_gcstress COMMAND ${_t})
             if(WIN32)
                 set_tests_properties(${_t} PROPERTIES
                     ENVIRONMENT "PATH=$<TARGET_FILE_DIR:bronze_runtime_shared>;$<TARGET_FILE_DIR:${_t}>;$ENV{PATH}")
+                set_tests_properties(${_t}_gcstress PROPERTIES
+                    ENVIRONMENT "BRONZE_GC_STRESS=1;PATH=$<TARGET_FILE_DIR:bronze_runtime_shared>;$<TARGET_FILE_DIR:${_t}>;$ENV{PATH}")
+            else()
+                set_tests_properties(${_t}_gcstress PROPERTIES
+                    ENVIRONMENT "BRONZE_GC_STRESS=1")
             endif()
         endif()
     endforeach()

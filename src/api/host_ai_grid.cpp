@@ -147,9 +147,10 @@ Value createObsWindow(std::span<const Value> a) {
             L.overwrite = getBoolProperty(lo.get(), "overwrite", false);
             L.normalize = readFloats(ev::getProperty(lo.get(), "normalize"));
 
+            // Each read is rooted before the next one allocates.
             Value enumV = ev::getProperty(lo.get(), "enumerate");
-            Value sampV = ev::getProperty(lo.get(), "sample");
             d->enumerateFns.emplace_back(ev::isFunction(enumV) ? enumV : ev::undefined());
+            Value sampV = ev::getProperty(lo.get(), "sample");
             d->sampleFns.emplace_back(ev::isFunction(sampV) ? sampV : ev::undefined());
             const size_t idx = d->enumerateFns.size() - 1;
             const int chan = L.channels;
@@ -433,7 +434,10 @@ Value generateBC(std::span<const Value> a) {
     }
     grid::HeuristicPolicyFn policy = [&heuristic](const std::vector<float>& obs,
                                                   const std::vector<int>& legal) -> int {
-        Value args[2] = {makeFloat32Array(obs.data(), obs.size()), makeIntArrayValue(legal)};
+        // Both arguments allocate, so the first is rooted across the second.
+        ev::Persistent obsV(makeFloat32Array(obs.data(), obs.size()));
+        ev::Persistent legalV(makeIntArrayValue(legal));
+        Value args[2] = {obsV.get(), legalV.get()};
         bool ok = false;
         Value r = callJs(heuristic, ev::undefined(), std::span<const Value>(args, 2), &ok);
         if (!ok || !ev::isNumber(r)) return -1;
