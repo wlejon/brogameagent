@@ -465,7 +465,7 @@ void decorateAgentProto(ObjectBuilder& b) {
             b->yOffset = static_cast<float>(getDoubleProperty(root.get(), "yOffset", 0.0));
             b->repathInterval = static_cast<float>(getDoubleProperty(root.get(), "repathInterval", 0.0));
         }
-        return attachBindingAgent(makeAgentBindingHandle(b), agentP.get());
+        return makeAgentBindingHandle(b, agentP);
     });
 
     decorateAgentExtras(b);  // applyAction() — host_ai_world_extra.cpp
@@ -619,9 +619,11 @@ Value makeAgentBindingHandle(HostAgentBinding* h) {
 // The binding keeps its agent alive through `_agent` on its own handle — an
 // edge the collector traces — rather than a root, so an agent that keeps its
 // binding (`agent.binding = agent.bind()`) is an ordinary, collectable cycle.
-Value attachBindingAgent(Value binding, Value agent) {
-    ev::Persistent bP(binding);
-    if (!ev::isUndefined(agent)) bP.set(ev::setProperty(bP.get(), "_agent", agent));
+Value makeAgentBindingHandle(HostAgentBinding* h, const ev::Persistent& agent) {
+    // The handle is made in its own statement: `agent` is read only after
+    // that allocation (argument order is unspecified, embed.h).
+    ev::Persistent bP(makeAgentBindingHandle(h));
+    if (!ev::isUndefined(agent.get())) bP.set(ev::setProperty(bP.get(), "_agent", agent.get()));
     return bP.get();
 }
 
@@ -694,7 +696,7 @@ Value aiCreateAgentBinding(Value, std::span<const Value> a) {
         b->yOffset = static_cast<float>(getDoubleProperty(root.get(), "yOffset", 0.0));
         b->repathInterval = static_cast<float>(getDoubleProperty(root.get(), "repathInterval", 0.0));
     }
-    return attachBindingAgent(makeAgentBindingHandle(b), agentP.get());
+    return makeAgentBindingHandle(b, agentP);
 }
 
 } // namespace brogameagent::api

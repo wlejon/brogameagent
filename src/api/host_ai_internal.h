@@ -632,8 +632,8 @@ void decorateAgentProto(ObjectBuilder& b);
 void decorateAgentBindingProto(ObjectBuilder& b);
 Value makeAgentHandle(HostAgent* h);
 Value makeAgentBindingHandle(HostAgentBinding* h);
-/// Sets `binding._agent = agent`; both must be current. ALLOCATES.
-Value attachBindingAgent(Value binding, Value agent);
+/// A binding handle whose `_agent` is `agent` (unless undefined). ALLOCATES.
+Value makeAgentBindingHandle(HostAgentBinding* h, const ev::Persistent& agent);
 Value aiCreateAgent(Value self, std::span<const Value> a);
 Value aiCreateAgentBinding(Value self, std::span<const Value> a);
 void applyAgentAvoidance(Value opts, brogameagent::Agent& agent);

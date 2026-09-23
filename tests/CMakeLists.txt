@@ -60,7 +60,8 @@ if(BROGAMEAGENT_ENABLE_API AND TARGET brogameagent_api)
 
     foreach(_bga_api_test IN ITEMS
             "brogameagent_test_api:test_game_ai_api.cpp"
-            "brogameagent_test_api_restored:test_game_ai_api_restored.cpp")
+            "brogameagent_test_api_restored:test_game_ai_api_restored.cpp"
+            "brogameagent_test_api_cycles:test_game_ai_api_cycles.cpp")
         string(REPLACE ":" ";" _bga_pair "${_bga_api_test}")
         list(GET _bga_pair 0 _t)
         list(GET _bga_pair 1 _src)
