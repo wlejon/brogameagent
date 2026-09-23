@@ -251,7 +251,13 @@ void decorateInferenceServer(ObjectBuilder& b) {
             size_t n = 0;
             float* obsPtr = floatPtr(rowV, n);
             if (!obsPtr) return ev::throwTypeError("evaluateBatch: each row must be a Float32Array");
-            futures.push_back(d->server->evaluate_async(std::vector<float>(obsPtr, obsPtr + n)));
+            // evaluate_async throws on a wrong-length row or a stopping
+            // server; no C++ exception may cross back into compiled JS.
+            try {
+                futures.push_back(d->server->evaluate_async(std::vector<float>(obsPtr, obsPtr + n)));
+            } catch (const std::exception& e) {
+                return ev::throwError(e.what());
+            }
         }
 
         std::vector<std::vector<float>> logits(futures.size());

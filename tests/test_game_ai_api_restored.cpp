@@ -517,6 +517,15 @@ const char* kLearn = R"JS(
         if (typeof one.value !== "number") return "server.evaluate value";
         const many = server.evaluateBatch([new Float32Array([0, 0]), new Float32Array([1, 1])]);
         if (!Array.isArray(many) || many.length !== 2) return "evaluateBatch length";
+        // A row of the wrong width is a catchable Error, not a C++ exception
+        // unwinding through compiled code.
+        let rowErr = null;
+        try { server.evaluateBatch([new Float32Array([0, 0]), new Float32Array([1, 1, 1])]); }
+        catch (e) { rowErr = e; }
+        if (!(rowErr instanceof Error)) return "evaluateBatch accepted a 3-wide row";
+        let oneErr = null;
+        try { server.evaluate(new Float32Array([1])); } catch (e) { oneErr = e; }
+        if (!(oneErr instanceof Error)) return "evaluate accepted a 1-wide row";
         const sbackend = learn.createServerBackend(server, pvnet);
         if (sbackend.numActions !== 2) return "server backend numActions";
         server.shutdown();
@@ -536,6 +545,15 @@ const char* kLearn = R"JS(
         const gm = G.createGenericMcts({ env, iterations: 16, backend: sbackend });
         const pick = gm.search();
         if (pick !== 0 && pick !== 1) return "search through a shut-down server's backend: " + pick;
+
+        // An observation the backend cannot take is a catchable Error.
+        s = 0;
+        const wideEnv = Object.assign({}, env, { observe() { return new Float32Array([s, 1, 2]); } });
+        const gmWide = G.createGenericMcts({ env: wideEnv, iterations: 4,
+                                             backend: learn.createDirectBackend(pvnet) });
+        let wideErr = null;
+        try { gmWide.search(); } catch (e) { wideErr = e; }
+        if (!(wideErr instanceof Error)) return "search with a 3-wide observation did not throw";
 
         return "SUCCESS";
     })()

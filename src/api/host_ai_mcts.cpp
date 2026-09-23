@@ -202,7 +202,14 @@ void ensureAIMctsClassesInstalled() {
                     if (ev::isNumber(lenV) && ev::toDouble(lenV) == 0) return ev::fromDouble(-1);
                 }
             }
-            return ev::fromDouble(h->mcts->search());
+            // A native backend's evaluate() throws on an observation of the
+            // wrong width (env.observe() is user code); that must surface as
+            // a JS Error, not unwind through compiled frames.
+            try {
+                return ev::fromDouble(h->mcts->search());
+            } catch (const std::exception& e) {
+                return ev::throwError(e.what());
+            }
         });
 
         b.def("rootVisits", 0, [](Value self, std::span<const Value>) -> Value {
