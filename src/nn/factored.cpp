@@ -3,11 +3,40 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace brogameagent::nn {
 
+namespace {
+
+// Product of head sizes, checked: every size >= 1 and the product fits in
+// an int. Every stride is a factor of this product, so checking it once
+// covers head_strides() too.
+int checked_product(const std::vector<int>& head_sizes) {
+    int64_t n = 1;
+    for (size_t i = 0; i < head_sizes.size(); ++i) {
+        const int h = head_sizes[i];
+        if (h < 1) {
+            throw std::invalid_argument("factored: head size " + std::to_string(i) +
+                                        " is " + std::to_string(h) + "; must be >= 1");
+        }
+        n *= h;
+        if (n > std::numeric_limits<int>::max()) {
+            throw std::invalid_argument(
+                "factored: the product of the head sizes does not fit in an int");
+        }
+    }
+    return static_cast<int>(n);
+}
+
+} // namespace
+
 std::vector<int> head_strides(const std::vector<int>& head_sizes) {
+    checked_product(head_sizes);
     // Row-major: the last head varies fastest, so its stride is 1, the
     // second-to-last is head_sizes.back(), and so on.
     std::vector<int> s(head_sizes.size(), 1);
@@ -19,9 +48,7 @@ std::vector<int> head_strides(const std::vector<int>& head_sizes) {
 }
 
 int flat_action_count(const std::vector<int>& head_sizes) {
-    int n = 1;
-    for (int h : head_sizes) n *= h;
-    return n;
+    return checked_product(head_sizes);
 }
 
 void decode_flat_action(int flat,

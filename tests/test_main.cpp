@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 using namespace brogameagent;
@@ -5058,6 +5059,26 @@ TEST(factored_strides_row_major_last_head_fastest) {
     CHECK(s[1] == 2);
     CHECK(s[2] == 1);
     CHECK(nn::flat_action_count({3, 4, 2}) == 24);
+}
+
+TEST(factored_count_rejects_overflow_and_empty_heads) {
+    auto throws = [](const std::vector<int>& sizes, bool strides) {
+        try {
+            if (strides) nn::head_strides(sizes);
+            else nn::flat_action_count(sizes);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    // 65536 * 65536 wraps a 32-bit int to 0.
+    CHECK(throws({65536, 65536}, false));
+    CHECK(throws({65536, 65536}, true));
+    CHECK(throws({1 << 16, 1 << 15, 2}, false));
+    CHECK(throws({3, 0, 2}, false));
+    CHECK(throws({3, -2, 2}, true));
+    CHECK(!throws({46340, 46340}, false));
+    CHECK(nn::flat_action_count({46340, 46340}) == 46340 * 46340);
 }
 
 TEST(factored_encode_decode_roundtrip) {

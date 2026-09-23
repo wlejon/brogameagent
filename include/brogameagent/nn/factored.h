@@ -30,9 +30,14 @@ namespace brogameagent::nn {
 // flat_prior must point at a buffer of length prod(head_sizes).
 
 // Strides for decoding flat indices: stride[h] = product of head_sizes[h+1..].
+// Throws std::invalid_argument under the same conditions as
+// flat_action_count().
 std::vector<int> head_strides(const std::vector<int>& head_sizes);
 
-// Total flat action space size = product of head_sizes.
+// Total flat action space size = product of head_sizes. Throws
+// std::invalid_argument when a head size is below 1 or the product does not
+// fit in an int, rather than returning a wrapped count that would size a
+// flat_prior buffer too small.
 int flat_action_count(const std::vector<int>& head_sizes);
 
 // Decode a flat index into per-head action indices. `out` must hold
