@@ -3,7 +3,11 @@
 #include "brogameagent/world.h"
 
 #include <bit>
+#include <cstdio>
 #include <cstring>
+#ifndef _MSC_VER
+#include <sys/types.h>  // off_t for ftello
+#endif
 
 // .bgar / .bgargrid pack POD structs raw to disk. We've only ever shipped on
 // little-endian hosts; rather than silently produce a corrupt file on a future
@@ -28,11 +32,17 @@ bool writeArray(std::FILE* f, const T* p, size_t n) {
     return std::fwrite(p, sizeof(T), n, f) == n;
 }
 
-uint64_t currentOffset(std::FILE* f) {
-    // ftell returns long; cast to uint64 for our footer fields. We never seek
-    // backwards, so even on 32-bit long platforms this is safe up to 2 GiB
-    // (replay files we target are well under that).
-    return static_cast<uint64_t>(std::ftell(f));
+// 64-bit tell: std::ftell's long is 32 bits on Windows, so a recording past
+// 2 GiB would store wrapped (or -1) frame and index offsets.
+bool currentOffset(std::FILE* f, uint64_t& off) {
+#ifdef _MSC_VER
+    const __int64 p = _ftelli64(f);
+#else
+    const off_t p = ftello(f);
+#endif
+    if (p < 0) return false;
+    off = static_cast<uint64_t>(p);
+    return true;
 }
 
 } // namespace
@@ -67,6 +77,7 @@ bool Recorder::open(const std::string& path,
     index_.clear();
     lastEventIdx_ = 0;
     rosterWritten_ = false;
+    failed_ = false;
     return true;
 }
 
@@ -155,7 +166,11 @@ void Recorder::recordFrame(uint32_t stepIdx, float elapsed, const World& world) 
     }
 
     // Note the offset where this frame starts, for the index.
-    uint64_t off = currentOffset(file_);
+    uint64_t off = 0;
+    if (!currentOffset(file_, off)) {
+        failed_ = true;
+        return;
+    }
 
     FrameHeader fh{};
     fh.stepIdx    = stepIdx;
@@ -164,10 +179,12 @@ void Recorder::recordFrame(uint32_t stepIdx, float elapsed, const World& world) 
     fh.projCount  = static_cast<uint16_t>(projStates.size());
     fh.eventCount = static_cast<uint16_t>(eventRecs.size());
     fh.reserved   = 0;
-    writeRaw(file_, fh);
-    writeArray(file_, agentStates.data(), agentStates.size());
-    writeArray(file_, projStates.data(),  projStates.size());
-    writeArray(file_, eventRecs.data(),   eventRecs.size());
+    if (!writeRaw(file_, fh) ||
+        !writeArray(file_, agentStates.data(), agentStates.size()) ||
+        !writeArray(file_, projStates.data(),  projStates.size()) ||
+        !writeArray(file_, eventRecs.data(),   eventRecs.size())) {
+        failed_ = true;
+    }
 
     IndexEntry ie{};
     ie.stepIdx  = stepIdx;
@@ -180,22 +197,24 @@ bool Recorder::close() {
     if (!file_) return true;
 
     // Index table.
-    uint64_t indexOff = currentOffset(file_);
-    writeArray(file_, index_.data(), index_.size());
+    uint64_t indexOff = 0;
+    bool ok = !failed_ && currentOffset(file_, indexOff);
+    ok = writeArray(file_, index_.data(), index_.size()) && ok;
 
     // Footer.
     Footer footer{};
     footer.indexOffset = indexOff;
     footer.indexCount  = static_cast<uint32_t>(index_.size());
     footer.reserved    = 0;
-    writeRaw(file_, footer);
+    ok = writeRaw(file_, footer) && ok;
 
     int rc = std::fclose(file_);
     file_ = nullptr;
     index_.clear();
     lastEventIdx_ = 0;
     rosterWritten_ = false;
-    return rc == 0;
+    failed_ = false;
+    return rc == 0 && ok;
 }
 
 } // namespace brogameagent

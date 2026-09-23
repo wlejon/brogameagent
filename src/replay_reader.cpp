@@ -1,9 +1,13 @@
 #include "brogameagent/replay_reader.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
+#ifndef _MSC_VER
+#include <sys/types.h>  // off_t for ftello
+#endif
 
 namespace brogameagent {
 
@@ -19,9 +23,19 @@ bool readFile(const std::string& path, std::vector<uint8_t>& out, std::string& e
     f = std::fopen(path.c_str(), "rb");
 #endif
     if (!f) { err = "cannot open file"; return false; }
-    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); err = "seek failed"; return false; }
-    long len = std::ftell(f);
+    // 64-bit seek/tell: std::ftell's long is 32 bits on Windows, so a replay
+    // past 2 GiB would fail to open (or size the blob from a wrapped length).
+#ifdef _MSC_VER
+    if (_fseeki64(f, 0, SEEK_END) != 0) { std::fclose(f); err = "seek failed"; return false; }
+    const __int64 len = _ftelli64(f);
+#else
+    if (fseeko(f, 0, SEEK_END) != 0) { std::fclose(f); err = "seek failed"; return false; }
+    const off_t len = ftello(f);
+#endif
     if (len < 0) { std::fclose(f); err = "tell failed"; return false; }
+    if (static_cast<uint64_t>(len) > static_cast<uint64_t>(SIZE_MAX)) {
+        std::fclose(f); err = "file too large"; return false;
+    }
     std::rewind(f);
     out.resize(static_cast<size_t>(len));
     size_t n = std::fread(out.data(), 1, out.size(), f);

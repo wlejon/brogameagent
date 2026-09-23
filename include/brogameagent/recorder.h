@@ -67,6 +67,7 @@ private:
     std::vector<replay::IndexEntry> index_;
     size_t lastEventIdx_ = 0;
     bool rosterWritten_ = false;
+    bool failed_ = false;   // a tell or write failed; close() reports it
 };
 
 } // namespace brogameagent
