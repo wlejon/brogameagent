@@ -186,12 +186,12 @@ void decorateExItTrainer(ObjectBuilder& b) {
         learn::TrainerConfig c = d->trainer->config();
         c.lr = static_cast<float>(getDoubleProperty(root.get(), "lr", c.lr));
         c.momentum = static_cast<float>(getDoubleProperty(root.get(), "momentum", c.momentum));
-        c.batch = getIntProp(root.get(), "batch", c.batch);
+        c.batch = getCountProp(root.get(), "batch", c.batch);
         c.policy_weight =
             static_cast<float>(getDoubleProperty(root.get(), "policyWeight", c.policy_weight));
         c.value_weight =
             static_cast<float>(getDoubleProperty(root.get(), "valueWeight", c.value_weight));
-        c.publish_every = getIntProp(root.get(), "publishEvery", c.publish_every);
+        c.publish_every = getCountProp(root.get(), "publishEvery", c.publish_every);
         c.rng_seed = readSeedArg(ev::getProperty(root.get(), "rngSeed"), c.rng_seed);
         d->trainer->set_config(c);
         return ev::undefined();
@@ -211,8 +211,10 @@ void decorateExItTrainer(ObjectBuilder& b) {
         auto* d = unwrapExItTrainer(self);
         if (!d || !d->trainer) return ObjectBuilder{}.get();
         learn::TrainStep s;
+        // Outside the try: its RangeError must not become a plain Error.
+        const int n = static_cast<int>(intAt(a, 0, 0, INT32_MAX, "stepN: n"));
         try {
-            s = d->trainer->step_n(i32At(a, 0));
+            s = d->trainer->step_n(n);
         } catch (const std::exception& e) {
             return ev::throwError(e.what());
         }

@@ -118,8 +118,9 @@ void decorateLinear(ObjectBuilder& b) {
         auto* d = unwrapLinear(self);
         if (!d) return ev::throwTypeError("Linear.init: bad receiver");
         uint64_t s = readSeedArg(argAt(a, 2), kDefaultSeed);
+        const int in = dimAt(a, 0, "Linear.init: in"), out = dimAt(a, 1, "Linear.init: out");
         try {
-            d->l.init(i32At(a, 0), i32At(a, 1), s);
+            d->l.init(in, out, s);
         } catch (const std::exception& e) {
             return ev::throwError(e.what());
         }
@@ -212,8 +213,8 @@ void decorateDeepSets(ObjectBuilder& b) {
         // a[0] is a rooted slot, current across the first read's allocation;
         // a local copy of it would not be.
         if (!a.empty() && ev::isObject(a[0])) {
-            cfg.hidden = getIntProp(a[0], "hidden", cfg.hidden);
-            cfg.embed_dim = getIntProp(a[0], "embedDim", cfg.embed_dim);
+            cfg.hidden = getCountProp(a[0], "hidden", cfg.hidden);
+            cfg.embed_dim = getCountProp(a[0], "embedDim", cfg.embed_dim);
         }
         uint64_t s = readSeedArg(argAt(a, 1), kDefaultSeed);
         try {
@@ -273,8 +274,9 @@ void decorateValueHead(ObjectBuilder& b) {
         auto* d = unwrapValueHead(self);
         if (!d) return ev::throwTypeError("ValueHead.init: bad receiver");
         uint64_t s = readSeedArg(argAt(a, 2), kDefaultSeed);
+        const int in = dimAt(a, 0, "ValueHead.init: in"), hidden = dimAt(a, 1, "ValueHead.init: hidden");
         try {
-            d->v.init(i32At(a, 0), i32At(a, 1), s);
+            d->v.init(in, hidden, s);
         } catch (const std::exception& e) {
             return ev::throwError(e.what());
         }
@@ -340,8 +342,9 @@ void decorateFactoredHead(ObjectBuilder& b) {
         auto* d = unwrapFactoredHead(self);
         if (!d) return ev::throwTypeError("FactoredPolicyHead.init: bad receiver");
         uint64_t s = readSeedArg(argAt(a, 1), kDefaultSeed);
+        const int in = dimAt(a, 0, "FactoredPolicyHead.init: in");
         try {
-            d->h.init(i32At(a, 0), s);
+            d->h.init(in, s);
         } catch (const std::exception& e) {
             return ev::throwError(e.what());
         }
@@ -407,9 +410,8 @@ void installAINnCircuits(ObjectBuilder& nnNs) {
     // createTensor(rows, cols=1) — the old AITensor factory, now answering a
     // bro.tensor GpuTensor so there is exactly one tensor type in the stack.
     nnNs.def("createTensor", 2, [](Value, std::span<const Value> a) -> Value {
-        int r = a.empty() ? 0 : i32At(a, 0);
-        int c = a.size() >= 2 ? i32At(a, 1) : 1;
-        if (r < 0 || c < 0) return ev::throwError("negative dim");
+        const int r = a.empty() ? 0 : dimAt(a, 0, "createTensor: rows");
+        const int c = a.size() >= 2 ? dimAt(a, 1, "createTensor: cols") : 1;
         Value v = brotensor::api::createGpuTensorValue(brotensor::Tensor::mat(r, c));
         if (!ev::isObject(v)) {
             return ev::throwError("bro.tensor natives are not registered in this realm");
@@ -421,8 +423,9 @@ void installAINnCircuits(ObjectBuilder& nnNs) {
         auto cell = std::make_unique<HostLinear>();
         if (a.size() >= 2) {
             uint64_t s = a.size() >= 3 ? readSeedArg(a[2], kDefaultSeed) : kDefaultSeed;
+            const int in = dimAt(a, 0, "createLinear: in"), out = dimAt(a, 1, "createLinear: out");
             try {
-                cell->l.init(i32At(a, 0), i32At(a, 1), s);
+                cell->l.init(in, out, s);
             } catch (const std::exception& e) {
                 return ev::throwError(e.what());
             }
@@ -441,8 +444,8 @@ void installAINnCircuits(ObjectBuilder& nnNs) {
         // a[0] is a rooted slot, current across the first read's allocation;
         // a local copy of it would not be.
         if (!a.empty() && ev::isObject(a[0])) {
-            cfg.hidden = getIntProp(a[0], "hidden", cfg.hidden);
-            cfg.embed_dim = getIntProp(a[0], "embedDim", cfg.embed_dim);
+            cfg.hidden = getCountProp(a[0], "hidden", cfg.hidden);
+            cfg.embed_dim = getCountProp(a[0], "embedDim", cfg.embed_dim);
         }
         uint64_t s = a.size() >= 2 ? readSeedArg(a[1], kDefaultSeed) : kDefaultSeed;
         try {
@@ -456,8 +459,10 @@ void installAINnCircuits(ObjectBuilder& nnNs) {
         auto cell = std::make_unique<HostValueHead>();
         if (a.size() >= 2) {
             uint64_t s = a.size() >= 3 ? readSeedArg(a[2], kDefaultSeed) : kDefaultSeed;
+            const int in = dimAt(a, 0, "createValueHead: in");
+            const int hidden = dimAt(a, 1, "createValueHead: hidden");
             try {
-                cell->v.init(i32At(a, 0), i32At(a, 1), s);
+                cell->v.init(in, hidden, s);
             } catch (const std::exception& e) {
                 return ev::throwError(e.what());
             }
@@ -468,8 +473,9 @@ void installAINnCircuits(ObjectBuilder& nnNs) {
         auto cell = std::make_unique<HostFactoredHead>();
         if (!a.empty()) {
             uint64_t s = a.size() >= 2 ? readSeedArg(a[1], kDefaultSeed) : kDefaultSeed;
+            const int in = dimAt(a, 0, "createFactoredPolicyHead: in");
             try {
-                cell->h.init(i32At(a, 0), s);
+                cell->h.init(in, s);
             } catch (const std::exception& e) {
                 return ev::throwError(e.what());
             }

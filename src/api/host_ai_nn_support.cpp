@@ -119,25 +119,26 @@ Value makeBigIntValue(uint64_t v) {
 
 uint64_t readSeedArg(Value v, uint64_t def) {
     if (ev::isUndefined(v) || ev::isNull(v) || ev::isObject(v)) return def;
-    return ev::toUint64(v);
+    return checkedU64(v, "seed", def);
 }
 
 Value makeIntArrayValue(const std::vector<int>& v) {
     return hostArrayOf(v.size(), [&](size_t i) { return ev::fromDouble(v[i]); });
 }
 
-std::vector<int> readIntArrayValue(Value arr) {
+std::vector<int> readIntArrayValue(Value arr, bool checked) {
     std::vector<int> out;
     if (!ev::isObject(arr)) return out;
     ev::Persistent root(arr);
     Value lenV = ev::getProperty(root.get(), "length");
     if (ev::isUndefined(lenV) || ev::isObject(lenV)) return out;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.reserve(len);
+    const uint32_t len = toLength(lenV);
+    out.reserve(reserveHint(len));
     for (uint32_t i = 0; i < len; ++i) {
         Value e = ev::getElement(root.get(), i);
         double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
-        out.push_back(static_cast<int>(d));
+        out.push_back(checked ? checkedI32(d, "array element " + std::to_string(i))
+                              : intOr(d, -1));
     }
     return out;
 }
@@ -158,7 +159,11 @@ std::vector<int> readIntArrayProp(Value obj, const char* key) {
 }
 
 int getIntProp(Value obj, const char* key, int def) {
-    return static_cast<int>(getDoubleProperty(obj, key, static_cast<double>(def)));
+    return getI32Property(obj, key, def);
+}
+
+int getCountProp(Value obj, const char* key, int def) {
+    return getI32Property(obj, key, def, 0);
 }
 
 // ---------------------------------------------------------------------------

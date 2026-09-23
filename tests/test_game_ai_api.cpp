@@ -333,6 +333,81 @@ static void test_policy_mutation_during_step() {
     TEST_CHECK(got == "SUCCESS");
 }
 
+// Integer options and arguments go through checkedInt: NaN, ±Infinity and
+// values outside the target range throw a RangeError naming the key instead
+// of an undefined cast; in-range fractions truncate; absent keys keep their
+// defaults.
+static void test_integer_range_errors() {
+    std::cout << "[6] integer options reject NaN / out-of-range with RangeError..." << std::endl;
+
+    const std::string got = evalString(R"JS(
+        (function() {
+            const G = bro.ai.game;
+            // Returns "" when fn throws a RangeError whose message names
+            // `key`, else a description of what happened.
+            function rangeErr(label, key, fn) {
+                try { fn(); } catch (e) {
+                    if (!(e instanceof RangeError)) return label + ": threw " + e.name + ": " + e.message;
+                    if (e.message.indexOf(key) < 0) return label + ": message lacks '" + key + "': " + e.message;
+                    return "";
+                }
+                return label + ": did not throw";
+            }
+            const fails = [];
+            function expect(label, key, fn) { const r = rangeErr(label, key, fn); if (r) fails.push(r); }
+
+            expect("agent id NaN", "id", () => G.createAgent({ id: NaN }));
+            expect("agent id 2^40", "id", () => G.createAgent({ id: 2 ** 40 }));
+            expect("agent teamId -Infinity", "teamId", () => G.createAgent({ teamId: -Infinity }));
+            expect("mcts iterations NaN", "iterations", () => G.createMcts({ iterations: NaN }));
+            expect("mcts iterations -1", "iterations", () => G.createMcts({ iterations: -1 }));
+            expect("mcts budgetMs 1e12", "budgetMs", () => G.createMcts({ budgetMs: 1e12 }));
+            expect("mcts actionRepeat 0", "actionRepeat", () => G.createMcts({ actionRepeat: 0 }));
+            expect("mcts seed -1", "seed", () => G.createMcts({ seed: -1 }));
+            expect("generic numActions", "numActions", () => G.createGenericMcts({
+                numActions: 1e12,
+                env: { snapshot() {}, restore() {}, step() { return {}; },
+                       legalActions() { return []; }, observe() { return []; } } }));
+            expect("vecsim numEnvs NaN", "numEnvs", () => G.createVecSimulation({ numEnvs: NaN }));
+            expect("hexnav size 1e10", "size", () => G.createHexNav({ size: 1e10 }));
+            expect("belief numParticles", "numParticles", () => G.createTeamBelief({ numParticles: 1e9 }));
+
+            const w = G.createWorld();
+            const hero = G.createAgent({ id: 3.7, teamId: 0 });
+            if (hero.unit.id !== 3) fails.push("fraction should truncate: id " + hero.unit.id);
+            w.addAgent(hero);
+            expect("findById NaN", "findById", () => w.findById(NaN));
+            if (w.findById(3) !== hero) fails.push("findById(3) lost the agent");
+            expect("world.seed -1", "seed", () => w.seed(-1));
+            w.seed(12345);
+            expect("unit.id = Infinity", "id", () => { hero.unit.id = Infinity; });
+            if (hero.unit.id !== 3) fails.push("a rejected setter changed the id");
+            expect("avoidance maxNeighbors -1", "maxNeighbors",
+                   () => hero.setAvoidance({ maxNeighbors: -1 }));
+            hero.setAvoidance({ maxNeighbors: 4, layers: -1, mask: 0xFFFFFFFF });
+
+            const sim = G.createSimulation(w);
+            expect("runSteps n -5", "runSteps", () => sim.runSteps(1 / 60, -5));
+            expect("addPolicy agentId NaN", "addPolicy", () => sim.addPolicy(NaN, () => ({})));
+
+            if (G.grid) {
+                expect("obs window colsBehind", "colsBehind",
+                       () => G.grid.createObsWindow({ colsBehind: 1e6 }));
+                expect("frame stack k NaN", "k",
+                       () => G.grid.createFrameStack({ innerDim: 4, k: NaN }));
+            }
+            if (G.nn) {
+                expect("linear dim -1", "createLinear", () => G.nn.createLinear(-1, 4));
+                expect("pvn inDim NaN", "inDim",
+                       () => G.nn.createPolicyValueNet({ inDim: NaN, numActions: 2, hidden: [4], valueHidden: 4 }));
+            }
+            return fails.length ? fails.join("\n") : "SUCCESS";
+        })()
+    )JS");
+    if (got != "SUCCESS") std::cerr << "range errors:\n" << got << std::endl;
+    TEST_CHECK(got == "SUCCESS");
+}
+
 int main() {
     std::cout << "Running brogameagent API test..." << std::endl;
 
@@ -345,6 +420,7 @@ int main() {
         test_navgrid_path();
         test_register_capability();
         test_policy_mutation_during_step();
+        test_integer_range_errors();
     }
     ev::destroyRealm(realm);
 

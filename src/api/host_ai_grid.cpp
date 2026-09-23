@@ -9,6 +9,8 @@
 #ifdef BROGAMEAGENT_HAS_NN
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <brogameagent/generic_mcts.h>
 
 namespace brogameagent::api {
@@ -102,12 +104,15 @@ Value createObsWindow(std::span<const Value> a) {
     grid::ObsWindowSpec spec{};
     Value specV = ev::getProperty(opts.get(), "spec");
     ev::Persistent sp(ev::isObject(specV) ? specV : opts.get());
-    spec.cols_behind = getIntProp(sp.get(), "colsBehind", 0);
-    spec.cols_ahead = getIntProp(sp.get(), "colsAhead", 0);
-    spec.rows_up = getIntProp(sp.get(), "rowsUp", 0);
-    spec.rows_down = getIntProp(sp.get(), "rowsDown", 0);
-    spec.tile_channels = getIntProp(sp.get(), "tileChannels", 1);
-    spec.self_block_size = getIntProp(sp.get(), "selfBlockSize", 0);
+    // The layout multiplies these in int (cols * rows * channels), so each is
+    // bounded here and the total checked once the layers are read.
+    constexpr int kMaxDim = 1 << 14;
+    spec.cols_behind = getI32Property(sp.get(), "colsBehind", 0, 0, kMaxDim);
+    spec.cols_ahead = getI32Property(sp.get(), "colsAhead", 0, 0, kMaxDim);
+    spec.rows_up = getI32Property(sp.get(), "rowsUp", 0, 0, kMaxDim);
+    spec.rows_down = getI32Property(sp.get(), "rowsDown", 0, 0, kMaxDim);
+    spec.tile_channels = getI32Property(sp.get(), "tileChannels", 1, 0, kMaxDim);
+    spec.self_block_size = getI32Property(sp.get(), "selfBlockSize", 0, 0, 1 << 24);
 
     auto cell = std::make_unique<HostObsWindow>();
     HostObsWindow* d = cell.get();
@@ -119,7 +124,7 @@ Value createObsWindow(std::span<const Value> a) {
     Value tileV = ev::getProperty(opts.get(), "tile");
     if (ev::isObject(tileV)) {
         ev::Persistent tile(tileV);
-        spec.tile_channels = getIntProp(tile.get(), "channels", spec.tile_channels);
+        spec.tile_channels = getI32Property(tile.get(), "channels", spec.tile_channels, 0, kMaxDim);
         spec.tile_normalize = readFloats(ev::getProperty(tile.get(), "normalize"));
         spec.oob_tile = readFloats(ev::getProperty(tile.get(), "oob"));
         Value sf = ev::getProperty(tile.get(), "sample");
@@ -160,15 +165,13 @@ Value createObsWindow(std::span<const Value> a) {
     if (ev::isObject(layersV)) {
         ev::Persistent arr(layersV);
         Value lenV = ev::getProperty(arr.get(), "length");
-        const uint32_t n = ev::isNumber(lenV)
-                               ? static_cast<uint32_t>(ev::toDouble(lenV))
-                               : 0u;
+        const uint32_t n = std::min<uint32_t>(toLength(lenV), kMaxDim);
         for (uint32_t i = 0; i < n; ++i) {
             Value loV = ev::getElement(arr.get(), i);
             if (!ev::isObject(loV)) continue;
             ev::Persistent lo(loV);
             grid::EntityLayerSpec L;
-            L.channels = getIntProp(lo.get(), "channels", 1);
+            L.channels = getI32Property(lo.get(), "channels", 1, 0, kMaxDim);
             L.overwrite = getBoolProperty(lo.get(), "overwrite", false);
             L.normalize = readFloats(ev::getProperty(lo.get(), "normalize"));
 
@@ -186,7 +189,7 @@ Value createObsWindow(std::span<const Value> a) {
                 Value r = callJs(d->live->enumerate[idx], ev::undefined(), {}, &ok);
                 if (!ok || !ev::isNumber(r)) return 0;
                 const double n2 = ev::toDouble(r);
-                return (std::isfinite(n2) && n2 > 0) ? static_cast<size_t>(n2) : 0;
+                return (n2 > 0) ? static_cast<size_t>(std::min(n2, 4294967295.0)) : 0;
             };
             L.sample_fn = [d, idx, chan](size_t i) -> grid::EntityCell {
                 grid::EntityCell c;
@@ -197,8 +200,11 @@ Value createObsWindow(std::span<const Value> a) {
                                  std::span<const Value>(&arg, 1), &ok);
                 if (!ok || !ev::isObject(r)) return c;
                 ev::Persistent ro(r);
-                c.col = getIntProp(ro.get(), "col", 0);
-                c.row = getIntProp(ro.get(), "row", 0);
+                // A callback result, read mid-observe: never throws. A cell
+                // off the int range falls outside every window and is skipped.
+                constexpr int32_t kOff = std::numeric_limits<int32_t>::min();
+                c.col = intOr(getDoubleProperty(ro.get(), "col", 0.0), kOff);
+                c.row = intOr(getDoubleProperty(ro.get(), "row", 0.0), kOff);
                 Value vals = ev::getProperty(ro.get(), "values");
                 if (!ev::isUndefined(vals) && !ev::isNull(vals)) {
                     c.values = readFloats(vals);
@@ -214,6 +220,17 @@ Value createObsWindow(std::span<const Value> a) {
             };
 
             layers.push_back(std::move(L));
+        }
+    }
+
+    {
+        const int64_t cells = int64_t{spec.cols_behind + spec.cols_ahead + 1} *
+                              (spec.rows_up + spec.rows_down + 1);
+        int64_t channels = spec.tile_channels;
+        for (const auto& L : layers) channels += L.channels;
+        if (cells * channels + spec.self_block_size > (int64_t{1} << 28)) {
+            return ev::throwRangeError(
+                "createObsWindow: window cells x channels exceeds 2^28 floats");
         }
     }
 
@@ -290,7 +307,7 @@ void decorateFailureTape(ObjectBuilder& b) {
     b.def("multipliers", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapFailureTape(self);
         if (!d || !d->tape || a.size() < 2) return makeFloat32Array(nullptr, 0);
-        std::vector<float> m = d->tape->multipliers(strAt(a, 0), i32At(a, 1));
+        std::vector<float> m = d->tape->multipliers(strAt(a, 0), static_cast<int>(intAt(a, 1, 0, 1 << 24, "multipliers: numActions")));
         return makeFloat32Array(m.data(), m.size());
     });
     b.def("applyPriors", 2, [](Value self, std::span<const Value> a) -> Value {
@@ -438,7 +455,7 @@ bgm::GenericEnv buildEnvFromJs(JsEnv* cb) {
         bool ok = false;
         Value r = callJs(cb->legal, cb->obj.get(), {}, &ok);
         if (!ok) return {};
-        return readIntArrayValue(r);
+        return readIntArrayValue(r, /*checked=*/false);  // mid-search: never throws
     };
     env.observe_fn = [cb]() -> std::vector<float> {
         bool ok = false;
@@ -475,13 +492,12 @@ Value generateBC(std::span<const Value> a) {
         bool ok = false;
         Value r = callJs(heuristic, ev::undefined(), std::span<const Value>(args, 2), &ok);
         if (!ok || !ev::isNumber(r)) return -1;
-        double d = ev::toDouble(r);
-        return (!std::isfinite(d)) ? -1 : static_cast<int>(d);
+        return intOr(ev::toDouble(r), -1);
     };
 
     grid::BCConfig cfg;
     cfg.min_return = static_cast<float>(getDoubleProperty(opts.get(), "minReturn", cfg.min_return));
-    cfg.rollout_horizon = getIntProp(opts.get(), "rolloutHorizon", cfg.rollout_horizon);
+    cfg.rollout_horizon = getCountProp(opts.get(), "rolloutHorizon", cfg.rollout_horizon);
     cfg.gamma = static_cast<float>(getDoubleProperty(opts.get(), "gamma", cfg.gamma));
     cfg.clip_value = getBoolProperty(opts.get(), "clipValue", cfg.clip_value);
 
@@ -490,10 +506,8 @@ Value generateBC(std::span<const Value> a) {
     if (ev::isObject(startsV)) {
         ev::Persistent arr(startsV);
         Value lenV = ev::getProperty(arr.get(), "length");
-        const uint32_t n = ev::isNumber(lenV)
-                               ? static_cast<uint32_t>(ev::toDouble(lenV))
-                               : 0u;
-        starts.reserve(n);
+        const uint32_t n = toLength(lenV);
+        starts.reserve(reserveHint(n));
         for (uint32_t i = 0; i < n; ++i) {
             starts.push_back(std::any{JsSnapshot(ev::getElement(arr.get(), i))});
         }
@@ -530,8 +544,8 @@ std::vector<grid::FailureStep> readFailureTail(Value arr) {
     ev::Persistent root(arr);
     Value lenV = ev::getProperty(root.get(), "length");
     if (!ev::isNumber(lenV)) return out;
-    const uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.reserve(n);
+    const uint32_t n = toLength(lenV);
+    out.reserve(reserveHint(n));
     for (uint32_t i = 0; i < n; ++i) {
         Value e = ev::getElement(root.get(), i);
         if (!ev::isObject(e)) continue;
@@ -596,8 +610,8 @@ void installAIGridCore(ObjectBuilder& gridNs) {
     gridNs.def("createFailureTape", 1, [](Value, std::span<const Value> a) -> Value {
         grid::FailureTapeConfig cfg;
         if (!a.empty() && ev::isObject(a[0])) {
-            cfg.tape_depth = getIntProp(a[0], "tapeDepth", cfg.tape_depth);
-            cfg.ring_capacity = getIntProp(a[0], "ringCapacity", cfg.ring_capacity);
+            cfg.tape_depth = getCountProp(a[0], "tapeDepth", cfg.tape_depth);
+            cfg.ring_capacity = getCountProp(a[0], "ringCapacity", cfg.ring_capacity);
             cfg.penalty = static_cast<float>(getDoubleProperty(a[0], "penalty", cfg.penalty));
             cfg.floor = static_cast<float>(getDoubleProperty(a[0], "floor", cfg.floor));
         }
@@ -610,11 +624,11 @@ void installAIGridCore(ObjectBuilder& gridNs) {
         grid::BestCropConfig cfg;
         uint64_t seed = 0xC0DE1234ULL;
         if (!a.empty() && ev::isObject(a[0])) {
-            cfg.capacity = getIntProp(a[0], "capacity", cfg.capacity);
+            cfg.capacity = getCountProp(a[0], "capacity", cfg.capacity);
             cfg.depth_bonus =
                 static_cast<float>(getDoubleProperty(a[0], "depthBonus", cfg.depth_bonus));
             cfg.age_decay = static_cast<float>(getDoubleProperty(a[0], "ageDecay", cfg.age_decay));
-            cfg.seed_top_k = getIntProp(a[0], "seedTopK", cfg.seed_top_k);
+            cfg.seed_top_k = getCountProp(a[0], "seedTopK", cfg.seed_top_k);
             seed = getU64Property(a[0], "seed", seed);
         }
         auto cell = std::make_unique<HostBestCrop>();
@@ -638,7 +652,7 @@ void installAIGridCore(ObjectBuilder& gridNs) {
         int patience = 60;
         if (!a.empty() && ev::isObject(a[0])) {
             eps = static_cast<float>(getDoubleProperty(a[0], "epsilon", 0.0));
-            patience = getIntProp(a[0], "patience", 60);
+            patience = getCountProp(a[0], "patience", 60);
         }
         auto cell = std::make_unique<HostStallDetector>();
         cell->det = std::make_unique<grid::StallDetector>(eps, patience);

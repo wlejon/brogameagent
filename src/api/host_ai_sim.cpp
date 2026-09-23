@@ -130,7 +130,7 @@ void ensureAISimClassesInstalled() {
             auto* h = unwrapSimulation(self);
             if (!h || !h->sim || h->worldLife.expired()) return ev::undefined();
             StepScope scope(h, self);
-            h->sim->runSteps(static_cast<float>(numAt(a, 0)), i32At(a, 1));
+            h->sim->runSteps(static_cast<float>(numAt(a, 0)), dimAt(a, 1, "runSteps: n"));
             return ev::undefined();
         });
 
@@ -153,7 +153,7 @@ void ensureAISimClassesInstalled() {
         b.def("addPolicy", 2, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapSimulation(self);
             if (!h || !h->sim || a.size() < 2) return ev::undefined();
-            int agentId = i32At(a, 0);
+            int agentId = i32At(a, 0, "addPolicy: agentId");
             if (!ev::isFunction(a[1])) return ev::throwTypeError("policy must be a function");
 
             // One `_policies` index per agent id: re-adding replaces the
@@ -186,7 +186,7 @@ void ensureAISimClassesInstalled() {
         b.def("removePolicy", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapSimulation(self);
             if (!h || !h->sim || a.empty()) return ev::undefined();
-            int agentId = i32At(a, 0);
+            int agentId = i32At(a, 0, "removePolicy: agentId");
             h->sim->removePolicy(agentId);
             for (size_t i = 0; i < h->policyAgents.size(); ++i) {
                 if (h->policyAgents[i] != agentId) continue;
@@ -226,7 +226,7 @@ void ensureAISimClassesInstalled() {
             if (!h || a.size() < 3) return ev::undefined();
             auto* w = unwrapWorld(a[2]);
             if (!w) return ev::throwTypeError("recordFrame: expected a World");
-            h->recorder.recordFrame(u32At(a, 0), static_cast<float>(numAt(a, 1)), w->world);
+            h->recorder.recordFrame(u32At(a, 0, "recordFrame: stepIdx"), static_cast<float>(numAt(a, 1)), w->world);
             return ev::undefined();
         });
 
@@ -262,7 +262,7 @@ void ensureAISimClassesInstalled() {
         b.def("frame", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapReplayReader(self);
             if (!h || a.empty()) return ev::null();
-            int idx = i32At(a, 0);
+            int idx = i32At(a, 0, "frame: index");
             if (idx < 0 || idx >= static_cast<int>(h->reader.frameCount())) return ev::null();
             auto f = h->reader.frame(static_cast<size_t>(idx));
 
@@ -297,7 +297,7 @@ void ensureAISimClassesInstalled() {
         b.def("trajectory", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapReplayReader(self);
             if (!h || a.empty()) return hostArrayOf(0, [](size_t) { return ev::null(); });
-            auto traj = h->reader.trajectory(i32At(a, 0));
+            auto traj = h->reader.trajectory(i32At(a, 0, "trajectory: agentId"));
             return hostArrayOf(traj.size(), [&](size_t i) {
                 ObjectBuilder pt;
                 pt.set("stepIdx", ev::fromDouble(traj[i].stepIdx));

@@ -257,10 +257,10 @@ void rewireGenericValue(HostGenericMcts* h, bool hasFn) {
 bgm::GenericMctsConfig parseGenericConfig(Value opts, bgm::GenericMctsConfig c) {
     if (!ev::isObject(opts)) return c;
     ev::Persistent root(opts);
-    c.iterations = static_cast<int>(getDoubleProperty(root.get(), "iterations", c.iterations));
+    c.iterations = getI32Property(root.get(), "iterations", c.iterations, 0);
     c.c_puct = static_cast<float>(getDoubleProperty(root.get(), "cPuct", c.c_puct));
     c.gamma = static_cast<float>(getDoubleProperty(root.get(), "gamma", c.gamma));
-    c.rollout_depth = static_cast<int>(getDoubleProperty(root.get(), "rolloutDepth", c.rollout_depth));
+    c.rollout_depth = getI32Property(root.get(), "rolloutDepth", c.rollout_depth, 0);
     c.dirichlet_alpha = static_cast<float>(
         getDoubleProperty(root.get(), "dirichletAlpha", c.dirichlet_alpha));
     c.dirichlet_epsilon = static_cast<float>(
@@ -346,7 +346,7 @@ void ensureAIMctsClassesInstalled() {
         b.def("advanceRoot", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapGenericMcts(self);
             if (h && h->mcts) {
-                const int action = i32At(a, 0);
+                const int action = i32At(a, 0, "advanceRoot: action");
                 LiveScope scope(h, self);
                 h->mcts->advance_root(action);
             }
@@ -664,7 +664,10 @@ void installAIMcts(ObjectBuilder& game) {
 
         Value numActV = ev::getProperty(envObj.get(), "numActions");
         if (!ev::isNumber(numActV)) numActV = ev::getProperty(opts.get(), "numActions");
-        h->numActions = ev::isNumber(numActV) ? static_cast<int>(ev::toDouble(numActV)) : 0;
+        // Sizes the search's per-action arrays.
+        h->numActions = ev::isNumber(numActV)
+            ? static_cast<int>(checkedInt(ev::toDouble(numActV), 0, 1 << 24, "numActions"))
+            : 0;
 
         if (!envOk) {
             return ev::throwTypeError(
@@ -909,7 +912,7 @@ void installAIMcts(ObjectBuilder& game) {
         if (!ev::isObject(worldsArr.get())) return ev::throwTypeError("rootParallelSearch: opts.worlds required");
         Value lenV = ev::getProperty(worldsArr.get(), "length");
         if (!ev::isNumber(lenV) || ev::toDouble(lenV) <= 0) return ev::throwTypeError("opts.worlds must be non-empty");
-        int nWorlds = static_cast<int>(ev::toDouble(lenV));
+        const int nWorlds = static_cast<int>(std::min<uint32_t>(toLength(lenV), 1u << 16));
 
         // A JS callback would be run from the worker threads root-parallel
         // search spawns, and bronze's runtime is per-thread — so a function
@@ -931,7 +934,7 @@ void installAIMcts(ObjectBuilder& game) {
             worlds.push_back(&w->world);
         }
 
-        int heroId = static_cast<int>(getDoubleProperty(opts.get(), "heroId", -1));
+        int heroId = getI32Property(opts.get(), "heroId", -1);
         if (heroId < 0) return ev::throwTypeError("opts.heroId required");
 
         auto cfg = parseMctsConfig(opts.get());
@@ -962,7 +965,7 @@ void installAIMcts(ObjectBuilder& game) {
         if (!ev::isObject(worldsArr.get())) return ev::throwTypeError("opts.worlds required");
         Value lenV = ev::getProperty(worldsArr.get(), "length");
         if (!ev::isNumber(lenV) || ev::toDouble(lenV) <= 0) return ev::throwTypeError("opts.worlds must be non-empty");
-        int nWorlds = static_cast<int>(ev::toDouble(lenV));
+        const int nWorlds = static_cast<int>(std::min<uint32_t>(toLength(lenV), 1u << 16));
 
         ev::Persistent evalV(ev::getProperty(opts.get(), "evaluator"));
         if (ev::isFunction(evalV.get())) return ev::throwTypeError("rootParallelSearchDecoupled: opts.evaluator cannot be a JS function");
@@ -977,8 +980,8 @@ void installAIMcts(ObjectBuilder& game) {
             worlds.push_back(&w->world);
         }
 
-        int heroId = static_cast<int>(getDoubleProperty(opts.get(), "heroId", -1));
-        int oppId = static_cast<int>(getDoubleProperty(opts.get(), "oppId", -1));
+        int heroId = getI32Property(opts.get(), "heroId", -1);
+        int oppId = getI32Property(opts.get(), "oppId", -1);
         if (heroId < 0 || oppId < 0) return ev::throwTypeError("opts.heroId and opts.oppId required");
 
         auto cfg = parseMctsConfig(opts.get());

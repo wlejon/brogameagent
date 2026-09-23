@@ -15,7 +15,7 @@ void decorateUnitProto(ObjectBuilder& b) {
         },
         [](Value self, std::span<const Value> a) -> Value {
             auto* u = unwrapUnit(self);
-            if (u && u->agent() && !a.empty()) u->agent()->unit().id = static_cast<int>(numAt(a, 0));
+            if (u && u->agent() && !a.empty()) u->agent()->unit().id = i32At(a, 0, "id");
             return ev::undefined();
         });
 
@@ -26,7 +26,7 @@ void decorateUnitProto(ObjectBuilder& b) {
         },
         [](Value self, std::span<const Value> a) -> Value {
             auto* u = unwrapUnit(self);
-            if (u && u->agent() && !a.empty()) u->agent()->unit().teamId = static_cast<int>(numAt(a, 0));
+            if (u && u->agent() && !a.empty()) u->agent()->unit().teamId = i32At(a, 0, "teamId");
             return ev::undefined();
         });
 
@@ -201,7 +201,8 @@ void decorateUnitProto(ObjectBuilder& b) {
     b.def("setAbilitySlot", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* u = unwrapUnit(self);
         if (u && u->agent() && a.size() >= 2) {
-            int slot = static_cast<int>(numAt(a, 0)), abilityId = static_cast<int>(numAt(a, 1));
+            int slot = i32At(a, 0, "setAbilitySlot: slot");
+            int abilityId = i32At(a, 1, "setAbilitySlot: abilityId");
             if (slot >= 0 && slot < brogameagent::Unit::MAX_ABILITIES) {
                 u->agent()->unit().abilitySlot[slot] = abilityId;
             }
@@ -212,7 +213,7 @@ void decorateUnitProto(ObjectBuilder& b) {
     b.def("getAbilitySlot", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* u = unwrapUnit(self);
         if (!u || !u->agent() || a.empty()) return ev::fromDouble(-1);
-        int slot = static_cast<int>(numAt(a, 0));
+        int slot = i32At(a, 0, "getAbilitySlot: slot");
         if (slot < 0 || slot >= brogameagent::Unit::MAX_ABILITIES) return ev::fromDouble(-1);
         return ev::fromDouble(u->agent()->unit().abilitySlot[slot]);
     });
@@ -220,7 +221,7 @@ void decorateUnitProto(ObjectBuilder& b) {
     b.def("getAbilityCooldown", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* u = unwrapUnit(self);
         if (!u || !u->agent() || a.empty()) return ev::fromDouble(0.0);
-        int slot = static_cast<int>(numAt(a, 0));
+        int slot = i32At(a, 0, "getAbilityCooldown: slot");
         if (slot < 0 || slot >= brogameagent::Unit::MAX_ABILITIES) return ev::fromDouble(0.0);
         return ev::fromDouble(u->agent()->unit().abilityCooldowns[slot]);
     });
@@ -268,7 +269,7 @@ void decorateUnitProto(ObjectBuilder& b) {
             auto* u = unwrapUnit(self); return ev::fromDouble(u && u->agent() ? u->agent()->unit().dotSourceId : -1);
         },
         [](Value self, std::span<const Value> a) -> Value {
-            auto* u = unwrapUnit(self); if (u && u->agent() && !a.empty()) u->agent()->unit().dotSourceId = static_cast<int>(numAt(a, 0));
+            auto* u = unwrapUnit(self); if (u && u->agent() && !a.empty()) u->agent()->unit().dotSourceId = i32At(a, 0, "dotSourceId");
             return ev::undefined();
         });
 

@@ -334,8 +334,8 @@ void decorateAgentProto(ObjectBuilder& b) {
         ev::Persistent root(list);
         Value lenV = ev::getProperty(root.get(), "length");
         if (ev::isUndefined(lenV) || ev::isObject(lenV)) return ev::throwTypeError("setPath(waypoints: [{x,z}|[x,z], ...])");
-        const uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
-        std::vector<bromath::Vec2> path; path.reserve(n);
+        const uint32_t n = toLength(lenV);
+        std::vector<bromath::Vec2> path; path.reserve(reserveHint(n));
         for (uint32_t i = 0; i < n; ++i) {
             Value wp = ev::getElement(root.get(), i);
             if (!ev::isObject(wp)) return ev::throwTypeError("setPath: waypoint must be {x,z} or [x,z]");
@@ -542,7 +542,7 @@ void decorateAgentBindingProto(ObjectBuilder& b) {
     b.def("attack", 1, [](Value s, std::span<const Value> a) -> Value {
         auto* bd = unwrapAgentBinding(s);
         if (bd && !a.empty() && bd->agentHost) {
-            brogameagent::AgentAction act; act.attackTargetId = i32At(a, 0);
+            brogameagent::AgentAction act; act.attackTargetId = i32At(a, 0, "attack: targetId");
             bd->agentHost->agent.applyAction(act, 1.0f / 60.0f);
         }
         return ev::undefined();
@@ -551,8 +551,8 @@ void decorateAgentBindingProto(ObjectBuilder& b) {
     b.def("cast", 2, [](Value s, std::span<const Value> a) -> Value {
         auto* bd = unwrapAgentBinding(s);
         if (bd && !a.empty() && bd->agentHost) {
-            brogameagent::AgentAction act; act.useAbilityId = i32At(a, 0);
-            if (a.size() >= 2) act.attackTargetId = i32At(a, 1);
+            brogameagent::AgentAction act; act.useAbilityId = i32At(a, 0, "cast: abilityId");
+            if (a.size() >= 2) act.attackTargetId = i32At(a, 1, "cast: targetId");
             bd->agentHost->agent.applyAction(act, 1.0f / 60.0f);
         }
         return ev::undefined();
@@ -598,13 +598,13 @@ void applyAgentAvoidance(Value opts, brogameagent::Agent& agent) {
         av.radius = static_cast<float>(getDoubleProperty(root.get(), "radius", av.radius));
         av.maxSpeed = static_cast<float>(getDoubleProperty(root.get(), "maxSpeed", av.maxSpeed));
         av.neighborDist = static_cast<float>(getDoubleProperty(root.get(), "neighborDist", av.neighborDist));
-        av.maxNeighbors = static_cast<int>(getDoubleProperty(root.get(), "maxNeighbors", av.maxNeighbors));
+        av.maxNeighbors = getI32Property(root.get(), "maxNeighbors", av.maxNeighbors, 0);
         av.timeHorizon = static_cast<float>(getDoubleProperty(root.get(), "timeHorizon", av.timeHorizon));
         av.timeHorizonObst = static_cast<float>(getDoubleProperty(root.get(), "timeHorizonObst", av.timeHorizonObst));
         av.height = static_cast<float>(getDoubleProperty(root.get(), "height", av.height));
         av.priority = static_cast<float>(getDoubleProperty(root.get(), "priority", av.priority));
-        av.layers = static_cast<uint32_t>(getDoubleProperty(root.get(), "layers", av.layers));
-        av.mask = static_cast<uint32_t>(getDoubleProperty(root.get(), "mask", av.mask));
+        av.layers = getMaskProperty(root.get(), "layers", av.layers);
+        av.mask = getMaskProperty(root.get(), "mask", av.mask);
     } else {
         return;
     }
@@ -653,8 +653,8 @@ Value aiCreateAgent(Value, std::span<const Value> a) {
         double maxTurnRate = getDoubleProperty(root.get(), "maxTurnRate", -1.0);
         if (maxTurnRate > 0) h->agent.setMaxTurnRate(static_cast<float>(maxTurnRate));
 
-        h->agent.unit().id = static_cast<int>(getDoubleProperty(root.get(), "id", 0.0));
-        h->agent.unit().teamId = static_cast<int>(getDoubleProperty(root.get(), "teamId", 0.0));
+        h->agent.unit().id = getI32Property(root.get(), "id", 0);
+        h->agent.unit().teamId = getI32Property(root.get(), "teamId", 0);
         double hp = getDoubleProperty(root.get(), "hp", 100.0);
         h->agent.unit().hp = static_cast<float>(hp);
         h->agent.unit().maxHp = static_cast<float>(getDoubleProperty(root.get(), "maxHp", hp));

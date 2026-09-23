@@ -137,8 +137,10 @@ void decorateHexNavProto(ObjectBuilder& b) {
         if (!h || !h->nav || !idAt(a, 0, id))
             return ev::throwTypeError("buildClearance(id, radius, passable, elevation, floors, crushFloors)");
         const size_t cells = static_cast<size_t>(h->nav->cells());
-        const int32_t radius = i32At(a, 1);
-        const int32_t crush = i32At(a, 5);
+        // The radius sizes a disk of 3r(r+1)+1 offsets; past the grid's own
+        // extent (size <= 4096) it only grows the loop.
+        const int32_t radius = static_cast<int32_t>(intAt(a, 1, 0, 8192, "buildClearance: radius"));
+        const int32_t crush = i32At(a, 5, "buildClearance: crushFloors");
         size_t np = 0, ne = 0, nf = 0;
         const uint8_t* passable = viewAt<uint8_t>(a, 2, ev::elements::Uint8, np);
         const int8_t* elevation = viewAt<int8_t>(a, 3, ev::elements::Int8, ne);
@@ -209,8 +211,8 @@ void decorateHexNavProto(ObjectBuilder& b) {
 Value aiCreateHexNav(Value, std::span<const Value> a) {
     if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("createHexNav({ size }) requires options");
     ev::Persistent opts(a[0]);
-    int32_t size = static_cast<int32_t>(getDoubleProperty(opts.get(), "size", 0));
-    if (size <= 0 || size > 4096) return ev::throwRangeError("createHexNav: size must be 1..4096");
+    const int32_t size = getI32Property(opts.get(), "size", 0, 1, 4096);
+    if (size <= 0) return ev::throwRangeError("createHexNav: size must be 1..4096");
     auto* h = new HostHexNav();
     h->nav = std::make_unique<brogameagent::HexNav>(size);
     return g_hexNavClass.make(h, [](void* p) { delete static_cast<HostHexNav*>(p); });
@@ -424,7 +426,7 @@ void decorateWorldProto(ObjectBuilder& b) {
         if (!w || a.size() < 2) return ev::fromBool(false);
         HostAgent* ag = unwrapAgent(a[0]);
         if (!ag) return ev::fromBool(false);
-        int targetId = static_cast<int>(numAt(a, 1));
+        int targetId = i32At(a, 1, "resolveAttack: targetId");
         return ev::fromBool(w->world.resolveAttack(ag->agent, targetId));
     });
 
@@ -434,8 +436,8 @@ void decorateWorldProto(ObjectBuilder& b) {
         HostAgent* ag = unwrapAgent(a[0]);
         if (!ag) return ev::fromBool(false);
         ActiveWorldScope scope(w, self);
-        int slot = static_cast<int>(numAt(a, 1));
-        int targetId = static_cast<int>(numAt(a, 2));
+        int slot = i32At(a, 1, "resolveAbility: slot");
+        int targetId = i32At(a, 2, "resolveAbility: targetId");
         return ev::fromBool(w->world.resolveAbility(ag->agent, slot, targetId));
     });
 
@@ -463,9 +465,9 @@ void decorateWorldProto(ObjectBuilder& b) {
         if (!w || a.empty() || !ev::isObject(a[0])) return ev::fromDouble(-1);
         ev::Persistent opts(a[0]);
         brogameagent::Projectile p;
-        p.ownerId = static_cast<int>(getDoubleProperty(opts.get(), "ownerId", -1));
-        p.teamId = static_cast<int>(getDoubleProperty(opts.get(), "teamId", 0));
-        p.targetId = static_cast<int>(getDoubleProperty(opts.get(), "targetId", -1));
+        p.ownerId = getI32Property(opts.get(), "ownerId", -1);
+        p.teamId = getI32Property(opts.get(), "teamId", 0);
+        p.targetId = getI32Property(opts.get(), "targetId", -1);
         p.x = static_cast<float>(getDoubleProperty(opts.get(), "x", 0));
         p.z = static_cast<float>(getDoubleProperty(opts.get(), "z", 0));
         p.vx = static_cast<float>(getDoubleProperty(opts.get(), "vx", 0));
@@ -475,7 +477,7 @@ void decorateWorldProto(ObjectBuilder& b) {
         p.damage = static_cast<float>(getDoubleProperty(opts.get(), "damage", 0));
         p.remainingLife = static_cast<float>(getDoubleProperty(opts.get(), "remainingLife", 2));
         p.splashRadius = static_cast<float>(getDoubleProperty(opts.get(), "splashRadius", 0));
-        p.maxHits = static_cast<int>(getDoubleProperty(opts.get(), "maxHits", 0));
+        p.maxHits = getI32Property(opts.get(), "maxHits", 0, 0);
 
         Value kindVal = ev::getProperty(opts.get(), "kind");
         if (ev::isString(kindVal)) p.kind = parseDamageKind(ev::toUtf8(kindVal).c_str());
@@ -559,13 +561,13 @@ void decorateWorldProto(ObjectBuilder& b) {
         if (ev::isObject(agentsArr.get())) {
             Value lenV = ev::getProperty(agentsArr.get(), "length");
             if (ev::isNumber(lenV)) {
-                int n = static_cast<int>(ev::toDouble(lenV));
-                for (int i = 0; i < n; i++) {
+                const uint32_t n = toLength(lenV);
+                for (uint32_t i = 0; i < n; i++) {
                     // Rooted: every getDoubleProperty below allocates.
                     ev::Persistent aoP(ev::getElement(agentsArr.get(), static_cast<uint32_t>(i)));
                     if (ev::isObject(aoP.get())) {
                         brogameagent::AgentSnapshot as;
-                        as.id = static_cast<int>(getDoubleProperty(aoP.get(),"id", 0));
+                        as.id = getI32Property(aoP.get(), "id", 0);
                         as.x = static_cast<float>(getDoubleProperty(aoP.get(),"x", 0));
                         as.z = static_cast<float>(getDoubleProperty(aoP.get(),"z", 0));
                         as.vx = static_cast<float>(getDoubleProperty(aoP.get(),"vx", 0));
@@ -578,7 +580,7 @@ void decorateWorldProto(ObjectBuilder& b) {
                         as.unit.hp = static_cast<float>(getDoubleProperty(aoP.get(),"hp", 100));
                         as.unit.maxHp = static_cast<float>(getDoubleProperty(aoP.get(),"maxHp", 100));
                         as.unit.mana = static_cast<float>(getDoubleProperty(aoP.get(),"mana", 0));
-                        as.unit.teamId = static_cast<int>(getDoubleProperty(aoP.get(),"teamId", 0));
+                        as.unit.teamId = getI32Property(aoP.get(), "teamId", 0);
                         as.unit.id = as.id;
                         as.hasTarget = getBoolProperty(aoP.get(),"hasTarget", false);
                         as.targetX = static_cast<float>(getDoubleProperty(aoP.get(),"targetX", 0));
@@ -588,7 +590,7 @@ void decorateWorldProto(ObjectBuilder& b) {
                 }
             }
         }
-        snap.nextProjectileId = static_cast<int>(getDoubleProperty(root.get(), "nextProjectileId", 1));
+        snap.nextProjectileId = getI32Property(root.get(), "nextProjectileId", 1);
         w->world.restore(snap);
         return ev::undefined();
     });

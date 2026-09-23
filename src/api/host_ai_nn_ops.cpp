@@ -256,7 +256,7 @@ void installAINnOps(ObjectBuilder& nnNs) {
 
     nnNs.def("decodeFlatAction", 2, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::throwTypeError("decodeFlatAction(flat, headSizes)");
-        int flat = i32At(a, 0);
+        int flat = i32At(a, 0, "decodeFlatAction: flat");
         auto sizes = readIntArrayValue(a[1]);
         if (sizes.empty()) return ev::throwTypeError("headSizes must be non-empty");
         auto strides = nn::head_strides(sizes);

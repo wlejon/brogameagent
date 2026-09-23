@@ -301,7 +301,7 @@ void decorateHeroNetTx(ObjectBuilder& b) {
         if (d && d->net) {
             d->net->adam_step(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)),
                               static_cast<float>(numAt(a, 2)), static_cast<float>(numAt(a, 3)),
-                              i32At(a, 4));
+                              dimAt(a, 4, "adamStep: t"));
         }
         return ev::undefined();
     });
@@ -372,11 +372,11 @@ void installAINnNets(ObjectBuilder& nnNs) {
             ev::Persistent root(opts);
             ev::Persistent encP(ev::getProperty(root.get(), "enc"));
             if (ev::isObject(encP.get())) {
-                cfg.enc.hidden = getIntProp(encP.get(), "hidden", cfg.enc.hidden);
-                cfg.enc.embed_dim = getIntProp(encP.get(), "embedDim", cfg.enc.embed_dim);
+                cfg.enc.hidden = getCountProp(encP.get(), "hidden", cfg.enc.hidden);
+                cfg.enc.embed_dim = getCountProp(encP.get(), "embedDim", cfg.enc.embed_dim);
             }
-            cfg.trunk_hidden = getIntProp(root.get(), "trunkHidden", cfg.trunk_hidden);
-            cfg.value_hidden = getIntProp(root.get(), "valueHidden", cfg.value_hidden);
+            cfg.trunk_hidden = getCountProp(root.get(), "trunkHidden", cfg.trunk_hidden);
+            cfg.value_hidden = getCountProp(root.get(), "valueHidden", cfg.value_hidden);
             cfg.seed = readSeedArg(ev::getProperty(root.get(), "seed"), cfg.seed);
         }
         auto net = std::make_shared<nn::SingleHeroNet>();
@@ -395,9 +395,9 @@ void installAINnNets(ObjectBuilder& nnNs) {
         Value opts = argAt(a, 0);
         if (ev::isObject(opts)) {
             ev::Persistent root(opts);
-            cfg.in_dim = getIntProp(root.get(), "inDim", cfg.in_dim);
-            cfg.num_actions = getIntProp(root.get(), "numActions", cfg.num_actions);
-            cfg.value_hidden = getIntProp(root.get(), "valueHidden", cfg.value_hidden);
+            cfg.in_dim = getCountProp(root.get(), "inDim", cfg.in_dim);
+            cfg.num_actions = getCountProp(root.get(), "numActions", cfg.num_actions);
+            cfg.value_hidden = getCountProp(root.get(), "valueHidden", cfg.value_hidden);
             auto hidden = readIntArrayProp(root.get(), "hidden");
             if (!hidden.empty()) cfg.hidden = std::move(hidden);
             cfg.head_sizes = readIntArrayProp(root.get(), "headSizes");
@@ -425,14 +425,14 @@ void installAINnNets(ObjectBuilder& nnNs) {
         Value opts = argAt(a, 0);
         if (ev::isObject(opts)) {
             ev::Persistent root(opts);
-            cfg.self_hidden = getIntProp(root.get(), "selfHidden", cfg.self_hidden);
-            cfg.slot_proj = getIntProp(root.get(), "slotProj", cfg.slot_proj);
-            cfg.d_model = getIntProp(root.get(), "dModel", cfg.d_model);
-            cfg.d_ff = getIntProp(root.get(), "dFf", cfg.d_ff);
-            cfg.num_heads = getIntProp(root.get(), "numHeads", cfg.num_heads);
-            cfg.num_blocks = getIntProp(root.get(), "numBlocks", cfg.num_blocks);
-            cfg.trunk_hidden = getIntProp(root.get(), "trunkHidden", cfg.trunk_hidden);
-            cfg.value_hidden = getIntProp(root.get(), "valueHidden", cfg.value_hidden);
+            cfg.self_hidden = getCountProp(root.get(), "selfHidden", cfg.self_hidden);
+            cfg.slot_proj = getCountProp(root.get(), "slotProj", cfg.slot_proj);
+            cfg.d_model = getCountProp(root.get(), "dModel", cfg.d_model);
+            cfg.d_ff = getCountProp(root.get(), "dFf", cfg.d_ff);
+            cfg.num_heads = getCountProp(root.get(), "numHeads", cfg.num_heads);
+            cfg.num_blocks = getCountProp(root.get(), "numBlocks", cfg.num_blocks);
+            cfg.trunk_hidden = getCountProp(root.get(), "trunkHidden", cfg.trunk_hidden);
+            cfg.value_hidden = getCountProp(root.get(), "valueHidden", cfg.value_hidden);
             cfg.seed = readSeedArg(ev::getProperty(root.get(), "seed"), cfg.seed);
         }
         auto net = std::make_shared<nn::SingleHeroNetTX>();

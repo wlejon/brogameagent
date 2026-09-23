@@ -185,7 +185,9 @@ Value makeCombatActionArray(const std::vector<bgm::CombatAction>& acts);
 Value makeTactic(const bgm::Tactic& t);
 bgm::Tactic parseTactic(Value v);
 
-bgm::MctsConfig parseMctsConfig(Value opts);
+/// The keys `opts` sets, over `base` (the defaults, or a search's current
+/// config for setConfig). Integer keys are range-checked (RangeError).
+bgm::MctsConfig parseMctsConfig(Value opts, const bgm::MctsConfig& base = {});
 Value makeSearchStats(const bgm::SearchStats& s);
 
 std::vector<brogameagent::Agent*> parseHeroes(Value arr);

@@ -23,8 +23,8 @@ std::vector<grid::FieldDef> readSchema(Value arr) {
     ev::Persistent root(arr);
     Value lenV = ev::getProperty(root.get(), "length");
     if (ev::isUndefined(lenV) || ev::isObject(lenV)) return out;
-    const uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.reserve(n);
+    const uint32_t n = toLength(lenV);
+    out.reserve(reserveHint(n));
     for (uint32_t i = 0; i < n; ++i) {
         Value e = ev::getElement(root.get(), i);
         if (!ev::isObject(e)) continue;
@@ -47,19 +47,23 @@ grid::Row rowFromValue(Value arr, const std::vector<grid::FieldDef>& schema) {
     ev::Persistent root(arr);
     Value lenV = ev::getProperty(root.get(), "length");
     if (ev::isUndefined(lenV) || ev::isObject(lenV)) return row;
-    const uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
-    row.reserve(n);
+    const uint32_t n = toLength(lenV);
+    row.reserve(reserveHint(n));
     for (uint32_t i = 0; i < n; ++i) {
         Value e = ev::getElement(root.get(), i);
         const grid::FieldType t =
             i < schema.size() ? schema[i].type : grid::FieldType::F32;
+        const bool big = ev::isBigInt(e);
         const double d = (ev::isUndefined(e) || ev::isObject(e)) ? 0.0 : ev::toDouble(e);
         switch (t) {
-            case grid::FieldType::I32: row.push_back(static_cast<int32_t>(d)); break;
-            case grid::FieldType::I64: row.push_back(static_cast<int64_t>(ev::isBigInt(e)
-                                                        ? static_cast<int64_t>(ev::toInt64(e))
-                                                        : static_cast<int64_t>(d)));
-                                       break;
+            case grid::FieldType::I32:
+                row.push_back(checkedI32(d, "i32 field " + std::to_string(i)));
+                break;
+            case grid::FieldType::I64:
+                row.push_back(big ? static_cast<int64_t>(ev::toInt64(e))
+                                  : checkedInt(d, -kMaxSafeInt, kMaxSafeInt,
+                                               "i64 field " + std::to_string(i)));
+                break;
             case grid::FieldType::F32: row.push_back(static_cast<float>(d)); break;
             case grid::FieldType::F64: row.push_back(d); break;
         }
@@ -84,8 +88,8 @@ std::vector<grid::Row> rowsFromValue(Value arr, const std::vector<grid::FieldDef
     ev::Persistent root(arr);
     Value lenV = ev::getProperty(root.get(), "length");
     if (ev::isUndefined(lenV) || ev::isObject(lenV)) return out;
-    const uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.reserve(n);
+    const uint32_t n = toLength(lenV);
+    out.reserve(reserveHint(n));
     for (uint32_t i = 0; i < n; ++i) {
         out.push_back(rowFromValue(ev::getElement(root.get(), i), schema));
     }
@@ -158,7 +162,7 @@ void decorateGridReader(ObjectBuilder& b) {
         auto* d = unwrapGridReader(self);
         ObjectBuilder o;
         if (!d || !d->rr) return o.get();
-        grid::GenericFrame fr = d->rr->frame(static_cast<size_t>(i32At(a, 0)));
+        grid::GenericFrame fr = d->rr->frame(static_cast<size_t>(intAt(a, 0, 0, kMaxSafeInt, "frame: index")));
         o.set("stepIdx", makeBigIntValue(fr.step_idx));
         o.set("elapsed", static_cast<double>(fr.elapsed));
         o.set("rows", hostArrayOf(fr.rows.size(), [&](size_t i) { return rowToJs(fr.rows[i]); }));
@@ -171,7 +175,8 @@ void decorateGridReader(ObjectBuilder& b) {
         if (!d || !d->rr || a.size() < 2) {
             return hostArrayOf(0, [](size_t) { return ev::undefined(); });
         }
-        auto vals = d->rr->trajectory(static_cast<size_t>(i32At(a, 0)), strAt(a, 1));
+        auto vals = d->rr->trajectory(
+            static_cast<size_t>(intAt(a, 0, 0, kMaxSafeInt, "trajectory: rowIndex")), strAt(a, 1));
         return hostArrayOf(vals.size(), [&](size_t i) { return fieldValueToJs(vals[i]); });
     });
 }
@@ -215,9 +220,9 @@ void decorateGridTrainer(ObjectBuilder& b) {
         ev::Persistent arr(a[0]);
         Value lenV = ev::getProperty(arr.get(), "length");
         if (ev::isUndefined(lenV) || ev::isObject(lenV)) return ev::throwTypeError("GenericGridTrainer.prototype.warmupWith: expected array with length");
-        const uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+        const uint32_t n = toLength(lenV);
         std::vector<learn::GenericSituation> sits;
-        sits.reserve(n);
+        sits.reserve(reserveHint(n));
         for (uint32_t i = 0; i < n; ++i) {
             sits.push_back(situationFromValue(ev::getElement(arr.get(), i)));
         }
@@ -236,7 +241,7 @@ void decorateGridTrainer(ObjectBuilder& b) {
     });
     b.def("stepSync", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapGridTrainer(self);
-        if (d && d->tr) d->tr->step_sync(i32At(a, 0));
+        if (d && d->tr) d->tr->step_sync(static_cast<int>(intAt(a, 0, 0, INT32_MAX, "stepSync: steps")));
         return ev::undefined();
     });
     b.def("stats", 0, [](Value self, std::span<const Value>) -> Value {
@@ -286,9 +291,9 @@ Value createGridTrainer(std::span<const Value> a) {
     grid::GridTrainerConfig cfg;
     Value netV = ev::getProperty(opts.get(), "net");
     ev::Persistent nv(ev::isObject(netV) ? netV : opts.get());
-    cfg.net.in_dim = getIntProp(nv.get(), "inDim", 0);
-    cfg.net.value_hidden = getIntProp(nv.get(), "valueHidden", cfg.net.value_hidden);
-    cfg.net.num_actions = getIntProp(nv.get(), "numActions", 0);
+    cfg.net.in_dim = getCountProp(nv.get(), "inDim", 0);
+    cfg.net.value_hidden = getCountProp(nv.get(), "valueHidden", cfg.net.value_hidden);
+    cfg.net.num_actions = getCountProp(nv.get(), "numActions", 0);
     cfg.net.seed = getU64Property(nv.get(), "seed", cfg.net.seed);
     {
         std::vector<int> hidden = readIntArrayValue(ev::getProperty(nv.get(), "hidden"));
@@ -297,7 +302,7 @@ Value createGridTrainer(std::span<const Value> a) {
 
     Value bufV = ev::getProperty(opts.get(), "buffer");
     if (ev::isObject(bufV)) {
-        cfg.buffer_capacity = getIntProp(bufV, "capacity", cfg.buffer_capacity);
+        cfg.buffer_capacity = getCountProp(bufV, "capacity", cfg.buffer_capacity);
     }
 
     Value trV = ev::getProperty(opts.get(), "trainer");
@@ -306,12 +311,12 @@ Value createGridTrainer(std::span<const Value> a) {
         cfg.trainer.lr = static_cast<float>(getDoubleProperty(tr.get(), "lr", cfg.trainer.lr));
         cfg.trainer.momentum =
             static_cast<float>(getDoubleProperty(tr.get(), "momentum", cfg.trainer.momentum));
-        cfg.trainer.batch = getIntProp(tr.get(), "batch", cfg.trainer.batch);
+        cfg.trainer.batch = getCountProp(tr.get(), "batch", cfg.trainer.batch);
         cfg.trainer.policy_weight = static_cast<float>(
             getDoubleProperty(tr.get(), "policyWeight", cfg.trainer.policy_weight));
         cfg.trainer.value_weight = static_cast<float>(
             getDoubleProperty(tr.get(), "valueWeight", cfg.trainer.value_weight));
-        cfg.trainer.publish_every = getIntProp(tr.get(), "publishEvery", cfg.trainer.publish_every);
+        cfg.trainer.publish_every = getCountProp(tr.get(), "publishEvery", cfg.trainer.publish_every);
         cfg.trainer.rng_seed = getU64Property(tr.get(), "rngSeed", cfg.trainer.rng_seed);
     }
 
@@ -319,12 +324,12 @@ Value createGridTrainer(std::span<const Value> a) {
     if (ev::isObject(ckptV)) {
         ev::Persistent ck(ckptV);
         cfg.ckpt_dir = readStringPropOr(ck.get(), "dir", cfg.ckpt_dir.c_str());
-        cfg.ckpt_ring_size = getIntProp(ck.get(), "ringSize", cfg.ckpt_ring_size);
-        cfg.best_window = getIntProp(ck.get(), "bestWindow", cfg.best_window);
+        cfg.ckpt_ring_size = getCountProp(ck.get(), "ringSize", cfg.ckpt_ring_size);
+        cfg.best_window = getCountProp(ck.get(), "bestWindow", cfg.best_window);
     }
 
-    cfg.ingest_burst = getIntProp(opts.get(), "ingestBurst", cfg.ingest_burst);
-    cfg.steps_per_tick = getIntProp(opts.get(), "stepsPerTick", cfg.steps_per_tick);
+    cfg.ingest_burst = getCountProp(opts.get(), "ingestBurst", cfg.ingest_burst);
+    cfg.steps_per_tick = getCountProp(opts.get(), "stepsPerTick", cfg.steps_per_tick);
 
     if (cfg.net.in_dim <= 0 || cfg.net.num_actions <= 0) {
         return ev::throwTypeError("createGridTrainer: net.inDim and net.numActions must be > 0");

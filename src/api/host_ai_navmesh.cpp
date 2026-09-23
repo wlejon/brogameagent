@@ -28,7 +28,7 @@ void readBakeConfig(Value opts, brogameagent::NavMeshBakeConfig& cfg) {
     cfg.detailSampleMaxError = num("detailSampleMaxError", cfg.detailSampleMaxError);
     cfg.dynamicObstacles = getBoolProperty(root.get(), "dynamicObstacles", cfg.dynamicObstacles);
     cfg.tileSize = num("tileSize", cfg.tileSize);
-    cfg.maxObstacles = static_cast<int>(getDoubleProperty(root.get(), "maxObstacles", cfg.maxObstacles));
+    cfg.maxObstacles = getI32Property(root.get(), "maxObstacles", cfg.maxObstacles, 0);
 }
 
 /// `{ requireFullPath?, extents? }`, or a bare extents vector, as findPath
@@ -92,7 +92,7 @@ void decorateNavMeshProto(ObjectBuilder& b) {
     b.def("findRandomPoint", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh) return ev::null();
-        uint32_t seed = a.empty() ? 0 : u32At(a, 0);
+        uint32_t seed = a.empty() ? 0 : seed32At(a, 0, "findRandomPoint: seed");
         bromath::Vec3 out;
         if (!h->mesh->randomPoint(seed, out)) return ev::null();
         return makeVec3Value(out.x, out.y, out.z);
@@ -101,7 +101,7 @@ void decorateNavMeshProto(ObjectBuilder& b) {
     b.def("randomPoint", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh) return ev::null();
-        uint32_t seed = a.empty() ? 0 : u32At(a, 0);
+        uint32_t seed = a.empty() ? 0 : seed32At(a, 0, "randomPoint: seed");
         bromath::Vec3 out;
         if (!h->mesh->randomPoint(seed, out)) return ev::null();
         return makeVec3Value(out.x, out.y, out.z);
@@ -295,7 +295,7 @@ void decorateNavMeshProto(ObjectBuilder& b) {
     b.def("removeObstacle", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh || a.empty()) return ev::fromBool(false);
-        uint32_t id = u32At(a, 0);
+        uint32_t id = u32At(a, 0, "removeObstacle: id");
         return ev::fromBool(h->mesh->removeObstacle(id));
     });
 }
@@ -371,8 +371,8 @@ Value aiBakeNavMesh(Value, std::span<const Value> a) {
         ev::Persistent lRoot(linksArr);
         Value lenV = ev::getProperty(lRoot.get(), "length");
         if (ev::isNumber(lenV)) {
-            uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
-            cfg.offMeshLinks.reserve(n);
+            const uint32_t n = toLength(lenV);
+            cfg.offMeshLinks.reserve(reserveHint(n));
             for (uint32_t i = 0; i < n; ++i) {
                 Value el = ev::getElement(lRoot.get(), i);
                 if (!ev::isObject(el)) {
@@ -389,7 +389,7 @@ Value aiBakeNavMesh(Value, std::span<const Value> a) {
                 link.end   = parseVec3(evVal.get());
                 link.radius = static_cast<float>(getDoubleProperty(eRoot.get(), "radius", link.radius));
                 link.bidirectional = getBoolProperty(eRoot.get(), "bidirectional", link.bidirectional);
-                link.userId = static_cast<uint32_t>(getDoubleProperty(eRoot.get(), "userId", 0.0));
+                link.userId = getU32Property(eRoot.get(), "userId", 0);
                 cfg.offMeshLinks.push_back(link);
             }
         }

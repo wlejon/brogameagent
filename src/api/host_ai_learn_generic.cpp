@@ -160,12 +160,12 @@ void decorateGenericTrainer(ObjectBuilder& b) {
         learn::GenericTrainerConfig c = d->trainer->config();
         c.lr = static_cast<float>(getDoubleProperty(root.get(), "lr", c.lr));
         c.momentum = static_cast<float>(getDoubleProperty(root.get(), "momentum", c.momentum));
-        c.batch = getIntProp(root.get(), "batch", c.batch);
+        c.batch = getCountProp(root.get(), "batch", c.batch);
         c.policy_weight =
             static_cast<float>(getDoubleProperty(root.get(), "policyWeight", c.policy_weight));
         c.value_weight =
             static_cast<float>(getDoubleProperty(root.get(), "valueWeight", c.value_weight));
-        c.publish_every = getIntProp(root.get(), "publishEvery", c.publish_every);
+        c.publish_every = getCountProp(root.get(), "publishEvery", c.publish_every);
         c.rng_seed = readSeedArg(ev::getProperty(root.get(), "rngSeed"), c.rng_seed);
 
         // Where compute happens. "gpu" requires net.to('gpu') first. Unlike
@@ -199,8 +199,10 @@ void decorateGenericTrainer(ObjectBuilder& b) {
         auto* d = unwrapGenericTrainer(self);
         if (!d || !d->trainer) return ObjectBuilder{}.get();
         learn::GenericTrainStep s;
+        // Outside the try: its RangeError must not become a plain Error.
+        const int n = static_cast<int>(intAt(a, 0, 0, INT32_MAX, "stepN: n"));
         try {
-            s = d->trainer->step_n(i32At(a, 0));
+            s = d->trainer->step_n(n);
         } catch (const std::exception& e) {
             return ev::throwError(e.what());
         }
@@ -240,12 +242,12 @@ void decorateInferenceServer(ObjectBuilder& b) {
         if (ev::isUndefined(lenV) || ev::isObject(lenV)) {
             return ev::throwTypeError("evaluateBatch(obsArray)");
         }
-        const uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+        const uint32_t len = toLength(lenV);
 
         // Fan out through evaluate_async so concurrent rows coalesce into one
         // batch on the server's worker thread, then wait on each future.
         std::vector<std::future<learn::BatchedInferenceServer::EvalResult>> futures;
-        futures.reserve(len);
+        futures.reserve(reserveHint(len));
         for (uint32_t i = 0; i < len; ++i) {
             Value rowV = ev::getElement(arr.get(), i);
             size_t n = 0;
@@ -427,8 +429,8 @@ void installAILearnGeneric(ObjectBuilder& learnNs) {
         }
         learn::BatchedInferenceServer::Config cfg{};
         if (a.size() >= 2 && ev::isObject(a[1])) {
-            cfg.max_batch_size = getIntProp(a[1], "maxBatchSize", cfg.max_batch_size);
-            cfg.max_wait_micros = getIntProp(a[1], "maxWaitMicros", cfg.max_wait_micros);
+            cfg.max_batch_size = getCountProp(a[1], "maxBatchSize", cfg.max_batch_size);
+            cfg.max_wait_micros = getCountProp(a[1], "maxWaitMicros", cfg.max_wait_micros);
         }
         auto cell = std::make_unique<HostInferenceServer>();
         cell->netRef = net;

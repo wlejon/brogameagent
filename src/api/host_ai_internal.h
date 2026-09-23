@@ -365,6 +365,21 @@ inline Value makeUint32Array(const uint32_t* data, size_t count) {
     return view.get();
 }
 
+/// A JS `length` as a loop bound: 0 for a non-number, NaN or negative
+/// length (an array-like object can say anything), clamped to 2^32 - 1.
+inline uint32_t toLength(Value lenV) {
+    if (!ev::isNumber(lenV)) return 0;
+    const double d = ev::toDouble(lenV);
+    if (!(d > 0.0)) return 0;
+    return d >= 4294967295.0 ? 0xFFFFFFFFu : static_cast<uint32_t>(d);
+}
+
+/// What to reserve() for `n` elements an array-like claims to have: a
+/// `{ length: 1e9 }` must not become a multi-gigabyte allocation up front.
+inline size_t reserveHint(uint32_t n) {
+    return std::min<size_t>(n, size_t{1} << 16);
+}
+
 inline double getDoubleProperty(Value obj, const char* key, double def = 0.0) {
     if (!ev::isObject(obj)) return def;
     ev::Persistent root(obj);
@@ -374,12 +389,42 @@ inline double getDoubleProperty(Value obj, const char* key, double def = 0.0) {
     return (!std::isfinite(d)) ? def : d;
 }
 
+/// An integer option: `def` when absent or not a number, else the value
+/// checked into [lo, hi] (NaN / out of range throws JsRangeError, which the
+/// native entry point's guard turns into a RangeError naming `key`).
+inline int64_t getIntProperty(Value obj, const char* key, int64_t def, int64_t lo, int64_t hi) {
+    if (!ev::isObject(obj)) return def;
+    ev::Persistent root(obj);
+    Value v = ev::getProperty(root.get(), key);
+    if (!ev::isNumber(v)) return def;
+    return checkedInt(ev::toDouble(v), lo, hi, key);
+}
+
+inline int32_t getI32Property(Value obj, const char* key, int32_t def,
+                              int32_t lo = std::numeric_limits<int32_t>::min(),
+                              int32_t hi = std::numeric_limits<int32_t>::max()) {
+    return static_cast<int32_t>(getIntProperty(obj, key, def, lo, hi));
+}
+
+inline uint32_t getU32Property(Value obj, const char* key, uint32_t def,
+                               uint32_t lo = 0,
+                               uint32_t hi = std::numeric_limits<uint32_t>::max()) {
+    return static_cast<uint32_t>(getIntProperty(obj, key, def, lo, hi));
+}
+
+/// A 32-bit mask option: any int32 or uint32 value, so `-1` / `~0` spell
+/// "all bits" the way JS bit operators produce it.
+inline uint32_t getMaskProperty(Value obj, const char* key, uint32_t def) {
+    return static_cast<uint32_t>(getIntProperty(obj, key, def,
+        std::numeric_limits<int32_t>::min(), std::numeric_limits<uint32_t>::max()));
+}
+
 inline uint64_t getU64Property(Value obj, const char* key, uint64_t def = 0) {
     if (!ev::isObject(obj)) return def;
     ev::Persistent root(obj);
     Value v = ev::getProperty(root.get(), key);
     if (ev::isUndefined(v) || ev::isNull(v)) return def;
-    return ev::toUint64(v);
+    return checkedU64(v, key, def);
 }
 
 inline bool getBoolProperty(Value obj, const char* key, bool def = false) {
@@ -492,10 +537,8 @@ inline std::vector<brogameagent::AABB> parseAABBArray(Value v) {
     std::vector<brogameagent::AABB> result;
     if (!ev::isObject(v)) return result;
     ev::Persistent root(v);
-    Value lenV = ev::getProperty(root.get(), "length");
-    if (!ev::isNumber(lenV)) return result;
-    uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
-    result.reserve(n);
+    const uint32_t n = toLength(ev::getProperty(root.get(), "length"));
+    result.reserve(reserveHint(n));
     for (uint32_t i = 0; i < n; ++i) {
         Value el = ev::getElement(root.get(), i);
         if (ev::isObject(el)) {
@@ -519,6 +562,8 @@ inline const char* damageKindStr(brogameagent::DamageKind k) {
     }
 }
 
+/// A policy's returned action. Read while a native step or search runs, so
+/// it never throws: an id that is not a representable integer means "none".
 inline brogameagent::AgentAction parseAgentAction(Value obj) {
     brogameagent::AgentAction a;
     if (!ev::isObject(obj)) return a;
@@ -527,25 +572,10 @@ inline brogameagent::AgentAction parseAgentAction(Value obj) {
     a.moveZ = static_cast<float>(getDoubleProperty(root.get(), "moveZ", 0.0));
     a.aimYaw = static_cast<float>(getDoubleProperty(root.get(), "aimYaw", 0.0));
     a.aimPitch = static_cast<float>(getDoubleProperty(root.get(), "aimPitch", 0.0));
-    a.attackTargetId = static_cast<int>(getDoubleProperty(root.get(), "attackTargetId", -1.0));
-    a.useAbilityId = static_cast<int>(getDoubleProperty(root.get(), "useAbilityId",
-                     getDoubleProperty(root.get(), "abilitySlot", -1.0)));
+    a.attackTargetId = intOr(getDoubleProperty(root.get(), "attackTargetId", -1.0), -1);
+    a.useAbilityId = intOr(getDoubleProperty(root.get(), "useAbilityId",
+                           getDoubleProperty(root.get(), "abilitySlot", -1.0)), -1);
     return a;
-}
-
-/// A JS `length` as a loop bound: 0 for a non-number, NaN or negative
-/// length (an array-like object can say anything), clamped to 2^32 - 1.
-inline uint32_t toLength(Value lenV) {
-    if (!ev::isNumber(lenV)) return 0;
-    const double d = ev::toDouble(lenV);
-    if (!(d > 0.0)) return 0;
-    return d >= 4294967295.0 ? 0xFFFFFFFFu : static_cast<uint32_t>(d);
-}
-
-/// What to reserve() for `n` elements an array-like claims to have: a
-/// `{ length: 1e9 }` must not become a multi-gigabyte allocation up front.
-inline size_t reserveHint(uint32_t n) {
-    return std::min<size_t>(n, size_t{1} << 16);
 }
 
 /// A number as a uint32 element: 0 for NaN / negative, clamped at the top

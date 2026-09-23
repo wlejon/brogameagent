@@ -29,10 +29,7 @@ bgm::TacticKind parseTacticKindStr(const std::string& s) {
 
 uint32_t arrayLength(Value v) {
     if (!ev::isObject(v)) return 0;
-    Value lenV = ev::getProperty(v, "length");
-    if (!ev::isNumber(lenV)) return 0;
-    double d = ev::toDouble(lenV);
-    return (d > 0.0) ? static_cast<uint32_t>(d) : 0u;
+    return toLength(ev::getProperty(v, "length"));
 }
 
 // ─── JS-callback adapters ──────────────────────────────────────────────────
@@ -242,14 +239,21 @@ Value makeCombatAction(const bgm::CombatAction& a) {
     return o.get();
 }
 
+/// Also parses rollout / opponent policy results mid-search, so it never
+/// throws: a moveDir outside Hold..NW is Hold, a slot outside int8 is -1
+/// (none) — an out-of-range enum or int8 cast would index the search's
+/// tables with garbage.
 bgm::CombatAction parseCombatAction(Value v) {
     bgm::CombatAction a{};
     if (ev::isObject(v)) {
         ev::Persistent root(v);
-        a.move_dir = static_cast<bgm::MoveDir>(
-            static_cast<int>(getDoubleProperty(root.get(), "moveDir", 0)));
-        a.attack_slot = static_cast<int8_t>(getDoubleProperty(root.get(), "attackSlot", -1));
-        a.ability_slot = static_cast<int8_t>(getDoubleProperty(root.get(), "abilitySlot", -1));
+        a.move_dir = static_cast<bgm::MoveDir>(intOr(
+            getDoubleProperty(root.get(), "moveDir", 0), 0, 0,
+            static_cast<int32_t>(bgm::MoveDir::NW)));
+        a.attack_slot = static_cast<int8_t>(
+            intOr(getDoubleProperty(root.get(), "attackSlot", -1), -1, -128, 127));
+        a.ability_slot = static_cast<int8_t>(
+            intOr(getDoubleProperty(root.get(), "abilitySlot", -1), -1, -128, 127));
     }
     return a;
 }
@@ -286,23 +290,23 @@ bgm::Tactic parseTactic(Value v) {
     return t;
 }
 
-bgm::MctsConfig parseMctsConfig(Value opts) {
-    bgm::MctsConfig c{};
+bgm::MctsConfig parseMctsConfig(Value opts, const bgm::MctsConfig& base) {
+    bgm::MctsConfig c = base;
     if (!ev::isObject(opts)) return c;
     ev::Persistent root(opts);
-    c.iterations = static_cast<int>(getDoubleProperty(root.get(), "iterations", c.iterations));
-    c.budget_ms = static_cast<int>(getDoubleProperty(root.get(), "budgetMs", c.budget_ms));
-    c.rollout_horizon = static_cast<int>(getDoubleProperty(root.get(), "rolloutHorizon", c.rollout_horizon));
+    c.iterations = getI32Property(root.get(), "iterations", c.iterations, 0);
+    c.budget_ms = getI32Property(root.get(), "budgetMs", c.budget_ms, 0);
+    c.rollout_horizon = getI32Property(root.get(), "rolloutHorizon", c.rollout_horizon, 0);
     c.sim_dt = static_cast<float>(getDoubleProperty(root.get(), "simDt", c.sim_dt));
-    c.action_repeat = static_cast<int>(getDoubleProperty(root.get(), "actionRepeat", c.action_repeat));
+    c.action_repeat = getI32Property(root.get(), "actionRepeat", c.action_repeat, 1);
     c.uct_c = static_cast<float>(getDoubleProperty(root.get(), "uctC", c.uct_c));
     c.seed = getU64Property(root.get(), "seed", c.seed);
-    c.tactic_window_decisions = static_cast<int>(
-        getDoubleProperty(root.get(), "tacticWindowDecisions", c.tactic_window_decisions));
+    c.tactic_window_decisions = getI32Property(root.get(), "tacticWindowDecisions",
+                                               c.tactic_window_decisions, 0);
     c.pw_alpha = static_cast<float>(getDoubleProperty(root.get(), "pwAlpha", c.pw_alpha));
     c.prior_c = static_cast<float>(getDoubleProperty(root.get(), "priorC", c.prior_c));
-    c.option_max_windows = static_cast<int>(
-        getDoubleProperty(root.get(), "optionMaxWindows", c.option_max_windows));
+    c.option_max_windows = getI32Property(root.get(), "optionMaxWindows",
+                                          c.option_max_windows, 0);
     c.use_leaf_value = getBoolProperty(root.get(), "useLeafValue", c.use_leaf_value);
     return c;
 }

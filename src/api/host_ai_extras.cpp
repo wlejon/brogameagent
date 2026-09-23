@@ -68,9 +68,9 @@ Value makeProjectileObject(const brogameagent::Projectile& p) {
 brogameagent::Projectile parseProjectileObj(Value opts) {
     ev::Persistent root(opts);
     brogameagent::Projectile p;
-    p.ownerId = static_cast<int>(getDoubleProperty(root.get(), "ownerId", -1));
-    p.teamId = static_cast<int>(getDoubleProperty(root.get(), "teamId", 0));
-    p.targetId = static_cast<int>(getDoubleProperty(root.get(), "targetId", -1));
+    p.ownerId = getI32Property(root.get(), "ownerId", -1);
+    p.teamId = getI32Property(root.get(), "teamId", 0);
+    p.targetId = getI32Property(root.get(), "targetId", -1);
     p.x = static_cast<float>(getDoubleProperty(root.get(), "x", 0));
     p.z = static_cast<float>(getDoubleProperty(root.get(), "z", 0));
     p.vx = static_cast<float>(getDoubleProperty(root.get(), "vx", 0));
@@ -80,7 +80,7 @@ brogameagent::Projectile parseProjectileObj(Value opts) {
     p.damage = static_cast<float>(getDoubleProperty(root.get(), "damage", 0));
     p.remainingLife = static_cast<float>(getDoubleProperty(root.get(), "remainingLife", 2));
     p.splashRadius = static_cast<float>(getDoubleProperty(root.get(), "splashRadius", 0));
-    p.maxHits = static_cast<int>(getDoubleProperty(root.get(), "maxHits", 0));
+    p.maxHits = getI32Property(root.get(), "maxHits", 0, 0);
 
     Value kindVal = ev::getProperty(root.get(), "kind");
     if (ev::isString(kindVal)) p.kind = parseDamageKind(ev::toUtf8(kindVal).c_str());
@@ -196,14 +196,14 @@ void ensureAIExtrasClassesInstalled() {
 
         b.def("resetEnv", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* vs = unwrapVecSim(self);
-            if (vs && vs->sim && !a.empty()) vs->sim->resetEnv(static_cast<int>(numAt(a, 0)));
+            if (vs && vs->sim && !a.empty()) vs->sim->resetEnv(i32At(a, 0, "resetEnv: envIdx"));
             return ev::undefined();
         });
 
         b.def("observe", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* vs = unwrapVecSim(self);
             if (!vs || !vs->sim || a.empty()) return ev::null();
-            int agentId = static_cast<int>(numAt(a, 0));
+            int agentId = i32At(a, 0, "observe: agentId");
             int N = vs->sim->numEnvs();
             int total = N * brogameagent::observation::TOTAL;
             std::vector<float> buf(total);
@@ -214,7 +214,7 @@ void ensureAIExtrasClassesInstalled() {
         b.def("actionMask", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* vs = unwrapVecSim(self);
             if (!vs || !vs->sim || a.empty()) return ev::null();
-            int agentId = static_cast<int>(numAt(a, 0));
+            int agentId = i32At(a, 0, "actionMask: agentId");
             int N = vs->sim->numEnvs();
             std::vector<float> mask(static_cast<size_t>(N) * brogameagent::action_mask::TOTAL);
             std::vector<int> ids(static_cast<size_t>(N) * brogameagent::action_mask::N_ENEMY_SLOTS);
@@ -228,15 +228,15 @@ void ensureAIExtrasClassesInstalled() {
         b.def("applyActions", 2, [](Value self, std::span<const Value> a) -> Value {
             auto* vs = unwrapVecSim(self);
             if (!vs || !vs->sim || a.size() < 2) return ev::undefined();
-            int agentId = static_cast<int>(numAt(a, 0));
+            int agentId = i32At(a, 0, "applyActions: agentId");
             // a[1] is a rooted slot and is re-read each time; a local copy
             // would be stale after the first getProperty.
             if (!ev::isObject(a[1])) return ev::throwTypeError("applyActions: actions must be an array");
             int N = vs->sim->numEnvs();
             std::vector<brogameagent::AgentAction> acts(static_cast<size_t>(N));
             Value lenV = ev::getProperty(a[1], "length");
-            int len = ev::isNumber(lenV) ? static_cast<int>(ev::toDouble(lenV)) : 0;
-            int n = std::min(len, N);
+            const int n = static_cast<int>(std::min<uint32_t>(toLength(lenV),
+                                                              static_cast<uint32_t>(N)));
             for (int i = 0; i < n; i++) {
                 Value e = ev::getElement(a[1], static_cast<uint32_t>(i));
                 if (ev::isObject(e)) acts[i] = parseAgentAction(e);
@@ -446,12 +446,12 @@ void installAIExtras(ObjectBuilder& game) {
         brogameagent::VecSimulation::Config cfg{};
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent root(a[0]);
-            cfg.numEnvs            = static_cast<int>(getDoubleProperty(root.get(), "numEnvs", cfg.numEnvs));
+            cfg.numEnvs            = getI32Property(root.get(), "numEnvs", cfg.numEnvs, 1, 65536);
             cfg.arenaHalfSize      = static_cast<float>(getDoubleProperty(root.get(), "arenaHalfSize", cfg.arenaHalfSize));
             cfg.minSpawnDist       = static_cast<float>(getDoubleProperty(root.get(), "minSpawnDist", cfg.minSpawnDist));
             cfg.maxSpawnDist       = static_cast<float>(getDoubleProperty(root.get(), "maxSpawnDist", cfg.maxSpawnDist));
             cfg.dt                 = static_cast<float>(getDoubleProperty(root.get(), "dt", cfg.dt));
-            cfg.maxStepsPerEpisode = static_cast<int>(getDoubleProperty(root.get(), "maxStepsPerEpisode", cfg.maxStepsPerEpisode));
+            cfg.maxStepsPerEpisode = getI32Property(root.get(), "maxStepsPerEpisode", cfg.maxStepsPerEpisode, 0);
             cfg.hp                 = static_cast<float>(getDoubleProperty(root.get(), "hp", cfg.hp));
             cfg.maxMana            = static_cast<float>(getDoubleProperty(root.get(), "maxMana", cfg.maxMana));
             cfg.manaRegenPerSec    = static_cast<float>(getDoubleProperty(root.get(), "manaRegenPerSec", cfg.manaRegenPerSec));

@@ -261,7 +261,7 @@ void ensureAIPlannerClassesInstalled() {
             auto* h = unwrapCommander(self);
             if (!h || !h->commander || a.empty()) return ev::null();
             std::string n = h->commander->committed_option_for_hero(
-                static_cast<size_t>(std::max(0, i32At(a, 0))));
+                static_cast<size_t>(dimAt(a, 0, "committedOption: heroIndex")));
             return n.empty() ? ev::null() : ev::fromUtf8(n);
         });
         b.accessor("currentAssignments", [](Value self, std::span<const Value>) -> Value {

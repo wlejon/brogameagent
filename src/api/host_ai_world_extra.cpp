@@ -146,7 +146,7 @@ void decorateWorldExtras(ObjectBuilder& b) {
     b.def("findById", 1, [](Value self, std::span<const Value> a) -> Value {
         HostWorld* w = unwrapWorld(self);
         if (!w || a.empty()) return ev::null();
-        const int id = i32At(a, 0);
+        const int id = i32At(a, 0, "findById: id");
         const brogameagent::Agent* found = w->world.findById(id);
         if (!found) return ev::null();
         Value v = worldAgentValue(self, found);
@@ -162,7 +162,7 @@ void decorateWorldExtras(ObjectBuilder& b) {
     b.def("registerAbility", 2, [](Value self, std::span<const Value> a) -> Value {
         HostWorld* w = unwrapWorld(self);
         if (!w || a.size() < 2) return ev::undefined();
-        const int abilityId = i32At(a, 0);
+        const int abilityId = i32At(a, 0, "registerAbility: abilityId");
         if (!ev::isObject(a[1])) return ev::throwTypeError("spec must be an object");
 
         ev::Persistent selfP(self);
@@ -223,7 +223,7 @@ void decorateWorldExtras(ObjectBuilder& b) {
     b.def("seed", 1, [](Value self, std::span<const Value> a) -> Value {
         HostWorld* w = unwrapWorld(self);
         if (!w || a.empty()) return ev::undefined();
-        w->world.seed(static_cast<uint64_t>(numAt(a, 0)));
+        w->world.seed(u64At(a, 0, "seed"));
         return ev::undefined();
     });
 }

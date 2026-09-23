@@ -1,5 +1,6 @@
 #pragma once
 
+#include "arg_reader.h"
 #include "embed/embed.h"
 
 #include <exception>
@@ -17,11 +18,14 @@ using Value = bronze::Value;
 /// A native method body with every C++ exception turned into a JS Error. The
 /// caller may be compiled JS, whose frames carry no unwind metadata, so an
 /// exception escaping a body (bad_alloc on a corrupt replay's counts, a
-/// library's invalid_argument) would otherwise end the process.
+/// library's invalid_argument) would otherwise end the process. A checked
+/// integer conversion's JsRangeError (arg_reader.h) becomes a RangeError.
 inline ev::NativeFn guardNative(ev::NativeFn fn) {
     return [fn = std::move(fn)](Value self, std::span<const Value> args) -> Value {
         try {
             return fn(self, args);
+        } catch (const JsRangeError& e) {
+            return ev::throwRangeError(e.what());
         } catch (const std::exception& e) {
             return ev::throwError(e.what());
         } catch (...) {

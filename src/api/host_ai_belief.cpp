@@ -11,8 +11,10 @@
 #include <brogameagent/info_set_mcts.h>
 #include <brogameagent/observability.h>
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 
@@ -99,8 +101,8 @@ obs::AgentObservation parseAgentObservation(Value v) {
     obs::AgentObservation a{};
     if (!ev::isObject(v)) return a;
     ev::Persistent root(v);
-    a.id = static_cast<int>(getDoubleProperty(root.get(), "id", 0));
-    a.team_id = static_cast<int>(getDoubleProperty(root.get(), "teamId", 0));
+    a.id = getI32Property(root.get(), "id", 0);
+    a.team_id = getI32Property(root.get(), "teamId", 0);
     a.pos.x = static_cast<float>(getDoubleProperty(root.get(), "x", 0));
     a.pos.y = static_cast<float>(getDoubleProperty(root.get(), "z", 0));
     a.vel.x = static_cast<float>(getDoubleProperty(root.get(), "vx", 0));
@@ -131,13 +133,13 @@ obs::TeamObservation parseTeamObservation(Value v) {
     obs::TeamObservation t{};
     if (!ev::isObject(v)) return t;
     ev::Persistent root(v);
-    t.team_id = static_cast<int>(getDoubleProperty(root.get(), "teamId", 0));
+    t.team_id = getI32Property(root.get(), "teamId", 0);
     t.timestamp = static_cast<float>(getDoubleProperty(root.get(), "timestamp", 0));
     auto readArr = [&](const char* key, std::vector<obs::AgentObservation>& dst) {
         ev::Persistent arr(ev::getProperty(root.get(), key));
         if (!ev::isObject(arr.get())) return;
         Value lenV = ev::getProperty(arr.get(), "length");
-        uint32_t n = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0u;
+        const uint32_t n = toLength(lenV);
         for (uint32_t i = 0; i < n; ++i) {
             dst.push_back(parseAgentObservation(ev::getElement(arr.get(), i)));
         }
@@ -187,7 +189,7 @@ static std::unordered_map<int, belief::EnemyParticle> parseParticleMap(Value o) 
     if (res.thrown || !ev::isObject(res.value)) return m;
     ev::Persistent keys(res.value);
     Value lenV = ev::getProperty(keys.get(), "length");
-    uint32_t n = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0u;
+    const uint32_t n = toLength(lenV);
     for (uint32_t i = 0; i < n; ++i) {
         std::string name = ev::toUtf8(ev::getElement(keys.get(), i));
         ev::Persistent val(ev::getProperty(root.get(), name));
@@ -199,7 +201,14 @@ static std::unordered_map<int, belief::EnemyParticle> parseParticleMap(Value o) 
         p.hp = static_cast<float>(getDoubleProperty(val.get(), "hp", 0));
         p.heading = static_cast<float>(getDoubleProperty(val.get(), "heading", 0));
         p.weight = static_cast<float>(getDoubleProperty(val.get(), "weight", 1.0));
-        m[std::atoi(name.c_str())] = p;
+        char* end = nullptr;
+        errno = 0;
+        const long long id = std::strtoll(name.c_str(), &end, 10);
+        if (end == name.c_str() || *end != '\0' || errno == ERANGE ||
+            id < std::numeric_limits<int32_t>::min() || id > std::numeric_limits<int32_t>::max()) {
+            throw JsRangeError("particle map key \"" + name + "\" is not an int32 agent id");
+        }
+        m[static_cast<int>(id)] = p;
     }
     return m;
 }
@@ -241,7 +250,7 @@ void ensureAIBeliefClassesInstalled() {
                 pos.y = static_cast<float>(getDoubleProperty(a[2], "z", 0));
                 posPtr = &pos;
             }
-            h->b->register_enemy(i32At(a, 0), static_cast<float>(numAt(a, 1)), posPtr);
+            h->b->register_enemy(i32At(a, 0, "registerEnemy: id"), static_cast<float>(numAt(a, 1)), posPtr);
             return ev::undefined();
         });
 
@@ -345,19 +354,7 @@ void ensureAIBeliefClassesInstalled() {
             auto* h = unwrapInfoSetMcts(self);
             if (!h || !h->m || a.empty() || !ev::isObject(a[0])) return ev::undefined();
             ev::Persistent cfg(a[0]);
-            bgm::MctsConfig c = h->m->config();
-            c.iterations = static_cast<int>(getDoubleProperty(cfg.get(), "iterations", c.iterations));
-            c.budget_ms = static_cast<int>(getDoubleProperty(cfg.get(), "budgetMs", c.budget_ms));
-            c.rollout_horizon = static_cast<int>(
-                getDoubleProperty(cfg.get(), "rolloutHorizon", c.rollout_horizon));
-            c.sim_dt = static_cast<float>(getDoubleProperty(cfg.get(), "simDt", c.sim_dt));
-            c.action_repeat = static_cast<int>(
-                getDoubleProperty(cfg.get(), "actionRepeat", c.action_repeat));
-            c.uct_c = static_cast<float>(getDoubleProperty(cfg.get(), "uctC", c.uct_c));
-            c.seed = getU64Property(cfg.get(), "seed", c.seed);
-            c.pw_alpha = static_cast<float>(getDoubleProperty(cfg.get(), "pwAlpha", c.pw_alpha));
-            c.prior_c = static_cast<float>(getDoubleProperty(cfg.get(), "priorC", c.prior_c));
-            c.use_leaf_value = getBoolProperty(cfg.get(), "useLeafValue", c.use_leaf_value);
+            bgm::MctsConfig c = parseMctsConfig(cfg.get(), h->m->config());
             h->m->set_config(c);
             return ev::undefined();
         });
@@ -418,16 +415,7 @@ void ensureAIBeliefClassesInstalled() {
             auto* h = unwrapInfoSetTeamMcts(self);
             if (!h || !h->m || a.empty() || !ev::isObject(a[0])) return ev::undefined();
             ev::Persistent cfg(a[0]);
-            bgm::MctsConfig c = h->m->config();
-            c.iterations = static_cast<int>(getDoubleProperty(cfg.get(), "iterations", c.iterations));
-            c.budget_ms = static_cast<int>(getDoubleProperty(cfg.get(), "budgetMs", c.budget_ms));
-            c.rollout_horizon = static_cast<int>(
-                getDoubleProperty(cfg.get(), "rolloutHorizon", c.rollout_horizon));
-            c.sim_dt = static_cast<float>(getDoubleProperty(cfg.get(), "simDt", c.sim_dt));
-            c.action_repeat = static_cast<int>(
-                getDoubleProperty(cfg.get(), "actionRepeat", c.action_repeat));
-            c.uct_c = static_cast<float>(getDoubleProperty(cfg.get(), "uctC", c.uct_c));
-            c.seed = getU64Property(cfg.get(), "seed", c.seed);
+            bgm::MctsConfig c = parseMctsConfig(cfg.get(), h->m->config());
             h->m->set_config(c);
             return ev::undefined();
         });
@@ -475,9 +463,9 @@ void installAIBelief(ObjectBuilder& game) {
 
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent opts(a[0]);
-            teamId = static_cast<int>(getDoubleProperty(opts.get(), "teamId", teamId));
-            numParticles = static_cast<int>(
-                getDoubleProperty(opts.get(), "numParticles", numParticles));
+            teamId = getI32Property(opts.get(), "teamId", teamId);
+            // Particles are allocated per enemy up front.
+            numParticles = getI32Property(opts.get(), "numParticles", numParticles, 0, 1 << 20);
             if (auto* ng = unwrapNavGrid(ev::getProperty(opts.get(), "navGrid"))) {
                 nav = ng->grid;
             }
@@ -504,7 +492,7 @@ void installAIBelief(ObjectBuilder& game) {
         if (a.size() < 4) return ev::throwTypeError("observe(world, teamId, visCfg, now)");
         auto* w = unwrapWorld(a[0]);
         if (!w) return ev::throwTypeError("observe: expected a World");
-        auto t = obs::observe(w->world, i32At(a, 1), parseVisibilityConfig(a[2]),
+        auto t = obs::observe(w->world, i32At(a, 1, "observe: teamId"), parseVisibilityConfig(a[2]),
                               static_cast<float>(numAt(a, 3)));
         return makeTeamObservation(t);
     });

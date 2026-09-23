@@ -199,9 +199,15 @@ Value makeBigIntValue(uint64_t v);
 uint64_t readSeedArg(Value v, uint64_t def);
 
 Value makeIntArrayValue(const std::vector<int>& v);
-std::vector<int> readIntArrayValue(Value arr);
+/// An array-like of int32s. `checked` (arguments and options): a NaN or
+/// out-of-range element throws a RangeError. Unchecked (a callback's result
+/// read mid-search): such an element reads as -1.
+std::vector<int> readIntArrayValue(Value arr, bool checked = true);
 std::vector<int> readIntArrayProp(Value obj, const char* key);
+/// An int32 option (RangeError for NaN / out of range); `def` when absent.
 int getIntProp(Value obj, const char* key, int def);
+/// The same, for a size or count: also RangeError below 0.
+int getCountProp(Value obj, const char* key, int def);
 
 /// "gpu" → brotensor's default device, throwing when the build has none;
 /// anything else → CPU. GPU-first: there is no silent CPU fallback.
