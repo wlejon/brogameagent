@@ -469,6 +469,9 @@ void installAIExtras(ObjectBuilder& game) {
             cfg.rewardStep         = static_cast<float>(getDoubleProperty(root.get(), "rewardStep", cfg.rewardStep));
             cfg.rewardTimeout      = static_cast<float>(getDoubleProperty(root.get(), "rewardTimeout", cfg.rewardTimeout));
         }
+        if (cfg.numEnvs < 1 || cfg.numEnvs > 65536) {
+            return ev::throwRangeError("createVecSimulation: numEnvs must be 1..65536");
+        }
         auto cell = std::make_unique<HostVecSim>();
         cell->sim = std::make_unique<brogameagent::VecSimulation>(cfg);
         return g_vecSimClass.createInstance(std::move(cell));

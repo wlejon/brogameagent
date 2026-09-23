@@ -7,6 +7,7 @@
 
 #include "host_ai_internal.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -81,7 +82,10 @@ void decorateHexNavExtras(ObjectBuilder& b) {
         ev::Persistent auraV(ev::getProperty(opts.get(), "aura"));
         const double auraMult = getDoubleProperty(opts.get(), "auraMult", 1.0);
         const double quantum = getDoubleProperty(opts.get(), "quantum", 0.25);
-        const int ring = static_cast<int>(getDoubleProperty(opts.get(), "ring", 64.0));
+        // The ring is a bucket array the search allocates: clamp before the
+        // cast (NaN or a huge double does not convert to int).
+        const double ringD = getDoubleProperty(opts.get(), "ring", 64.0);
+        const int ring = ringD >= 1.0 ? static_cast<int>(std::min(ringD, 1048576.0)) : 0;
 
         ev::TypedArrayInfo seedsInfo = ev::typedArrayInfo(seedsV.get());
         const int32_t* seeds = nullptr;
