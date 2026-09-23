@@ -46,8 +46,15 @@ bool ReplayReader::open(const std::string& path) {
     roster_.clear();
     index_.clear();
     error_.clear();
+    framesEnd_ = 0;
     if (!readFile(path, blob_, error_)) return false;
-    return parse_();
+    if (parse_()) return true;
+    // A rejected file leaves the reader empty, not half-populated.
+    blob_.clear();
+    roster_.clear();
+    index_.clear();
+    framesEnd_ = 0;
+    return false;
 }
 
 bool ReplayReader::parse_() {
@@ -64,28 +71,51 @@ bool ReplayReader::parse_() {
     if (header_.magic != MAGIC) { error_ = "bad magic"; return false; }
     if (header_.version != VERSION) { error_ = "unsupported version"; return false; }
 
-    // Footer at end.
+    // Footer at end. Every count and offset below comes from the file, so
+    // each is checked against the bytes actually present before it sizes an
+    // allocation or positions a cursor: a corrupt or hostile file must fail
+    // to open, not allocate gigabytes or read past the blob.
     Footer footer{};
     std::memcpy(&footer, end - sizeof(Footer), sizeof(Footer));
-    if (footer.indexOffset + static_cast<uint64_t>(footer.indexCount) * sizeof(IndexEntry)
-        > blob_.size() - sizeof(Footer)) {
-        error_ = "index offset out of range"; return false;
-    }
+    const uint64_t bodyEnd = blob_.size() - sizeof(Footer);  // index must end here
 
     // Roster immediately after header.
     uint32_t rosterCount = 0;
     if (!popPOD(cur, end, rosterCount)) { error_ = "truncated roster count"; return false; }
+    const uint64_t rosterAvail = static_cast<uint64_t>(end - cur);
+    if (rosterCount > kMaxRoster ||
+        static_cast<uint64_t>(rosterCount) * sizeof(AgentStatic) > rosterAvail) {
+        error_ = "roster count out of range"; return false;
+    }
     roster_.resize(rosterCount);
     for (uint32_t i = 0; i < rosterCount; i++) {
         if (!popPOD(cur, end, roster_[i])) { error_ = "truncated roster"; return false; }
     }
+    const uint64_t framesBegin = static_cast<uint64_t>(cur - base);
 
-    // Index at footer.indexOffset.
+    // Index at footer.indexOffset: after the roster, and ending exactly
+    // where the footer begins (the writer emits nothing between them).
+    if (footer.indexOffset < framesBegin || footer.indexOffset > bodyEnd) {
+        error_ = "index offset out of range"; return false;
+    }
+    if (static_cast<uint64_t>(footer.indexCount) * sizeof(IndexEntry)
+        != bodyEnd - footer.indexOffset) {
+        error_ = "index count out of range"; return false;
+    }
     const uint8_t* idxCur = base + footer.indexOffset;
     index_.resize(footer.indexCount);
     for (uint32_t i = 0; i < footer.indexCount; i++) {
         if (!popPOD(idxCur, end, index_[i])) { error_ = "truncated index"; return false; }
+        // A frame's header lies wholly in the frame stream (between the
+        // roster and the index); frame() checks its body against the same
+        // bound.
+        const IndexEntry& e = index_[i];
+        if (e.offset < framesBegin || e.offset > footer.indexOffset ||
+            footer.indexOffset - e.offset < sizeof(FrameHeader)) {
+            error_ = "frame offset out of range"; return false;
+        }
     }
+    framesEnd_ = footer.indexOffset;
 
     return true;
 }
@@ -93,15 +123,25 @@ bool ReplayReader::parse_() {
 ReplayReader::Frame ReplayReader::frame(size_t i) const {
     Frame out{};
     if (i >= index_.size()) return out;
+    // parse_() validated the offset; the frame body must also end before the
+    // index, so a count the header overstates yields an empty frame rather
+    // than records read out of the index table (or past the blob).
     const uint8_t* base = blob_.data();
-    const uint8_t* end  = base + blob_.size();
+    const uint8_t* end  = base + framesEnd_;
     const uint8_t* cur  = base + index_[i].offset;
-    if (!popPOD(cur, end, out.header)) return out;
-    out.agents.resize(out.header.liveCount);
+    FrameHeader fh{};
+    if (!popPOD(cur, end, fh)) return out;
+    const uint64_t body =
+        static_cast<uint64_t>(fh.liveCount)  * sizeof(AgentState) +
+        static_cast<uint64_t>(fh.projCount)  * sizeof(ProjectileState) +
+        static_cast<uint64_t>(fh.eventCount) * sizeof(DamageEventRec);
+    if (body > static_cast<uint64_t>(end - cur)) return out;
+    out.header = fh;
+    out.agents.resize(fh.liveCount);
     for (auto& a : out.agents) popPOD(cur, end, a);
-    out.projectiles.resize(out.header.projCount);
+    out.projectiles.resize(fh.projCount);
     for (auto& p : out.projectiles) popPOD(cur, end, p);
-    out.events.resize(out.header.eventCount);
+    out.events.resize(fh.eventCount);
     for (auto& e : out.events) popPOD(cur, end, e);
     return out;
 }

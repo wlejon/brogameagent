@@ -171,6 +171,7 @@ private:
     uint32_t                 event_row_bytes_ = 0;
     std::vector<Row>         roster_;
     std::vector<uint64_t>    frame_offsets_;
+    uint64_t                 data_end_ = 0;   // where the frame stream ends (the footer)
 };
 
 } // namespace brogameagent::grid

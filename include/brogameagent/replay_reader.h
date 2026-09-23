@@ -62,8 +62,13 @@ public:
     };
     std::vector<DamageSummary> damageSummary() const;
 
+    /// Largest roster open() accepts; a file claiming more is rejected
+    /// before anything is allocated for it.
+    static constexpr uint32_t kMaxRoster = 1u << 20;
+
 private:
     std::vector<uint8_t> blob_;
+    uint64_t framesEnd_ = 0;   // byte offset where the frame stream ends (the index)
     replay::FileHeader header_{};
     std::vector<replay::AgentStatic> roster_;
     std::vector<replay::IndexEntry>  index_;

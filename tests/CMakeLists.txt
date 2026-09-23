@@ -24,6 +24,19 @@ else()
 endif()
 add_test(NAME brogameagent_hex_nav_test COMMAND brogameagent_hex_nav_test)
 
+# Replay readers (.bgar and generic grid replays) against corrupt counts and
+# offsets. Core-only.
+add_executable(brogameagent_replay_reader_test
+    test_replay_reader.cpp
+)
+target_link_libraries(brogameagent_replay_reader_test PRIVATE brogameagent)
+if(MSVC)
+    target_compile_options(brogameagent_replay_reader_test PRIVATE /W4)
+else()
+    target_compile_options(brogameagent_replay_reader_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME brogameagent_replay_reader_test COMMAND brogameagent_replay_reader_test)
+
 # Polygon navmesh (Recast/Detour). Core-only — builds with the NN layer off,
 # but needs the navmesh feature compiled in.
 if(BROGAMEAGENT_WITH_NAVMESH)

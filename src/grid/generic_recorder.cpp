@@ -1,5 +1,7 @@
 #include "brogameagent/grid/generic_recorder.h"
 
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace brogameagent::grid {
@@ -49,9 +51,59 @@ bool write_schema(std::FILE* f, const std::vector<FieldDef>& s) {
     return true;
 }
 
-bool read_schema(std::FILE* f, std::vector<FieldDef>& out) {
+// 64-bit file positioning: `long` is 32 bits on Windows, so fseek/ftell
+// cannot address a replay past 2 GiB.
+bool seek_to(std::FILE* f, uint64_t off) {
+    if (off > static_cast<uint64_t>(INT64_MAX)) return false;
+#ifdef _MSC_VER
+    return _fseeki64(f, static_cast<__int64>(off), SEEK_SET) == 0;
+#else
+    return fseeko(f, static_cast<off_t>(off), SEEK_SET) == 0;
+#endif
+}
+
+bool tell_at(std::FILE* f, uint64_t& off) {
+#ifdef _MSC_VER
+    const __int64 p = _ftelli64(f);
+#else
+    const off_t p = ftello(f);
+#endif
+    if (p < 0) return false;
+    off = static_cast<uint64_t>(p);
+    return true;
+}
+
+bool file_size_of(std::FILE* f, uint64_t& size) {
+    uint64_t here = 0;
+    if (!tell_at(f, here)) return false;
+#ifdef _MSC_VER
+    if (_fseeki64(f, 0, SEEK_END) != 0) return false;
+#else
+    if (fseeko(f, 0, SEEK_END) != 0) return false;
+#endif
+    if (!tell_at(f, size)) return false;
+    return seek_to(f, here);
+}
+
+// Every count in the file is checked against these and against the bytes
+// left in the file before it sizes an allocation.
+constexpr uint32_t kMaxFields = 4096;       // per schema
+constexpr uint32_t kMaxRows   = 1u << 20;   // roster, per-frame rows / events
+
+// `count` records of `row_bytes` each fit in `avail` bytes, within kMaxRows.
+bool rows_fit(uint32_t count, uint32_t row_bytes, uint64_t avail) {
+    return count <= kMaxRows &&
+           static_cast<uint64_t>(count) * row_bytes <= avail;
+}
+
+bool read_schema(std::FILE* f, uint64_t limit, std::vector<FieldDef>& out) {
     uint32_t n = 0;
     if (!read_raw(f, n)) return false;
+    uint64_t pos = 0;
+    if (!tell_at(f, pos) || pos > limit) return false;
+    // Smallest field on disk: u16 name length + u8 type.
+    constexpr uint64_t kMinField = sizeof(uint16_t) + sizeof(uint8_t);
+    if (n > kMaxFields || static_cast<uint64_t>(n) * kMinField > limit - pos) return false;
     out.clear();
     out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
@@ -61,6 +113,8 @@ bool read_schema(std::FILE* f, std::vector<FieldDef>& out) {
         if (name_len && std::fread(name.data(), 1, name_len, f) != name_len) return false;
         uint8_t t = 0;
         if (!read_raw(f, t)) return false;
+        if (t < static_cast<uint8_t>(FieldType::I32) ||
+            t > static_cast<uint8_t>(FieldType::F64)) return false;
         out.push_back({ std::move(name), static_cast<FieldType>(t) });
     }
     return true;
@@ -117,18 +171,32 @@ void write_row(std::FILE* f, const std::vector<FieldDef>& schema, const Row& row
     }
 }
 
-Row read_row(std::FILE* f, const std::vector<FieldDef>& schema) {
-    Row row;
+bool read_row(std::FILE* f, const std::vector<FieldDef>& schema, Row& row) {
+    row.clear();
     row.reserve(schema.size());
     for (const auto& fd : schema) {
+        bool ok = false;
         switch (fd.type) {
-            case FieldType::I32: { int32_t x = 0; read_raw(f, x); row.push_back(x); break; }
-            case FieldType::I64: { int64_t x = 0; read_raw(f, x); row.push_back(x); break; }
-            case FieldType::F32: { float x = 0;   read_raw(f, x); row.push_back(x); break; }
-            case FieldType::F64: { double x = 0;  read_raw(f, x); row.push_back(x); break; }
+            case FieldType::I32: { int32_t x = 0; ok = read_raw(f, x); row.push_back(x); break; }
+            case FieldType::I64: { int64_t x = 0; ok = read_raw(f, x); row.push_back(x); break; }
+            case FieldType::F32: { float x = 0;   ok = read_raw(f, x); row.push_back(x); break; }
+            case FieldType::F64: { double x = 0;  ok = read_raw(f, x); row.push_back(x); break; }
         }
+        if (!ok) return false;
     }
-    return row;
+    return true;
+}
+
+bool read_rows(std::FILE* f, const std::vector<FieldDef>& schema, uint32_t n,
+               std::vector<Row>& out) {
+    out.clear();
+    out.reserve(n);
+    for (uint32_t k = 0; k < n; ++k) {
+        Row r;
+        if (!read_row(f, schema, r)) return false;
+        out.push_back(std::move(r));
+    }
+    return true;
 }
 
 } // namespace
@@ -242,81 +310,124 @@ bool GenericReplayReader::open(const std::string& path) {
 #else
     file_ = std::fopen(path.c_str(), "rb");
 #endif
+    roster_.clear();
+    frame_offsets_.clear();
+    data_end_ = 0;
     if (!file_) { err_ = "open failed"; return false; }
+
+    // Every count and offset read below is checked against the bytes the
+    // file actually holds before it sizes an allocation or a seek: a corrupt
+    // or hostile replay fails to open instead of allocating gigabytes.
+    auto fail = [this](const char* why) {
+        err_ = why;
+        std::fclose(file_);
+        file_ = nullptr;
+        roster_.clear();
+        frame_offsets_.clear();
+        data_end_ = 0;
+        return false;
+    };
+
+    // Trailer: footer_off u64 + MAGIC_END[8], the last 16 bytes.
+    constexpr uint64_t kTrailer = sizeof(uint64_t) + 8;
+    uint64_t file_size = 0;
+    if (!file_size_of(file_, file_size)) return fail("file size");
 
     char magic[8] = {0};
     if (std::fread(magic, 1, 8, file_) != 8 || std::memcmp(magic, MAGIC, 8) != 0) {
-        err_ = "bad magic"; std::fclose(file_); file_ = nullptr; return false;
+        return fail("bad magic");
     }
     uint32_t ver = 0;
-    if (!read_raw(file_, ver) || ver != VERSION) {
-        err_ = "version mismatch"; std::fclose(file_); file_ = nullptr; return false;
-    }
+    if (!read_raw(file_, ver) || ver != VERSION) return fail("version mismatch");
     if (!read_raw(file_, episode_id_) ||
         !read_raw(file_, seed_) ||
         !read_raw(file_, dt_)) {
-        err_ = "header read"; std::fclose(file_); file_ = nullptr; return false;
+        return fail("header read");
     }
-    if (!read_schema(file_, roster_schema_) ||
-        !read_schema(file_, frame_schema_)  ||
-        !read_schema(file_, event_schema_)) {
-        err_ = "schema read"; std::fclose(file_); file_ = nullptr; return false;
+    if (file_size < kTrailer) return fail("file too small");
+    const uint64_t body_limit = file_size - kTrailer;
+    if (!read_schema(file_, body_limit, roster_schema_) ||
+        !read_schema(file_, body_limit, frame_schema_)  ||
+        !read_schema(file_, body_limit, event_schema_)) {
+        return fail("schema read");
     }
+    const uint32_t roster_bytes = schema_row_bytes(roster_schema_);
     frame_row_bytes_ = schema_row_bytes(frame_schema_);
     event_row_bytes_ = schema_row_bytes(event_schema_);
 
     uint32_t roster_n = 0, roster_row_bytes = 0;
     if (!read_raw(file_, roster_n) || !read_raw(file_, roster_row_bytes)) {
-        err_ = "roster header"; std::fclose(file_); file_ = nullptr; return false;
+        return fail("roster header");
     }
-    roster_.clear();
-    roster_.reserve(roster_n);
-    for (uint32_t i = 0; i < roster_n; ++i) roster_.push_back(read_row(file_, roster_schema_));
+    if (roster_row_bytes != roster_bytes) return fail("roster row size mismatch");
+    uint64_t pos = 0;
+    if (!tell_at(file_, pos) || pos > body_limit) return fail("roster header");
+    if (!rows_fit(roster_n, roster_bytes, body_limit - pos)) {
+        return fail("roster count out of range");
+    }
+    if (!read_rows(file_, roster_schema_, roster_n, roster_)) return fail("truncated roster");
+    uint64_t frames_begin = 0;
+    if (!tell_at(file_, frames_begin)) return fail("roster read");
 
-    // Walk to footer to grab frame offsets. The footer trailer is
-    // (footer_off u64 + magic_end[8]) at the end of the file.
-    if (std::fseek(file_, -16, SEEK_END) != 0) {
-        err_ = "seek footer"; std::fclose(file_); file_ = nullptr; return false;
-    }
+    // Walk to the footer to grab frame offsets.
+    if (!seek_to(file_, body_limit)) return fail("seek footer");
     uint64_t footer_off = 0;
-    if (!read_raw(file_, footer_off)) {
-        err_ = "read footer offset"; std::fclose(file_); file_ = nullptr; return false;
-    }
+    if (!read_raw(file_, footer_off)) return fail("read footer offset");
     char tail[8] = {0};
-    std::fread(tail, 1, 8, file_);
-    if (std::memcmp(tail, MAGIC_END, 8) != 0) {
-        err_ = "bad footer magic"; std::fclose(file_); file_ = nullptr; return false;
+    if (std::fread(tail, 1, 8, file_) != 8 || std::memcmp(tail, MAGIC_END, 8) != 0) {
+        return fail("bad footer magic");
     }
-    if (std::fseek(file_, static_cast<long>(footer_off), SEEK_SET) != 0) {
-        err_ = "seek to footer"; std::fclose(file_); file_ = nullptr; return false;
+    // The footer (u32 count + u64 offsets) sits between the last frame and
+    // the trailer, and the writer leaves nothing else there.
+    if (footer_off < frames_begin || footer_off > body_limit ||
+        body_limit - footer_off < sizeof(uint32_t)) {
+        return fail("footer offset out of range");
     }
+    if (!seek_to(file_, footer_off)) return fail("seek to footer");
     uint32_t nframes = 0;
-    if (!read_raw(file_, nframes)) {
-        err_ = "frame count"; std::fclose(file_); file_ = nullptr; return false;
+    if (!read_raw(file_, nframes)) return fail("frame count");
+    if (static_cast<uint64_t>(nframes) * sizeof(uint64_t)
+        != body_limit - footer_off - sizeof(uint32_t)) {
+        return fail("frame count out of range");
     }
+    // Smallest frame: step_idx u64 + elapsed f32 + row count u32 + event count u32.
+    constexpr uint64_t kMinFrame = sizeof(uint64_t) + sizeof(float) + 2 * sizeof(uint32_t);
     frame_offsets_.resize(nframes);
     for (uint32_t i = 0; i < nframes; ++i) {
-        if (!read_raw(file_, frame_offsets_[i])) {
-            err_ = "frame offsets"; std::fclose(file_); file_ = nullptr; return false;
+        if (!read_raw(file_, frame_offsets_[i])) return fail("frame offsets");
+        const uint64_t off = frame_offsets_[i];
+        if (off < frames_begin || off > footer_off || footer_off - off < kMinFrame) {
+            return fail("frame offset out of range");
         }
     }
+    data_end_ = footer_off;
     return true;
 }
 
 GenericFrame GenericReplayReader::frame(size_t i) const {
+    // open() validated the offset; each count is checked against the bytes
+    // left before the footer, so an overstated count yields an empty frame
+    // rather than rows read out of the footer (or a huge reservation).
     GenericFrame fr;
     if (!file_ || i >= frame_offsets_.size()) return fr;
-    if (std::fseek(file_, static_cast<long>(frame_offsets_[i]), SEEK_SET) != 0) return fr;
+    if (!seek_to(file_, frame_offsets_[i])) return fr;
     if (!read_raw(file_, fr.step_idx)) return {};
     if (!read_raw(file_, fr.elapsed))  return {};
+    auto remaining = [this](uint64_t& avail) {
+        uint64_t pos = 0;
+        if (!tell_at(file_, pos) || pos > data_end_) return false;
+        avail = data_end_ - pos;
+        return true;
+    };
+    uint64_t avail = 0;
     uint32_t nr = 0;
-    read_raw(file_, nr);
-    fr.rows.reserve(nr);
-    for (uint32_t k = 0; k < nr; ++k) fr.rows.push_back(read_row(file_, frame_schema_));
+    if (!read_raw(file_, nr) || !remaining(avail)) return {};
+    if (!rows_fit(nr, frame_row_bytes_, avail)) return {};
+    if (!read_rows(file_, frame_schema_, nr, fr.rows)) return {};
     uint32_t ne = 0;
-    read_raw(file_, ne);
-    fr.events.reserve(ne);
-    for (uint32_t k = 0; k < ne; ++k) fr.events.push_back(read_row(file_, event_schema_));
+    if (!read_raw(file_, ne) || !remaining(avail)) return {};
+    if (!rows_fit(ne, event_row_bytes_, avail)) return {};
+    if (!read_rows(file_, event_schema_, ne, fr.events)) return {};
     return fr;
 }
 
