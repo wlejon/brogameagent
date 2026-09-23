@@ -25,17 +25,20 @@ namespace {
 struct HostTacticMcts {
     uint32_t tag = kHostTacticMctsTag;
     std::unique_ptr<bgm::TacticMcts> mcts;
+    std::vector<JsSlotPtr> slots;  // JS callbacks, on the handle as _callbacks
 };
 
 struct HostLayeredPlanner {
     uint32_t tag = kHostLayeredPlannerTag;
     std::unique_ptr<bgm::LayeredPlanner> planner;
+    std::vector<JsSlotPtr> slots;
 };
 
 struct HostTeamOptionMcts {
     uint32_t tag = kHostTeamOptionMctsTag;
     std::unique_ptr<bgm::TeamOptionMcts> mcts;
     std::vector<std::shared_ptr<bgm::TeamOption>> options;
+    std::vector<JsSlotPtr> slots;
 };
 
 struct HostCommander {
@@ -43,6 +46,8 @@ struct HostCommander {
     std::unique_ptr<bgm::Commander> commander;
     // Keeps every role's options alive for as long as the Commander is.
     std::vector<std::shared_ptr<bgm::Option>> optionRefs;
+    // Role options, evaluators and the assigner, on the handle as _callbacks.
+    std::vector<JsSlotPtr> slots;
 };
 
 HostTacticMcts* unwrapTacticMcts(Value v) {
@@ -92,7 +97,14 @@ void ensureAIPlannerClassesInstalled() {
             if (!h || !h->mcts || a.size() < 2) return ev::throwTypeError("search(world, heroes)");
             auto* w = unwrapWorld(a[0]);
             if (!w) return ev::throwTypeError("search: invalid world");
-            return makeTactic(h->mcts->search(w->world, parseHeroes(a[1])));
+            ev::Persistent selfP(self), worldP(a[0]);
+            auto heroes = parseHeroes(a[1]);
+            bgm::Tactic t;
+            {
+                SearchScope scope(selfP.get(), h->slots, worldP.get());
+                t = h->mcts->search(w->world, heroes);
+            }
+            return makeTactic(t);
         });
         b.def("advanceRoot", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapTacticMcts(self);
@@ -117,7 +129,13 @@ void ensureAIPlannerClassesInstalled() {
             if (!h || !h->planner || a.size() < 2) return ev::throwTypeError("decide(world, heroes)");
             auto* w = unwrapWorld(a[0]);
             if (!w) return ev::throwTypeError("decide: invalid world");
-            auto joint = h->planner->decide(w->world, parseHeroes(a[1]));
+            ev::Persistent selfP(self), worldP(a[0]);
+            auto heroes = parseHeroes(a[1]);
+            bgm::TeamMcts::JointAction joint;
+            {
+                SearchScope scope(selfP.get(), h->slots, worldP.get());
+                joint = h->planner->decide(w->world, heroes);
+            }
             return makeCombatActionArray(joint.per_hero);
         });
         b.def("reset", 0, [](Value self, std::span<const Value>) -> Value {
@@ -162,7 +180,13 @@ void ensureAIPlannerClassesInstalled() {
             if (!h || !h->mcts || a.size() < 2) return ev::throwTypeError("search(world, heroes)");
             auto* w = unwrapWorld(a[0]);
             if (!w) return ev::throwTypeError("search: invalid world");
-            const auto* opt = h->mcts->search(w->world, parseHeroes(a[1]));
+            ev::Persistent selfP(self), worldP(a[0]);
+            auto heroes = parseHeroes(a[1]);
+            const bgm::TeamOption* opt = nullptr;
+            {
+                SearchScope scope(selfP.get(), h->slots, worldP.get());
+                opt = h->mcts->search(w->world, heroes);
+            }
             return opt ? ev::fromUtf8(opt->name()) : ev::null();
         });
         b.def("advanceRoot", 1, [](Value self, std::span<const Value> a) -> Value {
@@ -187,10 +211,13 @@ void ensureAIPlannerClassesInstalled() {
             }
             auto* w = unwrapWorld(a[0]);
             if (!w) return ev::throwTypeError("executeOption: invalid world");
+            ev::Persistent selfP(self), worldP(a[0]), nameP(a[2]);
             auto heroes = parseHeroes(a[1]);
-            std::string target = optionNameArg(a, 2);
+            const Value nameV = nameP.get();
+            std::string target = optionNameArg(std::span<const Value>(&nameV, 1), 0);
             for (const auto& sp : h->options) {
                 if (sp && sp->name() == target) {
+                    SearchScope scope(selfP.get(), h->slots, worldP.get());
                     return ev::fromDouble(h->mcts->execute_option(w->world, heroes, *sp));
                 }
             }
@@ -216,7 +243,14 @@ void ensureAIPlannerClassesInstalled() {
             }
             auto* w = unwrapWorld(a[0]);
             if (!w) return ev::throwTypeError("decide: invalid world");
-            return makeCombatActionArray(h->commander->decide(w->world, parseHeroes(a[1])));
+            ev::Persistent selfP(self), worldP(a[0]);
+            auto heroes = parseHeroes(a[1]);
+            std::vector<bgm::CombatAction> acts;
+            {
+                SearchScope scope(selfP.get(), h->slots, worldP.get());
+                acts = h->commander->decide(w->world, heroes);
+            }
+            return makeCombatActionArray(acts);
         });
         b.def("reset", 0, [](Value self, std::span<const Value>) -> Value {
             auto* h = unwrapCommander(self);
@@ -260,22 +294,25 @@ void installAIPlanner(ObjectBuilder& game) {
     game.def("createTacticMcts", 1, [](Value, std::span<const Value> a) -> Value {
         auto cell = std::make_unique<HostTacticMcts>();
         cell->mcts = std::make_unique<bgm::TacticMcts>();
+        JsCallbackSet cbs;
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent opts(a[0]);
             cell->mcts->set_config(parseMctsConfig(opts.get()));
             if (auto op = parseOpponentPolicy(opts.get())) {
                 cell->mcts->set_opponent_policy(std::move(op));
             }
-            if (auto tev = parseTeamEvaluator(opts.get())) {
+            if (auto tev = parseTeamEvaluator(opts.get(), cbs)) {
                 cell->mcts->set_evaluator(std::move(tev));
             }
         }
-        return g_tacticMctsClass.createInstance(std::move(cell));
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_tacticMctsClass.createInstance(std::move(cell)));
     });
 
     game.def("createLayeredPlanner", 1, [](Value, std::span<const Value> a) -> Value {
         auto cell = std::make_unique<HostLayeredPlanner>();
         cell->planner = std::make_unique<bgm::LayeredPlanner>();
+        JsCallbackSet cbs;
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent opts(a[0]);
             bgm::LayeredPlanner::Config cfg{};
@@ -289,11 +326,12 @@ void installAIPlanner(ObjectBuilder& game) {
             if (ev::isNumber(tow)) cfg.tactic_other_weight = static_cast<float>(ev::toDouble(tow));
             cell->planner->set_config(cfg);
 
-            if (auto p = parseRolloutPolicy(opts.get())) cell->planner->set_rollout_policy(std::move(p));
+            if (auto p = parseRolloutPolicy(opts.get(), cbs)) cell->planner->set_rollout_policy(std::move(p));
             if (auto op = parseOpponentPolicy(opts.get())) cell->planner->set_opponent_policy(std::move(op));
-            if (auto tev = parseTeamEvaluator(opts.get())) cell->planner->set_team_evaluator(std::move(tev));
+            if (auto tev = parseTeamEvaluator(opts.get(), cbs)) cell->planner->set_team_evaluator(std::move(tev));
         }
-        return g_layeredPlannerClass.createInstance(std::move(cell));
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_layeredPlannerClass.createInstance(std::move(cell)));
     });
 
     game.def("createTeamOption", 1, [](Value, std::span<const Value> a) -> Value {
@@ -310,25 +348,29 @@ void installAIPlanner(ObjectBuilder& game) {
         if (!ev::isFunction(te.get())) return ev::throwTypeError("createTeamOption: shouldTerminate must be a function");
 
         auto cell = std::make_unique<HostTeamOptionCell>();
-        cell->opt = makeJsTeamOption(std::move(name), ci.get(), st.get(), te.get());
-        return g_teamOptionClass.createInstance(std::move(cell));
+        JsCallbackSet cbs;
+        cell->opt = makeJsTeamOption(std::move(name), ci.get(), st.get(), te.get(), cbs);
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_teamOptionClass.createInstance(std::move(cell)));
     });
 
     game.def("createTeamOptionMcts", 1, [](Value, std::span<const Value> a) -> Value {
         auto cell = std::make_unique<HostTeamOptionMcts>();
         cell->mcts = std::make_unique<bgm::TeamOptionMcts>();
+        JsCallbackSet cbs;
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent opts(a[0]);
             cell->mcts->set_config(parseMctsConfig(opts.get()));
             if (auto op = parseOpponentPolicy(opts.get())) cell->mcts->set_opponent_policy(std::move(op));
-            if (auto tev = parseTeamEvaluator(opts.get())) cell->mcts->set_evaluator(std::move(tev));
-            cell->options = parseTeamOptionArray(opts.get());
+            if (auto tev = parseTeamEvaluator(opts.get(), cbs)) cell->mcts->set_evaluator(std::move(tev));
+            cell->options = parseTeamOptionArray(opts.get(), cbs);
             if (!cell->options.empty()) {
                 auto copy = cell->options;
                 cell->mcts->set_options(std::move(copy));
             }
         }
-        return g_teamOptionMctsClass.createInstance(std::move(cell));
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_teamOptionMctsClass.createInstance(std::move(cell)));
     });
 
     game.def("createCommander", 1, [](Value, std::span<const Value> a) -> Value {
@@ -338,6 +380,7 @@ void installAIPlanner(ObjectBuilder& game) {
             return g_commanderClass.createInstance(std::move(cell));
         }
         ev::Persistent opts(a[0]);
+        JsCallbackSet cbs;
 
         bgm::Commander::Config cfg{};
         Value rc = ev::getProperty(opts.get(), "roleCfg");
@@ -347,18 +390,19 @@ void installAIPlanner(ObjectBuilder& game) {
         cell->commander->set_config(cfg);
 
         if (auto op = parseOpponentPolicy(opts.get())) cell->commander->set_opponent_policy(std::move(op));
-        if (auto hev = parseHeroEvaluator(opts.get())) cell->commander->set_default_evaluator(std::move(hev));
+        if (auto hev = parseHeroEvaluator(opts.get(), cbs)) cell->commander->set_default_evaluator(std::move(hev));
 
         ev::Persistent rolesArr(ev::getProperty(opts.get(), "roles"));
         if (ev::isObject(rolesArr.get())) {
             Value lenV = ev::getProperty(rolesArr.get(), "length");
-            uint32_t n = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0u;
+            const double len = ev::isNumber(lenV) ? ev::toDouble(lenV) : 0.0;
+            const uint32_t n = (len > 0.0 && len <= 4294967295.0) ? static_cast<uint32_t>(len) : 0u;
             for (uint32_t i = 0; i < n; ++i) {
                 ev::Persistent role(ev::getElement(rolesArr.get(), i));
                 if (!ev::isObject(role.get())) continue;
                 std::string name = readStringProp(role.get(), "name");
-                auto roleOptions = parseOptionArray(role.get());
-                auto roleEval = parseHeroEvaluator(role.get());
+                auto roleOptions = parseOptionArray(role.get(), cbs);
+                auto roleEval = parseHeroEvaluator(role.get(), cbs);
                 for (const auto& sp : roleOptions) cell->optionRefs.push_back(sp);
                 cell->commander->add_role(std::move(name), std::move(roleOptions),
                                           std::move(roleEval));
@@ -367,10 +411,11 @@ void installAIPlanner(ObjectBuilder& game) {
 
         Value assignFn = ev::getProperty(opts.get(), "assign");
         if (ev::isFunction(assignFn)) {
-            cell->commander->set_assigner(makeJsAssigner(assignFn));
+            cell->commander->set_assigner(makeJsAssigner(assignFn, cbs));
         }
 
-        return g_commanderClass.createInstance(std::move(cell));
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_commanderClass.createInstance(std::move(cell)));
     });
 }
 

@@ -75,23 +75,28 @@ struct HostAgent {
     int navWaypoint = 0;
     float navY = 0.0f;
     bool destroyed = false;
+
+    /// Expires with this HostAgent. A Unit proxy or AgentBinding keeps its
+    /// agent alive through a `_agent` property on its own handle (an edge,
+    /// not a root, so `agent.u = agent.unit` is an ordinary cycle); this
+    /// token is what stops it dereferencing a collected agent if that
+    /// property is deleted from JS.
+    std::shared_ptr<int> life = std::make_shared<int>(1);
 };
 
 struct HostUnit {
     uint32_t tag = kHostUnitTag;
     HostAgent* owner = nullptr;
-    brogameagent::Agent* agentRef = nullptr;
-    ev::Persistent agentValue;
+    std::weak_ptr<int> ownerLife;
     brogameagent::Agent* agent() const {
-        if (owner) return &owner->agent;
-        return agentRef;
+        return (owner && !ownerLife.expired()) ? &owner->agent : nullptr;
     }
 };
 
 struct HostAgentBinding {
     uint32_t tag = kHostAgentBindingTag;
-    HostAgent* agentHost = nullptr;
-    ev::Persistent agentRef;
+    HostAgent* agentHost = nullptr;  // read through host(); alive while `_agent` is
+    std::weak_ptr<int> agentLife;
     std::shared_ptr<brogameagent::NavMesh> navMesh;
     const brogameagent::NavGrid* navGrid = nullptr;
 
@@ -121,24 +126,29 @@ struct HostHexNav {
     std::unique_ptr<brogameagent::HexNav> nav;
 };
 
+// The world's JS-side state lives on its handle, where the collector traces
+// it: the AIAgent wrappers as `_agents[key]` and the registerAbility
+// callbacks as `_abilities[abilityId]`. Rooting either natively made an
+// agent or ability that refers back to the world (`agent.world = world`, an
+// ability closing over the game that owns the world) pin the world forever.
+// An Agent deregisters itself from its World when destroyed, so the world
+// needs no root to stay memory-safe.
 struct HostWorld {
     uint32_t tag = kHostWorldTag;
     brogameagent::World world;
     struct Roster {
         const brogameagent::Agent* agent = nullptr;
-        ev::Persistent value;
+        uint32_t key = 0;  // the wrapper is self._agents[key]
     };
     std::vector<Roster> roster;
+    uint32_t nextRosterKey = 0;
 
-    /// registerAbility() callbacks, keyed by abilityId.
-    /// To avoid an uncollectable reference cycle (World handle -> HostWorld -> selfValue -> World handle),
-    /// the World handle is not permanently rooted in an ev::Persistent. Instead, activeSelf provides
-    /// the caller's receiver during dispatch, falling back to a non-owning wrapper if invoked standalone.
-    /// Rooted only for the span of an ActiveWorldScope (undefined otherwise),
-    /// so it stays current across the allocations a dispatched callback makes
-    /// without making the wrapper permanently uncollectable.
+    /// The world handle a World method is running on, rooted only for the
+    /// span of an ActiveWorldScope (undefined otherwise). Ability dispatch
+    /// reads `_abilities` and `_agents` through it; outside a scope (a world
+    /// ticked by a host that never went through a JS method) no JS ability
+    /// callback runs.
     ev::Persistent activeSelf;
-    std::vector<std::pair<int, ev::Persistent>> abilityFns;
 
     /// Expires when this HostWorld is destroyed. An AbilitySpec::fn survives
     /// a World copy (an MCTS rollout clones the World), so a clone can still
@@ -146,22 +156,18 @@ struct HostWorld {
     /// checks this token instead of dereferencing a dangling host.
     std::shared_ptr<int> life = std::make_shared<int>(1);
 
-    /// The JS wrapper for `agent` if it is on the roster, else undefined.
-    Value agentValue(const brogameagent::Agent* agent) const {
+    const Roster* rosterEntry(const brogameagent::Agent* agent) const {
         for (const auto& r : roster) {
-            if (r.agent == agent) return r.value.get();
+            if (r.agent == agent) return &r;
         }
-        return ev::undefined();
-    }
-
-    /// The callback registered for `abilityId`, or undefined.
-    Value abilityFn(int abilityId) const {
-        for (const auto& e : abilityFns) {
-            if (e.first == abilityId) return e.second.get();
-        }
-        return ev::undefined();
+        return nullptr;
     }
 };
+
+/// The AIAgent wrapper the world handle `worldSelf` keeps for `agent` (its
+/// `_agents` entry), or undefined when the agent is not on its roster.
+/// ALLOCATES; `worldSelf` must be current.
+Value worldAgentValue(Value worldSelf, const brogameagent::Agent* agent);
 
 /// `self` must be current (taken before any allocation in the caller). Both
 /// it and the value it shadows are held in Persistents, so nested dispatch
@@ -247,7 +253,11 @@ inline HostAgentBinding* unwrapAgentBinding(Value v) {
     void* ptr = ev::handleData(v);
     if (!ptr) return nullptr;
     auto* h = static_cast<HostAgentBinding*>(ptr);
-    return (h->tag == kHostAgentBindingTag) ? h : nullptr;
+    if (h->tag != kHostAgentBindingTag) return nullptr;
+    // Every binding method comes through here, so a collected agent is
+    // forgotten before anything can reach it.
+    if (h->agentHost && h->agentLife.expired()) h->agentHost = nullptr;
+    return h;
 }
 
 inline HostHexNav* unwrapHexNav(Value v) {
@@ -518,10 +528,34 @@ inline brogameagent::AgentAction parseAgentAction(Value obj) {
     return a;
 }
 
+/// A JS `length` as a loop bound: 0 for a non-number, NaN or negative
+/// length (an array-like object can say anything), clamped to 2^32 - 1.
+inline uint32_t toLength(Value lenV) {
+    if (!ev::isNumber(lenV)) return 0;
+    const double d = ev::toDouble(lenV);
+    if (!(d > 0.0)) return 0;
+    return d >= 4294967295.0 ? 0xFFFFFFFFu : static_cast<uint32_t>(d);
+}
+
+/// What to reserve() for `n` elements an array-like claims to have: a
+/// `{ length: 1e9 }` must not become a multi-gigabyte allocation up front.
+inline size_t reserveHint(uint32_t n) {
+    return std::min<size_t>(n, size_t{1} << 16);
+}
+
+/// A number as a uint32 element: 0 for NaN / negative, clamped at the top
+/// (a plain static_cast of either is undefined behaviour).
+inline uint32_t toU32Clamped(double d) {
+    if (!(d > 0.0)) return 0u;
+    return d >= 4294967295.0 ? 0xFFFFFFFFu : static_cast<uint32_t>(d);
+}
+
+/// A Float32Array is copied as-is; any other typed array or array-like is
+/// read element by element (so an Int32Array's values, not its bit patterns).
 inline bool readFloatVector(Value v, std::vector<float>& out) {
     if (ev::isUndefined(v) || ev::isNull(v)) return false;
     if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && (info.bytesPerElement == sizeof(float) || info.bytesPerElement == 0)) {
+        if (info.data && info.elementKind == ev::elements::Float32) {
             const float* fp = reinterpret_cast<const float*>(info.data);
             out.assign(fp, fp + info.elementCount);
             return true;
@@ -531,9 +565,9 @@ inline bool readFloatVector(Value v, std::vector<float>& out) {
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
     if (!ev::isNumber(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+    const uint32_t len = toLength(lenV);
     out.clear();
-    out.reserve(len);
+    out.reserve(reserveHint(len));
     for (uint32_t i = 0; i < len; ++i) {
         Value e = ev::getElement(root.get(), i);
         double d = ev::isNumber(e) ? ev::toDouble(e) : 0.0;
@@ -542,19 +576,24 @@ inline bool readFloatVector(Value v, std::vector<float>& out) {
     return true;
 }
 
+/// A Uint32Array is copied as-is and a Uint16Array / Uint8Array widened; any
+/// other typed array or array-like is read element by element.
 inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
     if (ev::isUndefined(v) || ev::isNull(v)) return false;
     if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && (info.bytesPerElement == sizeof(uint32_t) || info.bytesPerElement == 0)) {
+        if (info.data && info.elementKind == ev::elements::Uint32) {
             const uint32_t* up = reinterpret_cast<const uint32_t*>(info.data);
             out.assign(up, up + info.elementCount);
             return true;
         }
-        if (info.data && info.bytesPerElement == sizeof(uint16_t)) {
+        if (info.data && info.elementKind == ev::elements::Uint16) {
             const uint16_t* up = reinterpret_cast<const uint16_t*>(info.data);
-            out.clear();
-            out.reserve(info.elementCount);
-            for (uint32_t i = 0; i < info.elementCount; ++i) out.push_back(up[i]);
+            out.assign(up, up + info.elementCount);
+            return true;
+        }
+        if (info.data && info.elementKind == ev::elements::Uint8) {
+            const uint8_t* up = reinterpret_cast<const uint8_t*>(info.data);
+            out.assign(up, up + info.elementCount);
             return true;
         }
     }
@@ -562,13 +601,12 @@ inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
     if (!ev::isNumber(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+    const uint32_t len = toLength(lenV);
     out.clear();
-    out.reserve(len);
+    out.reserve(reserveHint(len));
     for (uint32_t i = 0; i < len; ++i) {
         Value e = ev::getElement(root.get(), i);
-        uint32_t u = ev::isNumber(e) ? static_cast<uint32_t>(ev::toDouble(e)) : 0u;
-        out.push_back(u);
+        out.push_back(ev::isNumber(e) ? toU32Clamped(ev::toDouble(e)) : 0u);
     }
     return true;
 }
@@ -594,6 +632,8 @@ void decorateAgentProto(ObjectBuilder& b);
 void decorateAgentBindingProto(ObjectBuilder& b);
 Value makeAgentHandle(HostAgent* h);
 Value makeAgentBindingHandle(HostAgentBinding* h);
+/// Sets `binding._agent = agent`; both must be current. ALLOCATES.
+Value attachBindingAgent(Value binding, Value agent);
 Value aiCreateAgent(Value self, std::span<const Value> a);
 Value aiCreateAgentBinding(Value self, std::span<const Value> a);
 void applyAgentAvoidance(Value opts, brogameagent::Agent& agent);

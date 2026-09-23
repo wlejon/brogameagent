@@ -310,12 +310,16 @@ void decorateUnitProto(ObjectBuilder& b) {
 
 Value makeUnitHandle(HostAgent* owner, Value agentVal) {
     if (!owner) return ev::undefined();
+    ev::Persistent agentP(agentVal);
     ensureAIClassesInstalled();
     auto* cell = new HostUnit();
     cell->owner = owner;
-    cell->agentRef = &owner->agent;
-    if (!ev::isUndefined(agentVal)) cell->agentValue = ev::Persistent(agentVal);
-    return g_unitClass.make(cell, [](void* p) { delete static_cast<HostUnit*>(p); });
+    cell->ownerLife = owner->life;
+    // The proxy keeps its agent alive through `_agent` on its own handle, an
+    // edge rather than a root: `agent.u = agent.unit` stays collectable.
+    ev::Persistent unit(g_unitClass.make(cell, [](void* p) { delete static_cast<HostUnit*>(p); }));
+    if (!ev::isUndefined(agentP.get())) unit.set(ev::setProperty(unit.get(), "_agent", agentP.get()));
+    return unit.get();
 }
 
 } // namespace brogameagent::api

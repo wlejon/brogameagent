@@ -453,8 +453,9 @@ void decorateAgentProto(ObjectBuilder& b) {
 
     b.def("bind", 1, [](Value s, std::span<const Value> a) -> Value {
         auto* h = unwrapAgent(s); if (!h) return ev::undefined();
+        ev::Persistent agentP(s);
         auto* b = new HostAgentBinding();
-        b->agentHost = h; b->agentRef = ev::Persistent(s); b->navMesh = h->navMesh;
+        b->agentHost = h; b->agentLife = h->life; b->navMesh = h->navMesh;
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent root(a[0]);
             Value nmV = ev::getProperty(root.get(), "navMesh");
@@ -464,7 +465,7 @@ void decorateAgentProto(ObjectBuilder& b) {
             b->yOffset = static_cast<float>(getDoubleProperty(root.get(), "yOffset", 0.0));
             b->repathInterval = static_cast<float>(getDoubleProperty(root.get(), "repathInterval", 0.0));
         }
-        return makeAgentBindingHandle(b);
+        return attachBindingAgent(makeAgentBindingHandle(b), agentP.get());
     });
 
     decorateAgentExtras(b);  // applyAction() — host_ai_world_extra.cpp
@@ -476,7 +477,9 @@ void decorateAgentProto(ObjectBuilder& b) {
 
 void decorateAgentBindingProto(ObjectBuilder& b) {
     b.accessor("agent", [](Value s, std::span<const Value>) -> Value {
-        auto* bd = unwrapAgentBinding(s); return bd ? bd->agentRef.get() : ev::undefined();
+        auto* bd = unwrapAgentBinding(s);
+        if (!bd || !bd->agentHost) return ev::undefined();
+        return ev::getProperty(s, "_agent");
     }, nullptr);
 
     b.def("navigateTo", 3, [](Value s, std::span<const Value> a) -> Value {
@@ -613,6 +616,15 @@ Value makeAgentBindingHandle(HostAgentBinding* h) {
     return g_agentBindingClass.make(h, [](void* p) { delete static_cast<HostAgentBinding*>(p); });
 }
 
+// The binding keeps its agent alive through `_agent` on its own handle — an
+// edge the collector traces — rather than a root, so an agent that keeps its
+// binding (`agent.binding = agent.bind()`) is an ordinary, collectable cycle.
+Value attachBindingAgent(Value binding, Value agent) {
+    ev::Persistent bP(binding);
+    if (!ev::isUndefined(agent)) bP.set(ev::setProperty(bP.get(), "_agent", agent));
+    return bP.get();
+}
+
 Value aiCreateAgent(Value, std::span<const Value> a) {
     auto* h = new HostAgent();
     if (!a.empty() && ev::isObject(a[0])) {
@@ -665,10 +677,16 @@ Value aiCreateAgent(Value, std::span<const Value> a) {
 
 Value aiCreateAgentBinding(Value, std::span<const Value> a) {
     auto* b = new HostAgentBinding();
+    ev::Persistent agentP;
     if (!a.empty() && ev::isObject(a[0])) {
         ev::Persistent root(a[0]);
-        Value agV = ev::getProperty(root.get(), "agent");
-        if (auto* ag = unwrapAgent(agV)) { b->agentHost = ag; b->agentRef = ev::Persistent(agV); }
+        agentP.set(ev::getProperty(root.get(), "agent"));
+        if (auto* ag = unwrapAgent(agentP.get())) {
+            b->agentHost = ag;
+            b->agentLife = ag->life;
+        } else {
+            agentP.set(ev::undefined());
+        }
         Value nmV = ev::getProperty(root.get(), "navMesh");
         if (auto* nm = unwrapNavMesh(nmV)) b->navMesh = nm->mesh;
         Value ngV = ev::getProperty(root.get(), "navGrid");
@@ -676,7 +694,7 @@ Value aiCreateAgentBinding(Value, std::span<const Value> a) {
         b->yOffset = static_cast<float>(getDoubleProperty(root.get(), "yOffset", 0.0));
         b->repathInterval = static_cast<float>(getDoubleProperty(root.get(), "repathInterval", 0.0));
     }
-    return makeAgentBindingHandle(b);
+    return attachBindingAgent(makeAgentBindingHandle(b), agentP.get());
 }
 
 } // namespace brogameagent::api

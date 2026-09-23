@@ -1,6 +1,7 @@
 add_library(brogameagent_api STATIC
     api.cpp
     host_class.cpp
+    host_js_callbacks.cpp
     host_ai_game.cpp
     host_ai_navgrid.cpp
     host_ai_navmesh.cpp

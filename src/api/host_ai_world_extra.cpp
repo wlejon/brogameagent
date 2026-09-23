@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace brogameagent::api {
@@ -144,7 +145,7 @@ void decorateWorldExtras(ObjectBuilder& b) {
         const int id = i32At(a, 0);
         const brogameagent::Agent* found = w->world.findById(id);
         if (!found) return ev::null();
-        Value v = w->agentValue(found);
+        Value v = worldAgentValue(self, found);
         return ev::isUndefined(v) ? ev::null() : v;
     });
 
@@ -160,38 +161,49 @@ void decorateWorldExtras(ObjectBuilder& b) {
         const int abilityId = i32At(a, 0);
         if (!ev::isObject(a[1])) return ev::throwTypeError("spec must be an object");
 
+        ev::Persistent selfP(self);
         ev::Persistent spec(a[1]);
         brogameagent::AbilitySpec s;
         s.cooldown = static_cast<float>(getDoubleProperty(spec.get(), "cooldown", 1.0));
         s.manaCost = static_cast<float>(getDoubleProperty(spec.get(), "manaCost", 0.0));
         s.range = static_cast<float>(getDoubleProperty(spec.get(), "range", 0.0));
 
+        // The callback lives on the world handle as `_abilities[abilityId]`
+        // (HostWorld), so an ability closing over whatever owns the world
+        // does not pin it. Registering without a fn clears an earlier one.
         ev::Persistent fn(ev::getProperty(spec.get(), "fn"));
-        if (ev::isFunction(fn.get())) {
-            // The callback is held by the HostWorld as a Persistent so it survives GC.
-            // The world wrapper is NOT permanently rooted to avoid reference cycles;
-            // instead, activeSelf is supplied dynamically during World method dispatch.
-            bool replaced = false;
-            for (auto& e : w->abilityFns) {
-                if (e.first == abilityId) { e.second.set(fn.get()); replaced = true; break; }
+        const bool hasFn = ev::isFunction(fn.get());
+        {
+            ev::Persistent table(ev::getProperty(selfP.get(), "_abilities"));
+            if (!ev::isObject(table.get())) {
+                table.set(ev::createObject());
+                selfP.set(ev::setProperty(selfP.get(), "_abilities", table.get()));
             }
-            if (!replaced) w->abilityFns.emplace_back(abilityId, ev::Persistent(fn.get()));
-
+            ev::setProperty(table.get(), std::to_string(abilityId),
+                            hasFn ? fn.get() : ev::undefined());
+        }
+        if (hasFn) {
             HostWorld* worldHost = w;
             std::weak_ptr<int> life = w->life;
-            s.fn = [worldHost, life, abilityId](brogameagent::Agent& caster,
-                                                brogameagent::World& /*world*/,
-                                                int targetId) {
+            const std::thread::id owner = std::this_thread::get_id();
+            s.fn = [worldHost, life, abilityId, owner](brogameagent::Agent& caster,
+                                                       brogameagent::World& /*world*/,
+                                                       int targetId) {
                 // A cloned World (an MCTS rollout) carries this fn with it and
                 // can outlive the wrapper it was registered on.
                 if (life.expired()) return;
-                ev::Persistent callee(worldHost->abilityFn(abilityId));
-                if (!ev::isFunction(callee.get())) return;
+                // rootParallelSearch rolls clones out on worker threads, and
+                // bronze's runtime (and every Persistent) is per thread.
+                if (std::this_thread::get_id() != owner) return;
+                // Only a World method (ActiveWorldScope) gives the handle
+                // the callback lives on.
                 ev::Persistent worldVal(worldHost->activeSelf.get());
-                if (worldVal.get().isUndefined()) {
-                    worldVal.set(g_worldClass.make(worldHost, [](void*) {}));
-                }
-                ev::Persistent casterVal(worldHost->agentValue(&caster));
+                if (!ev::isObject(worldVal.get())) return;
+                ev::Persistent table(ev::getProperty(worldVal.get(), "_abilities"));
+                if (!ev::isObject(table.get())) return;
+                ev::Persistent callee(ev::getProperty(table.get(), std::to_string(abilityId)));
+                if (!ev::isFunction(callee.get())) return;
+                ev::Persistent casterVal(worldAgentValue(worldVal.get(), &caster));
                 const Value args[3] = {
                     casterVal.get(), worldVal.get(), ev::fromDouble(targetId),
                 };

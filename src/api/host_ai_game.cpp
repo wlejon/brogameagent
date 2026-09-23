@@ -220,6 +220,45 @@ Value aiCreateHexNav(Value, std::span<const Value> a) {
 // World Wrapper
 // ---------------------------------------------------------------------------
 
+Value worldAgentValue(Value worldSelf, const brogameagent::Agent* agent) {
+    HostWorld* w = unwrapWorld(worldSelf);
+    if (!w) return ev::undefined();
+    const HostWorld::Roster* r = w->rosterEntry(agent);
+    if (!r) return ev::undefined();
+    const uint32_t key = r->key;
+    ev::Persistent agents(ev::getProperty(worldSelf, "_agents"));
+    if (!ev::isObject(agents.get())) return ev::undefined();
+    Value v = ev::getElement(agents.get(), key);
+    // `_agents` is reachable from JS; answer only the wrapper of this agent.
+    HostAgent* h = unwrapAgent(v);
+    return (h && &h->agent == agent) ? v : ev::undefined();
+}
+
+namespace {
+
+/// `self._agents`, created on first use. `self` must be rooted by the caller.
+Value worldAgentsTable(ev::Persistent& self) {
+    Value t = ev::getProperty(self.get(), "_agents");
+    if (ev::isObject(t)) return t;
+    ev::Persistent fresh(ev::createObject());
+    self.set(ev::setProperty(self.get(), "_agents", fresh.get()));
+    return fresh.get();
+}
+
+/// Wrappers for `agents` (those on the roster), in order.
+Value worldAgentArray(Value self, const std::vector<const brogameagent::Agent*>& agents) {
+    ev::Persistent selfP(self);
+    std::vector<const brogameagent::Agent*> onRoster;
+    HostWorld* w = unwrapWorld(selfP.get());
+    for (const auto* a : agents) {
+        if (w && w->rosterEntry(a)) onRoster.push_back(a);
+    }
+    return hostArrayOf(onRoster.size(),
+                       [&](size_t i) { return worldAgentValue(selfP.get(), onRoster[i]); });
+}
+
+} // namespace
+
 void decorateWorldProto(ObjectBuilder& b) {
     b.def("addAgent", 1, [](Value self, std::span<const Value> a) -> Value {
         HostWorld* w = unwrapWorld(self);
@@ -227,7 +266,12 @@ void decorateWorldProto(ObjectBuilder& b) {
         HostAgent* ag = unwrapAgent(a[0]);
         if (!ag) return ev::undefined();
         w->world.addAgent(&ag->agent);
-        w->roster.push_back({&ag->agent, ev::Persistent(a[0])});
+        if (w->rosterEntry(&ag->agent)) return ev::undefined();
+        ev::Persistent selfP(self), agentP(a[0]);
+        const uint32_t key = w->nextRosterKey++;
+        ev::Persistent table(worldAgentsTable(selfP));
+        ev::setElement(table.get(), key, agentP.get());
+        w->roster.push_back({&ag->agent, key});
         return ev::undefined();
     });
 
@@ -239,7 +283,11 @@ void decorateWorldProto(ObjectBuilder& b) {
         w->world.removeAgent(&ag->agent);
         for (size_t i = 0; i < w->roster.size(); ++i) {
             if (w->roster[i].agent == &ag->agent) {
+                const uint32_t key = w->roster[i].key;
                 w->roster.erase(w->roster.begin() + static_cast<std::ptrdiff_t>(i));
+                ev::Persistent selfP(self);
+                ev::Persistent table(ev::getProperty(selfP.get(), "_agents"));
+                if (ev::isObject(table.get())) ev::deleteProperty(table.get(), std::to_string(key));
                 break;
             }
         }
@@ -305,10 +353,8 @@ void decorateWorldProto(ObjectBuilder& b) {
         if (!ag) return ev::null();
         auto* enemy = w->world.nearestEnemy(ag->agent);
         if (!enemy) return ev::null();
-        for (const auto& r : w->roster) {
-            if (r.agent == enemy) return r.value.get();
-        }
-        return ev::null();
+        Value v = worldAgentValue(self, enemy);
+        return ev::isUndefined(v) ? ev::null() : v;
     });
 
     b.def("enemiesInRange", 2, [](Value self, std::span<const Value> a) -> Value {
@@ -318,17 +364,8 @@ void decorateWorldProto(ObjectBuilder& b) {
         if (!ag) return hostArrayOf(0, [](size_t) { return ev::null(); });
         float range = static_cast<float>(numAt(a, 1));
         auto enemies = w->world.enemiesInRange(ag->agent, range);
-        // Collect roster entries, not their Values: building the array
-        // allocates, so each wrapper is read from its Persistent only as it
-        // is pushed.
-        std::vector<const HostWorld::Roster*> found;
-        found.reserve(enemies.size());
-        for (auto* e : enemies) {
-            for (const auto& r : w->roster) {
-                if (r.agent == e) { found.push_back(&r); break; }
-            }
-        }
-        return hostArrayOf(found.size(), [&](size_t i) { return found[i]->value.get(); });
+        std::vector<const brogameagent::Agent*> found(enemies.begin(), enemies.end());
+        return worldAgentArray(self, found);
     });
 
     b.def("alliesInRange", 2, [](Value self, std::span<const Value> a) -> Value {
@@ -339,17 +376,13 @@ void decorateWorldProto(ObjectBuilder& b) {
         float range = static_cast<float>(numAt(a, 1));
         float rangeSq = range * range;
         auto allies = w->world.alliesOf(ag->agent);
-        std::vector<const HostWorld::Roster*> found;
+        std::vector<const brogameagent::Agent*> found;
         for (auto* al : allies) {
             float dx = al->x() - ag->agent.x();
             float dz = al->z() - ag->agent.z();
-            if (dx * dx + dz * dz <= rangeSq) {
-                for (const auto& r : w->roster) {
-                    if (r.agent == al) { found.push_back(&r); break; }
-                }
-            }
+            if (dx * dx + dz * dz <= rangeSq) found.push_back(al);
         }
-        return hostArrayOf(found.size(), [&](size_t i) { return found[i]->value.get(); });
+        return worldAgentArray(self, found);
     });
 
     b.accessor("damageEvents", [](Value self, std::span<const Value>) -> Value {

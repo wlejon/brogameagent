@@ -37,40 +37,43 @@ uint32_t arrayLength(Value v) {
 
 // ─── JS-callback adapters ──────────────────────────────────────────────────
 //
-// A bronze ev::Persistent is itself a GC root, so unlike the QuickJS
-// originals these need no gc_mark hook: holding the Persistent is what keeps
-// the callback alive.
+// Each holds JsCallbackSlots, not the functions: the functions live on the
+// owning search's JS object and are bound only while one of its methods runs
+// (host_js_callbacks.h). An unbound slot answers the neutral default — a
+// default action, uniform weights, a 0 value, an option that never starts.
 
 class JsRolloutPolicy : public bgm::IRolloutPolicy {
 public:
-    explicit JsRolloutPolicy(Value fn) : fn_(fn) {}
+    explicit JsRolloutPolicy(JsSlotPtr fn) : fn_(std::move(fn)) {}
 
     bgm::CombatAction choose(brogameagent::Agent& self,
                              brogameagent::World& world) const override {
+        if (!fn_->bound()) return {};
         ev::Persistent selfV(buildAgentFields(self));
         ev::Persistent worldV(buildWorldView(world));
         Value args[2] = { selfV.get(), worldV.get() };
-        auto r = ev::call(fn_.get(), ev::undefined(), args);
+        auto r = fn_->call(args);
         if (r.thrown || !ev::isObject(r.value)) return {};
         return parseCombatAction(r.value);
     }
 
 private:
-    ev::Persistent fn_;
+    JsSlotPtr fn_;
 };
 
 class JsPrior : public bgm::IPrior {
 public:
-    explicit JsPrior(Value fn) : fn_(fn) {}
+    explicit JsPrior(JsSlotPtr fn) : fn_(std::move(fn)) {}
 
     std::vector<float> score(const brogameagent::Agent& self,
                              const brogameagent::World& world,
                              const std::vector<bgm::CombatAction>& actions) const override {
+        if (!fn_->bound()) return std::vector<float>(actions.size(), 1.0f);
         ev::Persistent selfV(buildAgentFields(self));
         ev::Persistent worldV(buildWorldView(world));
         ev::Persistent actsV(makeCombatActionArray(actions));
         Value args[3] = { selfV.get(), worldV.get(), actsV.get() };
-        auto r = ev::call(fn_.get(), ev::undefined(), args);
+        auto r = fn_->call(args);
 
         std::vector<float> weights(actions.size(), 1.0f);
         if (!r.thrown && ev::isObject(r.value)) {
@@ -88,67 +91,73 @@ public:
     }
 
 private:
-    ev::Persistent fn_;
+    JsSlotPtr fn_;
 };
+
+// Evaluators answer a clamped [-1, 1] score; 0 when unbound or non-numeric.
+float clampedScore(const ev::CallResult& r) {
+    if (r.thrown || !ev::isNumber(r.value)) return 0.0f;
+    double d = ev::toDouble(r.value);
+    if (!std::isfinite(d)) return 0.0f;
+    return static_cast<float>(std::clamp(d, -1.0, 1.0));
+}
 
 class JsEvaluator : public bgm::IEvaluator {
 public:
-    explicit JsEvaluator(Value fn) : fn_(fn) {}
+    explicit JsEvaluator(JsSlotPtr fn) : fn_(std::move(fn)) {}
 
     float evaluate(const brogameagent::World& world, int heroId) const override {
+        if (!fn_->bound()) return 0.0f;
         ev::Persistent worldV(buildWorldView(world));
         Value args[2] = { worldV.get(), ev::fromDouble(heroId) };
-        auto r = ev::call(fn_.get(), ev::undefined(), args);
-        if (r.thrown || !ev::isNumber(r.value)) return 0.0f;
-        double d = ev::toDouble(r.value);
-        if (!std::isfinite(d)) return 0.0f;
-        return static_cast<float>(std::clamp(d, -1.0, 1.0));
+        return clampedScore(fn_->call(args));
     }
 
 private:
-    ev::Persistent fn_;
+    JsSlotPtr fn_;
 };
 
 class JsTeamEvaluator : public bgm::ITeamEvaluator {
 public:
-    explicit JsTeamEvaluator(Value fn) : fn_(fn) {}
+    explicit JsTeamEvaluator(JsSlotPtr fn) : fn_(std::move(fn)) {}
 
     float evaluate(const brogameagent::World& world, int teamId) const override {
+        if (!fn_->bound()) return 0.0f;
         ev::Persistent worldV(buildWorldView(world));
         Value args[2] = { worldV.get(), ev::fromDouble(teamId) };
-        auto r = ev::call(fn_.get(), ev::undefined(), args);
-        if (r.thrown || !ev::isNumber(r.value)) return 0.0f;
-        double d = ev::toDouble(r.value);
-        if (!std::isfinite(d)) return 0.0f;
-        return static_cast<float>(std::clamp(d, -1.0, 1.0));
+        return clampedScore(fn_->call(args));
     }
 
 private:
-    ev::Persistent fn_;
+    JsSlotPtr fn_;
 };
 
+// An unbound option never starts and, if running, ends at once.
 class JsOption : public bgm::Option {
 public:
-    JsOption(std::string name, Value canInit, Value step, Value shouldTerm)
-        : name_(std::move(name)), canInit_(canInit), step_(step), shouldTerm_(shouldTerm) {}
+    JsOption(std::string name, JsSlotPtr canInit, JsSlotPtr step, JsSlotPtr shouldTerm)
+        : name_(std::move(name)), canInit_(std::move(canInit)), step_(std::move(step)),
+          shouldTerm_(std::move(shouldTerm)) {}
 
     const std::string& name() const override { return name_; }
 
     bool can_initiate(const brogameagent::Agent& self,
                       const brogameagent::World& world) const override {
+        if (!canInit_->bound()) return false;
         ev::Persistent sv(buildAgentFields(self));
         ev::Persistent wv(buildWorldView(world));
         Value args[2] = { sv.get(), wv.get() };
-        auto r = ev::call(canInit_.get(), ev::undefined(), args);
+        auto r = canInit_->call(args);
         return !r.thrown && ev::toBool(r.value);
     }
 
     bgm::CombatAction step(brogameagent::Agent& self, brogameagent::World& world,
                            int ticksInOption) const override {
+        if (!step_->bound()) return {};
         ev::Persistent sv(buildAgentFields(self));
         ev::Persistent wv(buildWorldView(world));
         Value args[3] = { sv.get(), wv.get(), ev::fromDouble(ticksInOption) };
-        auto r = ev::call(step_.get(), ev::undefined(), args);
+        auto r = step_->call(args);
         if (r.thrown || !ev::isObject(r.value)) return {};
         return parseCombatAction(r.value);
     }
@@ -156,44 +165,46 @@ public:
     bool should_terminate(const brogameagent::Agent& self,
                           const brogameagent::World& world,
                           int ticksInOption) const override {
+        if (!shouldTerm_->bound()) return true;
         ev::Persistent sv(buildAgentFields(self));
         ev::Persistent wv(buildWorldView(world));
         Value args[3] = { sv.get(), wv.get(), ev::fromDouble(ticksInOption) };
-        auto r = ev::call(shouldTerm_.get(), ev::undefined(), args);
+        auto r = shouldTerm_->call(args);
         return !r.thrown && ev::toBool(r.value);
     }
 
 private:
     std::string name_;
-    ev::Persistent canInit_;
-    ev::Persistent step_;
-    ev::Persistent shouldTerm_;
+    JsSlotPtr canInit_, step_, shouldTerm_;
 };
 
 class JsTeamOption : public bgm::TeamOption {
 public:
-    JsTeamOption(std::string name, Value canInit, Value step, Value shouldTerm)
-        : name_(std::move(name)), canInit_(canInit), step_(step), shouldTerm_(shouldTerm) {}
+    JsTeamOption(std::string name, JsSlotPtr canInit, JsSlotPtr step, JsSlotPtr shouldTerm)
+        : name_(std::move(name)), canInit_(std::move(canInit)), step_(std::move(step)),
+          shouldTerm_(std::move(shouldTerm)) {}
 
     const std::string& name() const override { return name_; }
 
     bool can_initiate(const std::vector<brogameagent::Agent*>& heroes,
                       const brogameagent::World& world) const override {
+        if (!canInit_->bound()) return false;
         ev::Persistent hv(buildHeroesView(heroes));
         ev::Persistent wv(buildWorldView(world));
         Value args[2] = { hv.get(), wv.get() };
-        auto r = ev::call(canInit_.get(), ev::undefined(), args);
+        auto r = canInit_->call(args);
         return !r.thrown && ev::toBool(r.value);
     }
 
     std::vector<bgm::CombatAction> step(const std::vector<brogameagent::Agent*>& heroes,
                                         brogameagent::World& world,
                                         int ticksInOption) const override {
+        std::vector<bgm::CombatAction> out(heroes.size());
+        if (!step_->bound()) return out;
         ev::Persistent hv(buildHeroesView(heroes));
         ev::Persistent wv(buildWorldView(world));
         Value args[3] = { hv.get(), wv.get(), ev::fromDouble(ticksInOption) };
-        auto r = ev::call(step_.get(), ev::undefined(), args);
-        std::vector<bgm::CombatAction> out(heroes.size());
+        auto r = step_->call(args);
         if (!r.thrown && ev::isObject(r.value)) {
             out = parseCombatActionArray(r.value);
             out.resize(heroes.size());
@@ -204,18 +215,17 @@ public:
     bool should_terminate(const std::vector<brogameagent::Agent*>& heroes,
                           const brogameagent::World& world,
                           int ticksInOption) const override {
+        if (!shouldTerm_->bound()) return true;
         ev::Persistent hv(buildHeroesView(heroes));
         ev::Persistent wv(buildWorldView(world));
         Value args[3] = { hv.get(), wv.get(), ev::fromDouble(ticksInOption) };
-        auto r = ev::call(shouldTerm_.get(), ev::undefined(), args);
+        auto r = shouldTerm_->call(args);
         return !r.thrown && ev::toBool(r.value);
     }
 
 private:
     std::string name_;
-    ev::Persistent canInit_;
-    ev::Persistent step_;
-    ev::Persistent shouldTerm_;
+    JsSlotPtr canInit_, step_, shouldTerm_;
 };
 
 } // namespace
@@ -376,12 +386,12 @@ Value buildHeroesView(const std::vector<brogameagent::Agent*>& heroes) {
 // Option parsing
 // ---------------------------------------------------------------------------
 
-std::shared_ptr<bgm::IRolloutPolicy> parseRolloutPolicy(Value opts) {
+std::shared_ptr<bgm::IRolloutPolicy> parseRolloutPolicy(Value opts, JsCallbackSet& cbs) {
     if (!ev::isObject(opts)) return nullptr;
     ev::Persistent root(opts);
     Value v = ev::getProperty(root.get(), "rolloutPolicy");
     if (auto* cell = unwrapRolloutCell(v)) return cell->p;
-    if (ev::isFunction(v)) return std::make_shared<JsRolloutPolicy>(v);
+    if (ev::isFunction(v)) return std::make_shared<JsRolloutPolicy>(cbs.add(v));
     if (!ev::isString(v)) return nullptr;
     std::string kind = ev::toUtf8(v);
     if (kind == "aggressive") return std::make_shared<bgm::AggressiveRollout>();
@@ -398,15 +408,15 @@ bgm::OpponentPolicy parseOpponentPolicy(Value opts) {
     return {};
 }
 
-std::shared_ptr<bgm::IPrior> parsePrior(Value opts) {
+std::shared_ptr<bgm::IPrior> parsePrior(Value opts, JsCallbackSet& cbs) {
     if (!ev::isObject(opts)) return nullptr;
     ev::Persistent root(opts);
-    Value pv = ev::getProperty(root.get(), "prior");
-    if (auto sp = extractPriorShared(pv)) return sp;
-    if (auto* cell = unwrapPriorCell(pv)) return cell->p;
-    if (ev::isFunction(pv)) return std::make_shared<JsPrior>(pv);
-    if (!ev::isString(pv)) return nullptr;
-    std::string kind = ev::toUtf8(pv);
+    ev::Persistent pv(ev::getProperty(root.get(), "prior"));
+    if (auto sp = extractPriorShared(pv.get())) return sp;
+    if (auto* cell = unwrapPriorCell(pv.get())) return cell->p;
+    if (ev::isFunction(pv.get())) return std::make_shared<JsPrior>(cbs.add(pv.get()));
+    if (!ev::isString(pv.get())) return nullptr;
+    std::string kind = ev::toUtf8(pv.get());
     if (kind == "uniform")    return std::make_shared<bgm::UniformPrior>();
     if (kind == "attackBias") return std::make_shared<bgm::AttackBiasPrior>();
     if (kind == "tacticMatch") {
@@ -422,25 +432,25 @@ std::shared_ptr<bgm::IPrior> parsePrior(Value opts) {
     return nullptr;
 }
 
-std::shared_ptr<bgm::IEvaluator> parseHeroEvaluator(Value opts) {
+std::shared_ptr<bgm::IEvaluator> parseHeroEvaluator(Value opts, JsCallbackSet& cbs) {
     if (!ev::isObject(opts)) return nullptr;
     ev::Persistent root(opts);
-    Value v = ev::getProperty(root.get(), "evaluator");
-    if (auto se = extractHeroEvaluatorShared(v)) return se;
-    if (auto* cell = unwrapEvaluatorCell(v)) return cell->p;
-    if (ev::isFunction(v)) return std::make_shared<JsEvaluator>(v);
-    if (ev::isString(v) && ev::toUtf8(v) == "hpDelta") {
+    ev::Persistent v(ev::getProperty(root.get(), "evaluator"));
+    if (auto se = extractHeroEvaluatorShared(v.get())) return se;
+    if (auto* cell = unwrapEvaluatorCell(v.get())) return cell->p;
+    if (ev::isFunction(v.get())) return std::make_shared<JsEvaluator>(cbs.add(v.get()));
+    if (ev::isString(v.get()) && ev::toUtf8(v.get()) == "hpDelta") {
         return std::make_shared<bgm::HpDeltaEvaluator>();
     }
     return nullptr;
 }
 
-std::shared_ptr<bgm::ITeamEvaluator> parseTeamEvaluator(Value opts) {
+std::shared_ptr<bgm::ITeamEvaluator> parseTeamEvaluator(Value opts, JsCallbackSet& cbs) {
     if (!ev::isObject(opts)) return nullptr;
     ev::Persistent root(opts);
     Value v = ev::getProperty(root.get(), "evaluator");
     if (auto* cell = unwrapTeamEvaluatorCell(v)) return cell->p;
-    if (ev::isFunction(v)) return std::make_shared<JsTeamEvaluator>(v);
+    if (ev::isFunction(v)) return std::make_shared<JsTeamEvaluator>(cbs.add(v));
     if (!ev::isString(v)) return nullptr;
     std::string kind = ev::toUtf8(v);
     if (kind == "teamHpDelta")   return std::make_shared<bgm::TeamHpDeltaEvaluator>();
@@ -449,7 +459,7 @@ std::shared_ptr<bgm::ITeamEvaluator> parseTeamEvaluator(Value opts) {
     return nullptr;
 }
 
-std::vector<std::shared_ptr<bgm::Option>> parseOptionArray(Value opts) {
+std::vector<std::shared_ptr<bgm::Option>> parseOptionArray(Value opts, JsCallbackSet& cbs) {
     std::vector<std::shared_ptr<bgm::Option>> out;
     if (!ev::isObject(opts)) return out;
     ev::Persistent root(opts);
@@ -457,14 +467,17 @@ std::vector<std::shared_ptr<bgm::Option>> parseOptionArray(Value opts) {
     uint32_t n = arrayLength(arr.get());
     out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
-        if (auto* cell = unwrapOptionCell(ev::getElement(arr.get(), i))) {
-            if (cell->opt) out.push_back(cell->opt);
-        }
+        ev::Persistent el(ev::getElement(arr.get(), i));
+        auto* cell = unwrapOptionCell(el.get());
+        if (!cell || !cell->opt) continue;
+        out.push_back(cell->opt);
+        cbs.adopt(el.get(), cell->slots);
     }
     return out;
 }
 
-std::vector<std::shared_ptr<bgm::TeamOption>> parseTeamOptionArray(Value opts) {
+std::vector<std::shared_ptr<bgm::TeamOption>> parseTeamOptionArray(Value opts,
+                                                                  JsCallbackSet& cbs) {
     std::vector<std::shared_ptr<bgm::TeamOption>> out;
     if (!ev::isObject(opts)) return out;
     ev::Persistent root(opts);
@@ -472,30 +485,36 @@ std::vector<std::shared_ptr<bgm::TeamOption>> parseTeamOptionArray(Value opts) {
     uint32_t n = arrayLength(arr.get());
     out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
-        if (auto* cell = unwrapTeamOptionCell(ev::getElement(arr.get(), i))) {
-            if (cell->opt) out.push_back(cell->opt);
-        }
+        ev::Persistent el(ev::getElement(arr.get(), i));
+        auto* cell = unwrapTeamOptionCell(el.get());
+        if (!cell || !cell->opt) continue;
+        out.push_back(cell->opt);
+        cbs.adopt(el.get(), cell->slots);
     }
     return out;
 }
 
-bgm::Commander::AssignFn makeJsAssigner(Value fn) {
+bgm::Commander::AssignFn makeJsAssigner(Value fn, JsCallbackSet& cbs) {
     if (!ev::isFunction(fn)) return {};
-    auto held = std::make_shared<ev::Persistent>(fn);
-    return [held](const std::vector<brogameagent::Agent*>& heroes,
+    JsSlotPtr slot = cbs.add(fn);
+    return [slot](const std::vector<brogameagent::Agent*>& heroes,
                   const brogameagent::World& world) -> std::vector<int> {
+        std::vector<int> out(heroes.size(), 0);
+        if (!slot->bound()) return out;
         ev::Persistent hv(buildHeroesView(heroes));
         ev::Persistent wv(buildWorldView(world));
         Value args[2] = { hv.get(), wv.get() };
-        auto r = ev::call(held->get(), ev::undefined(), args);
-        std::vector<int> out(heroes.size(), 0);
+        auto r = slot->call(args);
         if (!r.thrown && ev::isObject(r.value)) {
             ev::Persistent res(r.value);
             uint32_t len = arrayLength(res.get());
             uint32_t n = std::min<uint32_t>(len, static_cast<uint32_t>(heroes.size()));
             for (uint32_t i = 0; i < n; ++i) {
                 Value el = ev::getElement(res.get(), i);
-                out[i] = ev::isNumber(el) ? static_cast<int>(ev::toDouble(el)) : 0;
+                const double d = ev::isNumber(el) ? ev::toDouble(el) : 0.0;
+                // A NaN / out-of-int role index is 0, not an undefined cast.
+                out[i] = (std::isfinite(d) && d >= 0.0 && d <= 2147483647.0)
+                             ? static_cast<int>(d) : 0;
             }
         }
         return out;
@@ -503,19 +522,32 @@ bgm::Commander::AssignFn makeJsAssigner(Value fn) {
 }
 
 std::shared_ptr<bgm::Option> makeJsOption(std::string name, Value canInit,
-                                          Value step, Value shouldTerm) {
+                                          Value step, Value shouldTerm, JsCallbackSet& cbs) {
     if (!ev::isFunction(canInit) || !ev::isFunction(step) || !ev::isFunction(shouldTerm)) {
         return nullptr;
     }
-    return std::make_shared<JsOption>(std::move(name), canInit, step, shouldTerm);
+    JsSlotPtr ci = cbs.add(canInit);
+    JsSlotPtr st = cbs.add(step);
+    JsSlotPtr te = cbs.add(shouldTerm);
+    return std::make_shared<JsOption>(std::move(name), ci, st, te);
 }
 
 std::shared_ptr<bgm::TeamOption> makeJsTeamOption(std::string name, Value canInit,
-                                                  Value step, Value shouldTerm) {
+                                                  Value step, Value shouldTerm,
+                                                  JsCallbackSet& cbs) {
     if (!ev::isFunction(canInit) || !ev::isFunction(step) || !ev::isFunction(shouldTerm)) {
         return nullptr;
     }
-    return std::make_shared<JsTeamOption>(std::move(name), canInit, step, shouldTerm);
+    JsSlotPtr ci = cbs.add(canInit);
+    JsSlotPtr st = cbs.add(step);
+    JsSlotPtr te = cbs.add(shouldTerm);
+    return std::make_shared<JsTeamOption>(std::move(name), ci, st, te);
+}
+
+WorldArgScope::WorldArgScope(Value v) : world_(v) {
+    if (HostWorld* w = unwrapWorld(world_.get())) {
+        scope_ = std::make_unique<ActiveWorldScope>(w, world_.get());
+    }
 }
 
 } // namespace brogameagent::api

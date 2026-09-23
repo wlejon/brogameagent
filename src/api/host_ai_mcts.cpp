@@ -26,17 +26,42 @@ namespace {
 struct GenericLive {
     ev::Persistent self;  // the search object stays alive while it runs
     ev::Persistent env, snapshot, restore, step, legal, observe, prior, value;
+    ev::Persistent snapshots;  // self._snapshots
+    bool backendOk = false;    // self._backend is still the backend the closures use
+};
+
+// The env snapshots the search tree keeps are JS values, so they too live on
+// the search's JS object — `_snapshots[slot]` — and a tree node holds only a
+// SnapshotRef naming the slot. A snapshot that refers back to its env (a
+// clone of the game, `{ game: this, ... }`) is then one more traced edge
+// rather than a root pinning the env, and the search, for as long as the
+// tree exists. A released slot is cleared on the JS side at the next
+// LiveScope (a node can be dropped outside one: reset(), or the finalizer).
+struct SnapshotTable {
+    std::vector<uint32_t> released;  // dropped by the tree, JS element not yet cleared
+    std::vector<uint32_t> free;      // cleared, ready for reuse
+    uint32_t next = 0;
+};
+
+struct SnapshotRef {
+    std::shared_ptr<SnapshotTable> table;
+    uint32_t slot = 0;
+    SnapshotRef(std::shared_ptr<SnapshotTable> t, uint32_t s) : table(std::move(t)), slot(s) {}
+    ~SnapshotRef() { table->released.push_back(slot); }
+    SnapshotRef(const SnapshotRef&) = delete;
+    SnapshotRef& operator=(const SnapshotRef&) = delete;
 };
 
 struct HostGenericMcts {
     uint32_t tag = kHostGenericMctsTag;
+    std::shared_ptr<SnapshotTable> snapshots = std::make_shared<SnapshotTable>();
     std::unique_ptr<bgm::GenericMcts> mcts;
     GenericLive* live = nullptr;  // non-null only inside a LiveScope
 
-    // The backend never refers back to the search, so holding it natively
-    // makes no cycle; it keeps the raw backend pointer the native
-    // prior/value closures use alive.
-    ev::Persistent backendRef;
+    // opts.backend rides on the handle as `_backend`, like the env; the
+    // native prior/value closures use this pointer only while a LiveScope
+    // has checked `_backend` still names it.
+    learn::IInferenceBackend* backend = nullptr;
 
     int numActions = 0;
 };
@@ -63,6 +88,23 @@ public:
         live_.prior.set(ev::isFunction(p) ? p : ev::undefined());
         Value v = ev::getProperty(selfP.get(), "_valueFn");
         live_.value.set(ev::isFunction(v) ? v : ev::undefined());
+        if (h_->backend) {
+            Value b = ev::getProperty(selfP.get(), "_backend");
+            live_.backendOk = inferenceBackendFromJS(b) == h_->backend;
+        }
+
+        live_.snapshots.set(ev::getProperty(selfP.get(), "_snapshots"));
+        if (!ev::isObject(live_.snapshots.get())) {
+            // Replaced from JS: every slot the tree holds is gone with it.
+            h_->mcts->reset();
+            SnapshotTable& t = *h_->snapshots;
+            t.released.clear();
+            t.free.clear();
+            t.next = 0;
+            live_.snapshots.set(ev::makeArray(0));
+            live_.self.set(ev::setProperty(live_.self.get(), "_snapshots", live_.snapshots.get()));
+        }
+        clearReleased();
         h_->live = &live_;
     }
     ~LiveScope() { h_->live = prev_; }
@@ -70,6 +112,16 @@ public:
     LiveScope& operator=(const LiveScope&) = delete;
 
 private:
+    void clearReleased() {
+        SnapshotTable& t = *h_->snapshots;
+        while (!t.released.empty()) {
+            const uint32_t slot = t.released.back();
+            t.released.pop_back();
+            live_.snapshots.set(ev::setElement(live_.snapshots.get(), slot, ev::undefined()));
+            t.free.push_back(slot);
+        }
+    }
+
     HostGenericMcts* h_;
     GenericLive* prev_;
     GenericLive live_;
@@ -81,9 +133,13 @@ HostGenericMcts* unwrapGenericMcts(Value v) {
     return (h && h->tag == kHostGenericMctsTag) ? h : nullptr;
 }
 
+// The classic family's JS rollout policy / prior / evaluator / options live
+// on the handle as `_callbacks`; `slots` are the adapters' ends of them, bound
+// by a SearchScope in each method that runs the search.
 struct HostClassicMcts {
     uint32_t tag = kHostClassicMctsTag;
     std::unique_ptr<bgm::Mcts> mcts;
+    std::vector<JsSlotPtr> slots;
 };
 
 HostClassicMcts* unwrapClassicMcts(Value v) {
@@ -95,6 +151,7 @@ HostClassicMcts* unwrapClassicMcts(Value v) {
 struct HostDecoupledMcts {
     uint32_t tag = kHostDecoupledMctsTag;
     std::unique_ptr<bgm::DecoupledMcts> mcts;
+    std::vector<JsSlotPtr> slots;
 };
 
 HostDecoupledMcts* unwrapDecoupledMcts(Value v) {
@@ -106,6 +163,7 @@ HostDecoupledMcts* unwrapDecoupledMcts(Value v) {
 struct HostTeamMcts {
     uint32_t tag = kHostTeamMctsTag;
     std::unique_ptr<bgm::TeamMcts> mcts;
+    std::vector<JsSlotPtr> slots;
 };
 
 HostTeamMcts* unwrapTeamMcts(Value v) {
@@ -118,6 +176,7 @@ struct HostOptionMcts {
     uint32_t tag = kHostOptionMctsTag;
     std::unique_ptr<bgm::OptionMcts> mcts;
     std::vector<std::shared_ptr<bgm::Option>> options;
+    std::vector<JsSlotPtr> slots;
 };
 
 HostOptionMcts* unwrapOptionMcts(Value v) {
@@ -135,6 +194,27 @@ std::vector<float> readFloatsFromValue(Value v) {
 Value makeInt32ArrayFromInts(const std::vector<int>& v) {
     std::vector<int32_t> tmp(v.begin(), v.end());
     return makeInt32Array(tmp.data(), tmp.size());
+}
+
+// The backend's native prior/value, used only while a LiveScope has checked
+// that `_backend` still names the backend `h->backend` points at.
+void installBackendFns(HostGenericMcts* h, bool prior, bool value) {
+    if (!h->backend) return;
+    if (prior) {
+        h->mcts->set_prior_fn([h, fn = makeNativePriorFn(h->backend)](
+                                  const std::vector<float>& obs,
+                                  const std::vector<int>& legal) -> std::vector<float> {
+            if (!h->live || !h->live->backendOk) return {};
+            return fn(obs, legal);
+        });
+    }
+    if (value) {
+        h->mcts->set_value_fn([h, fn = makeNativeValueFn(h->backend)](
+                                  const std::vector<float>& obs) -> float {
+            if (!h->live || !h->live->backendOk) return 0.0f;
+            return fn(obs);
+        });
+    }
 }
 
 // Point the search's prior at the JS `_priorFn` (read through `live` at
@@ -326,7 +406,12 @@ void ensureAIMctsClassesInstalled() {
             auto* w = unwrapWorld(a[0]);
             auto* hero = unwrapAgent(a[1]);
             if (!w || !hero) return ev::null();
-            return makeCombatAction(h->mcts->search(w->world, hero->agent));
+            bgm::CombatAction act;
+            {
+                SearchScope scope(self, h->slots, a[0]);
+                act = h->mcts->search(w->world, hero->agent);
+            }
+            return makeCombatAction(act);
         });
 
         b.def("advanceRoot", 1, [](Value self, std::span<const Value> a) -> Value {
@@ -364,7 +449,11 @@ void ensureAIMctsClassesInstalled() {
             auto* hero = unwrapAgent(a[1]);
             auto* opp = unwrapAgent(a[2]);
             if (!w || !hero || !opp) return ev::throwTypeError("search: invalid world, hero or opp");
-            auto joint = h->mcts->search(w->world, hero->agent, opp->agent);
+            bgm::DecoupledMcts::Joint joint;
+            {
+                SearchScope scope(self, h->slots, a[0]);
+                joint = h->mcts->search(w->world, hero->agent, opp->agent);
+            }
             ObjectBuilder o;
             o.set("hero", makeCombatAction(joint.hero));
             o.set("opp", makeCombatAction(joint.opp));
@@ -406,7 +495,14 @@ void ensureAIMctsClassesInstalled() {
             if (!h || !h->mcts || a.size() < 2) return ev::throwTypeError("search(world, heroes)");
             auto* w = unwrapWorld(a[0]);
             if (!w) return ev::throwTypeError("search: invalid world");
-            auto joint = h->mcts->search(w->world, parseHeroes(a[1]));
+            // parseHeroes allocates, so self and the world are rooted first.
+            ev::Persistent selfP(self), worldP(a[0]);
+            auto heroes = parseHeroes(a[1]);
+            bgm::TeamMcts::JointAction joint;
+            {
+                SearchScope scope(selfP.get(), h->slots, worldP.get());
+                joint = h->mcts->search(w->world, heroes);
+            }
             return makeCombatActionArray(joint.per_hero);
         });
 
@@ -455,7 +551,11 @@ void ensureAIMctsClassesInstalled() {
             auto* w = unwrapWorld(a[0]);
             auto* hero = unwrapAgent(a[1]);
             if (!w || !hero) return ev::null();
-            const bgm::Option* opt = h->mcts->search(w->world, hero->agent);
+            const bgm::Option* opt = nullptr;
+            {
+                SearchScope scope(self, h->slots, a[0]);
+                opt = h->mcts->search(w->world, hero->agent);
+            }
             return opt ? ev::fromUtf8(opt->name()) : ev::null();
         });
 
@@ -493,10 +593,11 @@ void ensureAIMctsClassesInstalled() {
             auto* hero = unwrapAgent(a[1]);
             if (!w || !hero) return ev::throwTypeError("executeOption: invalid world/hero");
             std::string target;
-            if (ev::isString(a[2])) target = ev::toUtf8(a[2]);
-            else if (auto* cell = unwrapOptionCell(a[2])) target = cell->opt ? cell->opt->name() : "";
+            if (auto* cell = unwrapOptionCell(a[2])) target = cell->opt ? cell->opt->name() : "";
+            else if (ev::isString(a[2])) target = ev::toUtf8(a[2]);
             for (const auto& sp : h->options) {
                 if (sp && sp->name() == target) {
+                    SearchScope scope(self, h->slots, a[0]);
                     return ev::fromDouble(h->mcts->execute_option(w->world, hero->agent, *sp));
                 }
             }
@@ -581,16 +682,25 @@ void installAIMcts(ObjectBuilder& game) {
             if (!ptr->live) return {};
             auto res = ev::call(ptr->live->snapshot.get(), ptr->live->env.get(), {});
             if (res.thrown) return {};
-            // The snapshot is a JS value, so it has to be held as a root while
-            // the search keeps it — a bare Value would go stale at the next
-            // collection.
-            return std::any(std::make_shared<ev::Persistent>(res.value));
+            // Stored in self._snapshots (SnapshotTable), not in a root.
+            ev::Persistent snap(res.value);
+            SnapshotTable& t = *ptr->snapshots;
+            uint32_t slot;
+            if (!t.free.empty()) {
+                slot = t.free.back();
+                t.free.pop_back();
+            } else {
+                slot = t.next++;
+            }
+            ptr->live->snapshots.set(
+                ev::setElement(ptr->live->snapshots.get(), slot, snap.get()));
+            return std::any(std::make_shared<SnapshotRef>(ptr->snapshots, slot));
         };
         envBridge.restore_fn = [ptr = h.get()](const std::any& s) {
             if (!ptr->live || !s.has_value()) return;
-            const auto* held = std::any_cast<std::shared_ptr<ev::Persistent>>(&s);
+            const auto* held = std::any_cast<std::shared_ptr<SnapshotRef>>(&s);
             if (!held || !*held) return;
-            Value sv = (*held)->get();
+            Value sv = ev::getElement(ptr->live->snapshots.get(), (*held)->slot);
             ev::call(ptr->live->restore.get(), ptr->live->env.get(), std::span<const Value>(&sv, 1));
         };
         envBridge.step_fn = [ptr = h.get()](int action) -> bgm::GenericStepResult {
@@ -611,15 +721,15 @@ void installAIMcts(ObjectBuilder& game) {
             if (res.thrown || !ev::isObject(res.value)) return {};
             ev::Persistent arr(res.value);
             std::vector<int> acts;
-            Value lenV = ev::getProperty(arr.get(), "length");
-            if (ev::isNumber(lenV)) {
-                uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
-                acts.reserve(n);
-                for (uint32_t i = 0; i < n; ++i) {
-                    Value el = ev::getElement(arr.get(), i);
-                    if (ev::isNumber(el)) {
-                        acts.push_back(static_cast<int>(ev::toDouble(el)));
-                    }
+            const uint32_t n = toLength(ev::getProperty(arr.get(), "length"));
+            acts.reserve(reserveHint(n));
+            for (uint32_t i = 0; i < n; ++i) {
+                Value el = ev::getElement(arr.get(), i);
+                // The search indexes per-action arrays with these, so an
+                // action outside [0, numActions) is dropped here.
+                const double d = ev::isNumber(el) ? ev::toDouble(el) : -1.0;
+                if (d >= 0.0 && d < static_cast<double>(ptr->numActions)) {
+                    acts.push_back(static_cast<int>(d));
                 }
             }
             return acts;
@@ -634,6 +744,18 @@ void installAIMcts(ObjectBuilder& game) {
         h->mcts = std::make_unique<bgm::GenericMcts>(std::move(envBridge));
         h->mcts->set_config(parseGenericConfig(opts.get(), h->mcts->config()));
 
+        // A DirectBackend / ServerBackend fills in whichever of prior/value
+        // was not given explicitly — an explicit priorFn/valueFn always wins.
+        ev::Persistent backendV(ev::getProperty(opts.get(), "backend"));
+        if (ev::isObject(backendV.get())) {
+            h->backend = inferenceBackendFromJS(backendV.get());
+            if (!h->backend) {
+                return ev::throwTypeError(
+                    "createGenericMcts: opts.backend must be a DirectBackend/ServerBackend "
+                    "(bro.ai.game.learn.createDirectBackend/createServerBackend)");
+            }
+        }
+
         ev::Persistent priorFn(ev::getProperty(opts.get(), "priorFn"));
         const bool hasPrior = ev::isFunction(priorFn.get());
         rewireGenericPrior(h.get(), hasPrior);
@@ -641,70 +763,65 @@ void installAIMcts(ObjectBuilder& game) {
         ev::Persistent valueFn(ev::getProperty(opts.get(), "valueFn"));
         const bool hasValue = ev::isFunction(valueFn.get());
         rewireGenericValue(h.get(), hasValue);
-
-        // A DirectBackend / ServerBackend fills in whichever of prior/value
-        // was not given explicitly — an explicit priorFn/valueFn always wins.
-        Value bv = ev::getProperty(opts.get(), "backend");
-        if (ev::isObject(bv)) {
-            auto* backend = inferenceBackendFromJS(bv);
-            if (!backend) {
-                return ev::throwTypeError(
-                    "createGenericMcts: opts.backend must be a DirectBackend/ServerBackend "
-                    "(bro.ai.game.learn.createDirectBackend/createServerBackend)");
-            }
-            h->backendRef = ev::Persistent(bv);
-            if (!hasPrior) h->mcts->set_prior_fn(makeNativePriorFn(backend));
-            if (!hasValue) h->mcts->set_value_fn(makeNativeValueFn(backend));
-        }
+        installBackendFns(h.get(), !hasPrior, !hasValue);
 
         auto* raw = h.release();
         ev::Persistent self(g_genericMctsClass.make(
             raw, [](void* p) { delete static_cast<HostGenericMcts*>(p); }));
+        ev::Persistent snapshots(ev::makeArray(0));
         self.set(ev::setProperty(self.get(), "_env", envObj.get()));
         self.set(ev::setProperty(self.get(), "_priorFn", hasPrior ? priorFn.get() : ev::undefined()));
         self.set(ev::setProperty(self.get(), "_valueFn", hasValue ? valueFn.get() : ev::undefined()));
+        self.set(ev::setProperty(self.get(), "_backend", raw->backend ? backendV.get() : ev::undefined()));
+        self.set(ev::setProperty(self.get(), "_snapshots", snapshots.get()));
         return self.get();
     });
 
     game.def("createMcts", 1, [](Value, std::span<const Value> a) -> Value {
         auto cell = std::make_unique<HostClassicMcts>();
         cell->mcts = std::make_unique<bgm::Mcts>();
+        JsCallbackSet cbs;
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent opts(a[0]);
             cell->mcts->set_config(parseMctsConfig(opts.get()));
-            if (auto p = parseRolloutPolicy(opts.get())) cell->mcts->set_rollout_policy(std::move(p));
+            if (auto p = parseRolloutPolicy(opts.get(), cbs)) cell->mcts->set_rollout_policy(std::move(p));
             if (auto op = parseOpponentPolicy(opts.get())) cell->mcts->set_opponent_policy(std::move(op));
-            if (auto pr = parsePrior(opts.get())) cell->mcts->set_prior(std::move(pr));
-            if (auto e = parseHeroEvaluator(opts.get())) cell->mcts->set_evaluator(std::move(e));
+            if (auto pr = parsePrior(opts.get(), cbs)) cell->mcts->set_prior(std::move(pr));
+            if (auto e = parseHeroEvaluator(opts.get(), cbs)) cell->mcts->set_evaluator(std::move(e));
         }
-        return g_mctsClass.createInstance(std::move(cell));
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_mctsClass.createInstance(std::move(cell)));
     });
 
     game.def("createDecoupledMcts", 1, [](Value, std::span<const Value> a) -> Value {
         auto cell = std::make_unique<HostDecoupledMcts>();
         cell->mcts = std::make_unique<bgm::DecoupledMcts>();
+        JsCallbackSet cbs;
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent opts(a[0]);
             cell->mcts->set_config(parseMctsConfig(opts.get()));
-            if (auto p = parseRolloutPolicy(opts.get())) cell->mcts->set_rollout_policy(std::move(p));
-            if (auto pr = parsePrior(opts.get())) cell->mcts->set_prior(std::move(pr));
-            if (auto e = parseHeroEvaluator(opts.get())) cell->mcts->set_evaluator(std::move(e));
+            if (auto p = parseRolloutPolicy(opts.get(), cbs)) cell->mcts->set_rollout_policy(std::move(p));
+            if (auto pr = parsePrior(opts.get(), cbs)) cell->mcts->set_prior(std::move(pr));
+            if (auto e = parseHeroEvaluator(opts.get(), cbs)) cell->mcts->set_evaluator(std::move(e));
         }
-        return g_decoupledMctsClass.createInstance(std::move(cell));
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_decoupledMctsClass.createInstance(std::move(cell)));
     });
 
     game.def("createTeamMcts", 1, [](Value, std::span<const Value> a) -> Value {
         auto cell = std::make_unique<HostTeamMcts>();
         cell->mcts = std::make_unique<bgm::TeamMcts>();
+        JsCallbackSet cbs;
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent opts(a[0]);
             cell->mcts->set_config(parseMctsConfig(opts.get()));
-            if (auto p = parseRolloutPolicy(opts.get())) cell->mcts->set_rollout_policy(std::move(p));
+            if (auto p = parseRolloutPolicy(opts.get(), cbs)) cell->mcts->set_rollout_policy(std::move(p));
             if (auto op = parseOpponentPolicy(opts.get())) cell->mcts->set_opponent_policy(std::move(op));
-            if (auto pr = parsePrior(opts.get())) cell->mcts->set_prior(std::move(pr));
-            if (auto tev = parseTeamEvaluator(opts.get())) cell->mcts->set_evaluator(std::move(tev));
+            if (auto pr = parsePrior(opts.get(), cbs)) cell->mcts->set_prior(std::move(pr));
+            if (auto tev = parseTeamEvaluator(opts.get(), cbs)) cell->mcts->set_evaluator(std::move(tev));
         }
-        return g_teamMctsClass.createInstance(std::move(cell));
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_teamMctsClass.createInstance(std::move(cell)));
     });
 
     game.def("createOption", 1, [](Value, std::span<const Value> a) -> Value {
@@ -721,25 +838,29 @@ void installAIMcts(ObjectBuilder& game) {
         if (!ev::isFunction(term.get())) return ev::throwTypeError("createOption: shouldTerminate must be a function");
 
         auto cell = std::make_unique<HostOptionCell>();
-        cell->opt = makeJsOption(std::move(name), canInit.get(), step.get(), term.get());
-        return g_optionClass.createInstance(std::move(cell));
+        JsCallbackSet cbs;
+        cell->opt = makeJsOption(std::move(name), canInit.get(), step.get(), term.get(), cbs);
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_optionClass.createInstance(std::move(cell)));
     });
 
     game.def("createOptionMcts", 1, [](Value, std::span<const Value> a) -> Value {
         auto cell = std::make_unique<HostOptionMcts>();
         cell->mcts = std::make_unique<bgm::OptionMcts>();
+        JsCallbackSet cbs;
         if (!a.empty() && ev::isObject(a[0])) {
             ev::Persistent opts(a[0]);
             cell->mcts->set_config(parseMctsConfig(opts.get()));
             if (auto op = parseOpponentPolicy(opts.get())) cell->mcts->set_opponent_policy(std::move(op));
-            if (auto e = parseHeroEvaluator(opts.get())) cell->mcts->set_evaluator(std::move(e));
-            cell->options = parseOptionArray(opts.get());
+            if (auto e = parseHeroEvaluator(opts.get(), cbs)) cell->mcts->set_evaluator(std::move(e));
+            cell->options = parseOptionArray(opts.get(), cbs);
             if (!cell->options.empty()) {
                 auto copy = cell->options;
                 cell->mcts->set_options(std::move(copy));
             }
         }
-        return g_optionMctsClass.createInstance(std::move(cell));
+        cell->slots = cbs.takeSlots();
+        return cbs.attach(g_optionMctsClass.createInstance(std::move(cell)));
     });
 
     game.def("legalActions", 2, [](Value, std::span<const Value> a) -> Value {
@@ -774,7 +895,10 @@ void installAIMcts(ObjectBuilder& game) {
         auto act = parseCombatAction(a[1]);
         auto* w = unwrapWorld(a[2]);
         float dt = a.size() >= 4 ? static_cast<float>(numAt(a, 3)) : 0.016f;
-        if (ag && w) bgm::apply(ag->agent, w->world, act, dt);
+        if (ag && w) {
+            WorldArgScope scope(a[2]);  // an ability it casts reaches its JS fn
+            bgm::apply(ag->agent, w->world, act, dt);
+        }
         return ev::undefined();
     });
 

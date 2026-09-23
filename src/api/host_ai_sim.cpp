@@ -23,11 +23,20 @@ HostClass g_replayReaderClass;
 
 namespace {
 
+// The world handle rides on the simulation as `_world` and each policy as
+// `_policies[i]` (policySlots[i] is the native end, policyAgents[i] its
+// agent id), so a policy closing over the game that owns the simulation —
+// or a world that keeps its simulation — is an ordinary collectable cycle.
+// step/runSteps bind them for the call (StepScope); the native Simulation
+// holds a World& whose lifetime `worldLife` guards in place of a root.
 struct HostSimulation {
     uint32_t tag = kHostSimulationTag;
     std::unique_ptr<brogameagent::Simulation> sim;
     HostWorld* world = nullptr;
-    ev::Persistent worldValue;
+    std::weak_ptr<int> worldLife;
+    std::vector<int> policyAgents;
+    std::vector<JsSlotPtr> policySlots;
+    ev::Persistent* liveWorld = nullptr;  // the world handle, inside a StepScope
 };
 
 struct HostRecorder {
@@ -58,15 +67,47 @@ HostReplayReader* unwrapReplayReader(Value v) {
     return (h && h->tag == kHostReplayReaderTag) ? h : nullptr;
 }
 
-/// The JS AIAgent wrapper for this Agent*, so a policy callback receives the
-/// same object the app created rather than a plain view.
-Value agentValueFor(HostWorld* w, const brogameagent::Agent* target) {
-    if (!w) return ev::undefined();
-    for (const auto& r : w->roster) {
-        if (r.agent == target) return r.value.get();
+/// self._policies[idx] = fn, creating the array on first use. Both current.
+void setPolicyFn(Value self, size_t idx, Value fn) {
+    ev::Persistent selfP(self), fnP(fn);
+    ev::Persistent arr(ev::getProperty(selfP.get(), "_policies"));
+    if (!ev::isObject(arr.get())) {
+        arr.set(ev::makeArray(0));
+        selfP.set(ev::setProperty(selfP.get(), "_policies", arr.get()));
     }
-    return ev::undefined();
+    ev::setElement(arr.get(), static_cast<uint32_t>(idx), fnP.get());
 }
+
+/// Binds the policies and the world for one step()/runSteps() call. False
+/// (and nothing bound) once the world the Simulation steps is gone.
+class StepScope {
+public:
+    StepScope(HostSimulation* h, Value self)
+        : h_(h), prev_(h->liveWorld), self_(self),
+          world_(checkedWorld(h, self_.get())),
+          policies_(self_.get(), h->policySlots, "_policies"),
+          active_(world_.get()) {
+        h_->liveWorld = &world_;
+    }
+    ~StepScope() { h_->liveWorld = prev_; }
+    StepScope(const StepScope&) = delete;
+    StepScope& operator=(const StepScope&) = delete;
+
+private:
+    // `_world` is reachable from JS; a replaced value is not the world the
+    // Simulation steps, so policies then see undefined for it.
+    static Value checkedWorld(HostSimulation* h, Value self) {
+        Value v = ev::getProperty(self, "_world");
+        return unwrapWorld(v) == h->world ? v : ev::undefined();
+    }
+
+    HostSimulation* h_;
+    ev::Persistent* prev_;
+    ev::Persistent self_;
+    ev::Persistent world_;
+    CallbackScope policies_;
+    WorldArgScope active_;
+};
 
 } // namespace
 
@@ -79,13 +120,17 @@ void ensureAISimClassesInstalled() {
     g_simulationClass.init("AISimulation", [](ObjectBuilder& b) {
         b.def("step", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapSimulation(self);
-            if (h && h->sim) h->sim->step(static_cast<float>(numAt(a, 0)));
+            if (!h || !h->sim || h->worldLife.expired()) return ev::undefined();
+            StepScope scope(h, self);
+            h->sim->step(static_cast<float>(numAt(a, 0)));
             return ev::undefined();
         });
 
         b.def("runSteps", 2, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapSimulation(self);
-            if (h && h->sim) h->sim->runSteps(static_cast<float>(numAt(a, 0)), i32At(a, 1));
+            if (!h || !h->sim || h->worldLife.expired()) return ev::undefined();
+            StepScope scope(h, self);
+            h->sim->runSteps(static_cast<float>(numAt(a, 0)), i32At(a, 1));
             return ev::undefined();
         });
 
@@ -111,20 +156,27 @@ void ensureAISimClassesInstalled() {
             int agentId = i32At(a, 0);
             if (!ev::isFunction(a[1])) return ev::throwTypeError("policy must be a function");
 
-            // The lambda's own Persistent roots the callback for as long as
-            // the policy is registered; Simulation::addPolicy replaces an
-            // agent's previous policy (and so drops its root), which is what
-            // re-adding one must do — the old code only swapped a side-table
-            // root and kept calling the first function.
-            ev::Persistent fn(a[1]);
-            HostWorld* world = h->world;
-            ev::Persistent worldValue = h->worldValue;
-            h->sim->addPolicy(agentId, [fn, world, worldValue](
+            // One `_policies` index per agent id: re-adding replaces the
+            // function there and the native policy with a fresh slot.
+            size_t idx = 0;
+            while (idx < h->policyAgents.size() && h->policyAgents[idx] != agentId) ++idx;
+            if (idx == h->policyAgents.size()) {
+                h->policyAgents.push_back(agentId);
+                h->policySlots.push_back(nullptr);
+            }
+            setPolicyFn(self, idx, a[1]);
+            auto slot = std::make_shared<JsCallbackSlot>();
+            h->policySlots[idx] = slot;
+            h->sim->addPolicy(agentId, [h, slot](
                     brogameagent::Agent& agent,
                     const brogameagent::World&) -> brogameagent::AgentAction {
-                Value agentVal = agentValueFor(world, &agent);
-                Value args[2] = { agentVal, worldValue.get() };
-                auto r = ev::call(fn.get(), ev::undefined(), args);
+                if (!slot->bound() || !h->liveWorld) return {};
+                ev::Persistent agentVal(ev::undefined());
+                if (ev::isObject(h->liveWorld->get())) {
+                    agentVal.set(worldAgentValue(h->liveWorld->get(), &agent));
+                }
+                Value args[2] = { agentVal.get(), h->liveWorld->get() };
+                auto r = slot->call(args);
                 if (r.thrown || !ev::isObject(r.value)) return {};
                 return parseAgentAction(r.value);
             });
@@ -136,6 +188,12 @@ void ensureAISimClassesInstalled() {
             if (!h || !h->sim || a.empty()) return ev::undefined();
             int agentId = i32At(a, 0);
             h->sim->removePolicy(agentId);
+            for (size_t i = 0; i < h->policyAgents.size(); ++i) {
+                if (h->policyAgents[i] != agentId) continue;
+                h->policySlots[i] = nullptr;
+                setPolicyFn(self, i, ev::undefined());
+                break;
+            }
             return ev::undefined();
         });
     });
@@ -279,8 +337,10 @@ void installAISim(ObjectBuilder& game) {
         auto cell = std::make_unique<HostSimulation>();
         cell->sim = std::make_unique<brogameagent::Simulation>(w->world);
         cell->world = w;
-        cell->worldValue = ev::Persistent(a[0]);
-        return g_simulationClass.createInstance(std::move(cell));
+        cell->worldLife = w->life;
+        ev::Persistent sim(g_simulationClass.createInstance(std::move(cell)));
+        sim.set(ev::setProperty(sim.get(), "_world", a[0]));
+        return sim.get();
     });
 
     game.def("createRecorder", 0, [](Value, std::span<const Value>) -> Value {
