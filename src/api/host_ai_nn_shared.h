@@ -204,6 +204,12 @@ Value makeIntArrayValue(const std::vector<int>& v);
 /// read mid-search): such an element reads as -1.
 std::vector<int> readIntArrayValue(Value arr, bool checked = true);
 std::vector<int> readIntArrayProp(Value obj, const char* key);
+/// Factored-action head sizes: RangeError unless every head is in
+/// [1, 2^24], there are at most 64, and their product (the flat action
+/// count) fits int32 — a zero head divides by zero in decode, and an
+/// overflowing product sizes the flat buffers wrong.
+void checkHeadSizes(const std::vector<int>& sizes, const char* what);
+std::vector<int> readHeadSizes(Value arr, const char* what);
 /// An int32 option (RangeError for NaN / out of range); `def` when absent.
 int getIntProp(Value obj, const char* key, int def);
 /// The same, for a size or count: also RangeError below 0.

@@ -158,6 +158,33 @@ std::vector<int> readIntArrayProp(Value obj, const char* key) {
     return out;
 }
 
+void checkHeadSizes(const std::vector<int>& sizes, const char* what) {
+    constexpr size_t kMaxHeads = 64;
+    constexpr int kMaxHead = 1 << 24;
+    if (sizes.size() > kMaxHeads) {
+        throw JsRangeError(std::string(what) + " may hold at most " +
+                           std::to_string(kMaxHeads) + " heads");
+    }
+    int64_t product = 1;
+    for (size_t i = 0; i < sizes.size(); ++i) {
+        if (sizes[i] < 1 || sizes[i] > kMaxHead) {
+            throwIntRange(std::string(what) + "[" + std::to_string(i) + "]", sizes[i], 1,
+                          kMaxHead);
+        }
+        product *= sizes[i];
+        if (product > std::numeric_limits<int32_t>::max()) {
+            throw JsRangeError(std::string(what) +
+                               ": the product of the head sizes must fit in int32");
+        }
+    }
+}
+
+std::vector<int> readHeadSizes(Value arr, const char* what) {
+    std::vector<int> sizes = readIntArrayValue(arr);
+    checkHeadSizes(sizes, what);
+    return sizes;
+}
+
 int getIntProp(Value obj, const char* key, int def) {
     return getI32Property(obj, key, def);
 }

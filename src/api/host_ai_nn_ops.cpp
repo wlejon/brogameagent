@@ -223,7 +223,7 @@ void installAINnOps(ObjectBuilder& nnNs) {
         }
         // headSizes first: reading an array allocates, and every float* below
         // points into the moving heap, so none may be taken before it.
-        auto sizes = readIntArrayValue(a[1]);
+        auto sizes = readHeadSizes(a[1], "factoredToFlat: headSizes");
         size_t lN = 0;
         float* logits = floatPtr(a[0], lN);
         if (!logits) return ev::throwTypeError("logits must be Float32Array");
@@ -251,14 +251,17 @@ void installAINnOps(ObjectBuilder& nnNs) {
 
     nnNs.def("flatActionCount", 1, [](Value, std::span<const Value> a) -> Value {
         if (a.empty()) return ev::throwTypeError("flatActionCount(headSizes)");
-        return ev::fromDouble(nn::flat_action_count(readIntArrayValue(a[0])));
+        return ev::fromDouble(
+            nn::flat_action_count(readHeadSizes(a[0], "flatActionCount: headSizes")));
     });
 
     nnNs.def("decodeFlatAction", 2, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::throwTypeError("decodeFlatAction(flat, headSizes)");
-        int flat = i32At(a, 0, "decodeFlatAction: flat");
-        auto sizes = readIntArrayValue(a[1]);
+        auto sizes = readHeadSizes(a[1], "decodeFlatAction: headSizes");
         if (sizes.empty()) return ev::throwTypeError("headSizes must be non-empty");
+        // A negative flat index would decode to negative per-head actions.
+        int flat = static_cast<int>(intAt(a, 0, 0, nn::flat_action_count(sizes) - 1,
+                                          "decodeFlatAction: flat"));
         auto strides = nn::head_strides(sizes);
         std::vector<int> out(sizes.size());
         nn::decode_flat_action(flat, sizes, strides, out.data());
@@ -268,9 +271,16 @@ void installAINnOps(ObjectBuilder& nnNs) {
     nnNs.def("encodeFlatAction", 2, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::throwTypeError("encodeFlatAction(perHead, headSizes)");
         auto perHead = readIntArrayValue(a[0]);
-        auto sizes = readIntArrayValue(a[1]);
+        auto sizes = readHeadSizes(a[1], "encodeFlatAction: headSizes");
         if (sizes.empty() || perHead.size() != sizes.size()) {
             return ev::throwTypeError("perHead/headSizes length mismatch");
+        }
+        // Each action within its head, so the flat index stays in range.
+        for (size_t i = 0; i < sizes.size(); ++i) {
+            if (perHead[i] < 0 || perHead[i] >= sizes[i]) {
+                throwIntRange("encodeFlatAction: perHead[" + std::to_string(i) + "]",
+                              perHead[i], 0, sizes[i] - 1);
+            }
         }
         auto strides = nn::head_strides(sizes);
         return ev::fromDouble(

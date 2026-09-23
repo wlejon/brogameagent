@@ -400,6 +400,23 @@ static void test_integer_range_errors() {
                 expect("linear dim -1", "createLinear", () => G.nn.createLinear(-1, 4));
                 expect("pvn inDim NaN", "inDim",
                        () => G.nn.createPolicyValueNet({ inDim: NaN, numActions: 2, hidden: [4], valueHidden: 4 }));
+                // A zero head divided by zero in decode; an overflowing
+                // product sized the flat buffers wrong.
+                expect("decode zero head", "headSizes", () => G.nn.decodeFlatAction(0, [3, 0, 2]));
+                expect("flat count overflow", "headSizes",
+                       () => G.nn.flatActionCount([65536, 65536]));
+                expect("decode negative flat", "flat", () => G.nn.decodeFlatAction(-1, [3, 2]));
+                expect("decode flat past the end", "flat", () => G.nn.decodeFlatAction(6, [3, 2]));
+                expect("encode out-of-head action", "perHead",
+                       () => G.nn.encodeFlatAction([3, 0], [3, 2]));
+                expect("factoredToFlat negative head", "headSizes",
+                       () => G.nn.factoredToFlat(new Float32Array(8), [4, -1], new Float32Array(8)));
+                expect("pvn headSizes overflow", "headSizes",
+                       () => G.nn.createPolicyValueNet({ inDim: 4, headSizes: [1 << 16, 1 << 16],
+                                                         hidden: [4], valueHidden: 4 }));
+                if (G.nn.flatActionCount([3, 2]) !== 6) fails.push("flatActionCount([3,2])");
+                const d = G.nn.decodeFlatAction(5, [3, 2]);
+                if (d[0] !== 2 || d[1] !== 1) fails.push("decodeFlatAction(5): " + JSON.stringify(d));
             }
             return fails.length ? fails.join("\n") : "SUCCESS";
         })()

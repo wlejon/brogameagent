@@ -401,6 +401,7 @@ void installAINnNets(ObjectBuilder& nnNs) {
             auto hidden = readIntArrayProp(root.get(), "hidden");
             if (!hidden.empty()) cfg.hidden = std::move(hidden);
             cfg.head_sizes = readIntArrayProp(root.get(), "headSizes");
+            checkHeadSizes(cfg.head_sizes, "createPolicyValueNet: headSizes");
             cfg.seed = readSeedArg(ev::getProperty(root.get(), "seed"), cfg.seed);
         }
         const bool actionsOk = cfg.num_actions > 0 || !cfg.head_sizes.empty();
