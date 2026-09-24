@@ -19,6 +19,19 @@ struct NavGridPath {
     bool partial = false;
 };
 
+/// Result of NavGrid::flowField(): per cell (row-major, index = z * width + x)
+/// the cost-to-goal and the unit direction to walk.
+struct NavGridField {
+    int width = 0, height = 0;
+    /// Cost to reach the goal; +infinity on blocked and unreached cells.
+    std::vector<float> dist;
+    /// Unit steering direction (world x / z); 0,0 where there is none (the
+    /// goal cell, blocked and unreached cells).
+    std::vector<float> dirX, dirZ;
+    /// Cells the wave reached (the goal's connected region).
+    int reached = 0;
+};
+
 /// 2D grid-based navigation mesh for flat arenas with AABB obstacles.
 /// Cells are marked walkable or blocked. Pathfinding uses A* on the grid
 /// with 8-directional movement, then the path is smoothed via line-of-sight
@@ -45,8 +58,27 @@ public:
     /// Set walkable state of a world position.
     void setWalkable(float x, float z, bool walkable);
 
-    /// Set cell traversal cost (cost <= 0 or cost >= 1e6 marks cell unwalkable).
+    /// Set cell traversal cost: the price of entering the cell per unit of
+    /// distance (1 = open ground, the default). cost <= 0, >= 1e6 or NaN
+    /// marks the cell unwalkable; any other value also makes it walkable.
+    /// findPath() and flowField() both charge it.
     void setCellCost(float x, float z, float cost);
+
+    /// The traversal cost of the cell at a world position (1 by default;
+    /// +infinity when blocked or out of bounds).
+    float cellCost(float x, float z) const;
+
+    /// One search for many units: the integration field (cost-to-goal) from
+    /// `goal` over every reachable cell, and a steering direction per cell.
+    /// A fast-marching (eikonal) solve over 4-neighbours, so costs approximate
+    /// true straight-line distance (no octile ridges funnelling a crowd into
+    /// lanes) and a wall corner is never cut. Each cell's speed cost is its
+    /// cellCost, plus `extraCost[i]` when given (width*height entries, e.g. a
+    /// danger map), or `costs[i]` in place of the stored costs when given
+    /// (then <= 0, >= 1e6 or NaN is blocked too). An out-of-bounds or blocked
+    /// goal gives an empty field (reached 0).
+    NavGridField flowField(bromath::Vec2 goal, const float* extraCost = nullptr,
+                           const float* costs = nullptr) const;
 
     /// Find a path from start to goal using A*.
     /// When the goal is blocked, out of bounds, or unreachable the path
@@ -95,6 +127,7 @@ private:
     float cellSize_;
     int width_, height_;
     std::vector<uint8_t> grid_; // 0 = walkable, 1 = blocked
+    std::vector<float> cost_;   // per-cell traversal cost, 1 = open
     std::vector<AABB> obstacleBoxes_; // raw boxes, retained for obstacles()
 
     // Scratch buffers for A* live in thread_local statics inside findPath()

@@ -121,7 +121,90 @@ void decorateNavGridProto(ObjectBuilder& b) {
         return p.get();
     });
 
-    b.def("hasLineOfSight", 4, [](Value self, std::span<const Value> a) -> Value {
+    // cellCost(x, z) | cellCost(point) → the cell's traversal cost
+    // (Infinity when blocked or off the grid).
+    b.def("cellCost", 2, [](Value self, std::span<const Value> a) -> Value {
+        auto* h = unwrapNavGrid(self);
+        if (!h || !h->grid) return ev::throwTypeError("NavGrid.prototype.cellCost: invalid receiver");
+        float x = 0.0f, z = 0.0f;
+        if (a.size() >= 2 && !ev::isObject(a[0])) {
+            x = static_cast<float>(numAt(a, 0));
+            z = static_cast<float>(numAt(a, 1));
+        } else if (!a.empty() && ev::isObject(a[0])) {
+            auto p = parseVec2(a[0]);
+            x = p.x; z = p.y;
+        } else {
+            return ev::throwTypeError("NavGrid.prototype.cellCost: expected (x, z) or (point)");
+        }
+        return ev::fromDouble(h->grid->cellCost(x, z));
+    });
+
+    // field(x, z, opts?) | field(point, opts?)
+    //   opts: { extraCost?: per-cell added cost, costs?: per-cell costs in
+    //           place of the stored ones } — typed arrays or arrays of
+    //           width*height numbers, row-major (index = gz * width + gx).
+    //   → { dist: Float32Array, flowX: Float32Array, flowZ: Float32Array,
+    //       reached, width, height }
+    b.def("field", 3, [](Value self, std::span<const Value> a) -> Value {
+        auto* h = unwrapNavGrid(self);
+        if (!h || !h->grid) return ev::throwTypeError("NavGrid.prototype.field: invalid receiver");
+        float gx = 0.0f, gz = 0.0f;
+        Value optsV = ev::undefined();
+        if (a.size() >= 2 && !ev::isObject(a[0])) {
+            gx = static_cast<float>(numAt(a, 0));
+            gz = static_cast<float>(numAt(a, 1));
+            if (a.size() >= 3) optsV = a[2];
+        } else if (!a.empty() && ev::isObject(a[0])) {
+            auto p = parseVec2(a[0]);
+            gx = p.x; gz = p.y;
+            if (a.size() >= 2) optsV = a[1];
+        } else {
+            return ev::throwTypeError("NavGrid.prototype.field: expected (x, z, opts?) or (point, opts?)");
+        }
+        const size_t cells = static_cast<size_t>(h->grid->width()) * h->grid->height();
+
+        // Copy every input before the first output allocation.
+        std::vector<float> extra, costs;
+        bool hasExtra = false, hasCosts = false;
+        if (ev::isObject(optsV)) {
+            ev::Persistent opts(optsV);
+            auto readCells = [&](const char* name, std::vector<float>& out) -> int {
+                ev::Persistent v(ev::getProperty(opts.get(), name));
+                if (ev::isUndefined(v.get()) || ev::isNull(v.get())) return 0;
+                ev::TypedArrayInfo info = ev::typedArrayInfo(v.get());
+                if (info && info.data && info.elementKind == ev::elements::Uint8) {
+                    out.assign(info.data, info.data + info.elementCount);
+                } else if (info && info.data && info.elementKind == ev::elements::Float64) {
+                    const double* dp = reinterpret_cast<const double*>(info.data);
+                    out.assign(dp, dp + info.elementCount);
+                } else if (!readFloatVector(v.get(), out)) {
+                    return -1;
+                }
+                return out.size() == cells ? 1 : -1;
+            };
+            const int e = readCells("extraCost", extra);
+            const int c = readCells("costs", costs);
+            if (e < 0 || c < 0) {
+                return ev::throwTypeError("NavGrid.prototype.field: extraCost and costs must hold width*height numbers (" +
+                                          std::to_string(cells) + ")");
+            }
+            hasExtra = e > 0;
+            hasCosts = c > 0;
+        }
+
+        brogameagent::NavGridField f = h->grid->flowField({gx, gz}, hasExtra ? extra.data() : nullptr,
+                                                         hasCosts ? costs.data() : nullptr);
+        ObjectBuilder res;
+        res.set("dist", makeFloat32Array(f.dist.data(), f.dist.size()));
+        res.set("flowX", makeFloat32Array(f.dirX.data(), f.dirX.size()));
+        res.set("flowZ", makeFloat32Array(f.dirZ.data(), f.dirZ.size()));
+        res.set("reached", ev::fromDouble(f.reached));
+        res.set("width", ev::fromDouble(f.width));
+        res.set("height", ev::fromDouble(f.height));
+        return res.get();
+    });
+
+    b.def("hasLineOfSight", 4,[](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
         if (!h || !h->grid) return ev::fromBool(false);
         float fx = 0.0f, fz = 0.0f, tx = 0.0f, tz = 0.0f;

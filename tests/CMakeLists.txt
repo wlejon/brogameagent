@@ -24,6 +24,19 @@ else()
 endif()
 add_test(NAME brogameagent_hex_nav_test COMMAND brogameagent_hex_nav_test)
 
+# Square-grid flow field (NavGrid::flowField) and stored cell costs.
+# Core-only.
+add_executable(brogameagent_nav_grid_field_test
+    test_nav_grid_field.cpp
+)
+target_link_libraries(brogameagent_nav_grid_field_test PRIVATE brogameagent)
+if(MSVC)
+    target_compile_options(brogameagent_nav_grid_field_test PRIVATE /W4)
+else()
+    target_compile_options(brogameagent_nav_grid_field_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME brogameagent_nav_grid_field_test COMMAND brogameagent_nav_grid_field_test)
+
 # Replay readers (.bgar and generic grid replays) against corrupt counts and
 # offsets. Core-only.
 add_executable(brogameagent_replay_reader_test

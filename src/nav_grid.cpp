@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <queue>
 
 namespace brogameagent {
@@ -12,6 +13,7 @@ NavGrid::NavGrid(float minX, float minZ, float maxX, float maxZ, float cellSize)
     width_  = static_cast<int>(std::ceil((maxX - minX) / cellSize));
     height_ = static_cast<int>(std::ceil((maxZ - minZ) / cellSize));
     grid_.assign(width_ * height_, 0); // all walkable
+    cost_.assign(width_ * height_, 1.0f);
 }
 
 void NavGrid::addObstacle(const AABB& box, float padding) {
@@ -53,8 +55,18 @@ void NavGrid::setCellCost(float x, float z, float cost) {
     int gx = toGridX(x);
     int gz = toGridZ(z);
     if (inBounds(gx, gz)) {
-        grid_[gz * width_ + gx] = (cost <= 0.0f || cost >= 1e6f) ? 1 : 0;
+        const bool blocked = !(cost > 0.0f && cost < 1e6f);   // NaN too
+        grid_[gz * width_ + gx] = blocked ? 1 : 0;
+        if (!blocked) cost_[gz * width_ + gx] = cost;
     }
+}
+
+float NavGrid::cellCost(float x, float z) const {
+    int gx = toGridX(x);
+    int gz = toGridZ(z);
+    if (!inBounds(gx, gz) || grid_[gz * width_ + gx] != 0)
+        return std::numeric_limits<float>::infinity();
+    return cost_[gz * width_ + gx];
 }
 
 bool NavGrid::hasGridLOS(bromath::Vec2 from, bromath::Vec2 to) const {
@@ -174,7 +186,8 @@ NavGridPath NavGrid::findPathEx(bromath::Vec2 from, bromath::Vec2 to,
                 if (grid_[idx(cx, cz + DZ[d])] != 0) continue;
             }
 
-            float ng = gScore[ci] + COST[d];
+            // Stepping into a cell costs the step length times its cost.
+            float ng = gScore[ci] + COST[d] * cost_[ni];
             if (ng < gScore[ni]) {
                 gScore[ni] = ng;
                 cameFrom[ni] = ci;
@@ -210,12 +223,42 @@ std::vector<bromath::Vec2> NavGrid::smoothPath(const std::vector<bromath::Vec2>&
     std::vector<bromath::Vec2> smooth;
     smooth.push_back(raw.front());
 
+    // The dearest cell a straight line crosses (Bresenham), +inf when it is
+    // blocked. A shortcut may not cross ground dearer than the stretch of
+    // the A* path it replaces, or string-pulling would drag a route that
+    // went round the mud straight back through it.
+    auto lineMaxCost = [&](bromath::Vec2 from, bromath::Vec2 to) {
+        int x0 = toGridX(from.x), z0 = toGridZ(from.y);
+        const int x1 = toGridX(to.x), z1 = toGridZ(to.y);
+        const int dx = std::abs(x1 - x0), dz = std::abs(z1 - z0);
+        const int sx = (x0 < x1) ? 1 : -1, sz = (z0 < z1) ? 1 : -1;
+        int err = dx - dz;
+        float mx = 0.0f;
+        while (true) {
+            if (!inBounds(x0, z0) || grid_[z0 * width_ + x0] != 0)
+                return std::numeric_limits<float>::infinity();
+            mx = std::max(mx, cost_[z0 * width_ + x0]);
+            if (x0 == x1 && z0 == z1) break;
+            const int e2 = 2 * err;
+            if (e2 > -dz) { err -= dz; x0 += sx; }
+            if (e2 <  dx) { err += dx; z0 += sz; }
+        }
+        return mx;
+    };
+    auto rawCost = [&](const bromath::Vec2& p) {
+        const int gx = toGridX(p.x), gz = toGridZ(p.y);
+        return inBounds(gx, gz) ? cost_[gz * width_ + gx] : 1.0f;
+    };
+
     size_t current = 0;
     while (current < raw.size() - 1) {
-        // Look as far ahead as possible with clear LOS
+        // Look as far ahead as possible with clear LOS over ground no dearer
+        // than the raw path's own.
         size_t farthest = current + 1;
+        float segMax = std::max(rawCost(raw[current]), rawCost(raw[current + 1]));
         for (size_t i = current + 2; i < raw.size(); i++) {
-            if (hasGridLOS(raw[current], raw[i])) {
+            segMax = std::max(segMax, rawCost(raw[i]));
+            if (lineMaxCost(raw[current], raw[i]) <= segMax) {
                 farthest = i;
             }
         }
