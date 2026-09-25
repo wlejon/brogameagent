@@ -131,7 +131,7 @@ if(BROGAMEAGENT_ENABLE_API AND TARGET brogameagent_api)
         endif()
         # It runs JavaScript, which brass compiles to machine code for the
         # target; on one brass has no code generator for (BRASS_HOST_BACKEND,
-        # decided in brass's CMakeLists — Apple Silicon today) that code cannot
+        # decided in brass's CMakeLists; x86_64 and AArch64 have one) that code cannot
         # run. The executable still builds there, which is the check that the
         # embed links; the test is not registered rather than registered to
         # bus-error.
