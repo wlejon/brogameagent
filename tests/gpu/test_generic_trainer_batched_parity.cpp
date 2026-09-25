@@ -12,6 +12,8 @@
 // parameter (the spec calls for ~1e-4 — we use slightly looser bounds since
 // tanh + softmax compound rounding error meaningfully across steps).
 
+#include "parity_helpers.h"
+
 #include <brogameagent/learn/generic_replay_buffer.h>
 #include <brogameagent/learn/generic_trainer.h>
 #include <brotensor/runtime.h>
@@ -24,6 +26,7 @@
 #include <random>
 #include <vector>
 
+using bga_parity::gpu_device;
 using brotensor::Device;
 using brogameagent::nn::PolicyValueNet;
 using brotensor::Tensor;
@@ -94,7 +97,7 @@ bool close(float a, float b, float atol, float rtol) {
 }  // namespace
 
 int main() {
-    brotensor::init();
+    if (!bga_parity::init_gpu_or_skip()) return 0;
 
     PolicyValueNet::Config cfg;
     cfg.in_dim       = 16;
@@ -107,7 +110,7 @@ int main() {
     PolicyValueNet net_gpu;
     net_cpu.init(cfg);
     net_gpu.init(cfg);
-    net_gpu.to(Device::CUDA);
+    net_gpu.to(gpu_device());
 
     GenericReplayBuffer buf_cpu(256);
     GenericReplayBuffer buf_gpu(256);
@@ -132,7 +135,7 @@ int main() {
     GenericExItTrainer tr_gpu;
     tr_gpu.set_net(&net_gpu);
     tr_gpu.set_buffer(&buf_gpu);
-    GenericTrainerConfig tcfg_gpu = tcfg; tcfg_gpu.device = Device::CUDA;
+    GenericTrainerConfig tcfg_gpu = tcfg; tcfg_gpu.device = gpu_device();
     tr_gpu.set_config(tcfg_gpu);
 
     constexpr int N = 50;

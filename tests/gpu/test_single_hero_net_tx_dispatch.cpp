@@ -3,7 +3,7 @@
 // retrofit every Linear, encoder, and head runs on device — outputs and
 // gradients must match the CPU reference within transformer dispatch
 // tolerances. A separate sub-test exercises the unified forward/backward
-// driven with CUDA-resident tensors (no host-API entrypoint per call).
+// driven with GPU-resident tensors (no host-API entrypoint per call).
 
 #include "parity_helpers.h"
 
@@ -75,8 +75,8 @@ void run_dispatch(uint64_t seed) {
     cpu.backward(dValue, dLogits);
 
     // GPU dispatch.
-    gnet.to(Device::CUDA);
-    BGA_CHECK(gnet.device() == Device::CUDA);
+    gnet.to(gpu_device());
+    BGA_CHECK(gnet.device() == gpu_device());
     float v_gpu; Tensor l_gpu = Tensor::vec(gnet.policy_logits());
     gnet.zero_grad();
     gnet.forward(x, v_gpu, l_gpu);
@@ -98,7 +98,7 @@ void run_dispatch(uint64_t seed) {
                     "tx.dispatch.trunk_W_after_sgd", 1e-5f, 1e-4f);
 
     // save/load round-trip after migration. Migrate again to GPU first.
-    gnet.to(Device::CUDA);
+    gnet.to(gpu_device());
     auto blob = gnet.save();
     SingleHeroNetTX restored;
     restored.init(tiny_cfg(seed ^ 0x12345));   // different init seed
@@ -113,7 +113,7 @@ void run_dispatch(uint64_t seed) {
 void run_smoke_training_gpu(uint64_t seed) {
     SingleHeroNetTX net;
     net.init(tiny_cfg(seed));
-    net.to(Device::CUDA);
+    net.to(gpu_device());
 
     SplitMix64 rng(seed ^ 0xCAFEull);
     Tensor x; make_obs(x, rng, 2, 2);
@@ -146,7 +146,7 @@ void run_smoke_training_gpu(uint64_t seed) {
 
 } // namespace
 
-// GPU-native forward/backward — drives the unified API with CUDA-resident
+// GPU-native forward/backward — drives the unified API with GPU-resident
 // input tensors, checking that SingleHeroNetTX runs entirely on device with
 // no host↔device conversion in the layer. We compare against the CPU
 // reference for the same inputs.
@@ -166,13 +166,13 @@ void run_gpu_native(uint64_t seed) {
     cpu.forward(x, v_cpu, l_cpu);
     cpu.backward(dValue, dLogits);
 
-    gnet.to(Device::CUDA);
-    BGA_CHECK(gnet.device() == Device::CUDA);
+    gnet.to(gpu_device());
+    BGA_CHECK(gnet.device() == gpu_device());
 
-    // Native GPU forward/backward: inputs are CUDA-resident tensors.
-    Tensor x_g = x.to(Device::CUDA);
-    Tensor dLogits_g = dLogits.to(Device::CUDA);
-    Tensor logits_g = Tensor::zeros_on(Device::CUDA, gnet.policy_logits(), 1);
+    // Native GPU forward/backward: inputs are GPU-resident tensors.
+    Tensor x_g = x.to(gpu_device());
+    Tensor dLogits_g = dLogits.to(gpu_device());
+    Tensor logits_g = Tensor::zeros_on(gpu_device(), gnet.policy_logits(), 1);
     float v_gpu = 0.0f;
     gnet.zero_grad();
     gnet.forward(x_g, v_gpu, logits_g);
@@ -182,7 +182,7 @@ void run_gpu_native(uint64_t seed) {
     BGA_CHECK(std::fabs(v_cpu - v_gpu) < 5e-3f);
     compare_tensors(l_cpu, l_gpu, "tx.gpu_native.logits", 1e-4f, 5e-3f);
 
-    // Backward through the unified API with CUDA-resident dLogits.
+    // Backward through the unified API with GPU-resident dLogits.
     gnet.backward(dValue, dLogits_g);
 
     // Single SGD step then compare a representative weight against the CPU

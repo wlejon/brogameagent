@@ -4,7 +4,7 @@
 // SingleHeroNetTX no longer exposes GPU-only batched forward kernels (they
 // were removed in the unified-brotensor migration). This test now drives the
 // net through its single-sample forward over a batch of B inputs and checks
-// CPU↔CUDA dispatch parity on every row.
+// CPU↔GPU dispatch parity on every row.
 
 #include "parity_helpers.h"
 
@@ -73,7 +73,7 @@ void run_tx_batched(int B, uint64_t seed) {
     SingleHeroNetTX cpu_net, gpu_net;
     cpu_net.init(cfg);
     gpu_net.init(cfg);
-    gpu_net.to(Device::CUDA);
+    gpu_net.to(gpu_device());
 
     SplitMix64 rng(seed ^ 0xBADBA77Dull);
     Tensor X_BD = make_batch_inputs(B, rng);
@@ -93,7 +93,7 @@ void run_tx_batched(int B, uint64_t seed) {
         values_ref[b] = v;
     }
 
-    // GPU: B single-sample forwards on CUDA.
+    // GPU: B single-sample forwards on the GPU.
     Tensor logits_gpu = Tensor::mat(B, L);
     Tensor values_gpu = Tensor::mat(B, 1);
     for (int b = 0; b < B; ++b) {
@@ -137,7 +137,7 @@ BGA_PARITY_TEST(tx_batched_speedup_smoke) {
     SingleHeroNetTX cpu_net, gpu_net;
     cpu_net.init(cfg);
     gpu_net.init(cfg);
-    gpu_net.to(Device::CUDA);
+    gpu_net.to(gpu_device());
 
     SplitMix64 rng(0xBE7C7Bull ^ 0xFEEDull);
     Tensor X_BD = make_batch_inputs(B, rng);

@@ -30,8 +30,8 @@ void run_dispatch_adam(int n, uint64_t seed, int n_steps) {
     seed_layer(cpu,    n, seed);
     seed_layer(gpu_ln, n, seed);
 
-    gpu_ln.to(Device::CUDA);
-    BGA_CHECK(gpu_ln.device() == Device::CUDA);
+    gpu_ln.to(gpu_device());
+    BGA_CHECK(gpu_ln.device() == gpu_device());
 
     const float lr = 1e-2f;
     const float b1 = 0.9f, b2 = 0.999f, eps = 1e-8f;
@@ -50,9 +50,9 @@ void run_dispatch_adam(int n, uint64_t seed, int n_steps) {
         cpu.adam_step(lr, b1, b2, eps, step);
 
         // GPU path.
-        Tensor gx = x.to(Device::CUDA), gdY = dY.to(Device::CUDA);
-        Tensor gy = Tensor::zeros_on(Device::CUDA, n, 1);
-        Tensor gdX = Tensor::zeros_on(Device::CUDA, n, 1);
+        Tensor gx = x.to(gpu_device()), gdY = dY.to(gpu_device());
+        Tensor gy = Tensor::zeros_on(gpu_device(), n, 1);
+        Tensor gdX = Tensor::zeros_on(gpu_device(), n, 1);
         gpu_ln.zero_grad();
         gpu_ln.forward(gx, gy);
         gpu_ln.backward(gdY, gdX);

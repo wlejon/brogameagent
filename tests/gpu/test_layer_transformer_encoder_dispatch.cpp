@@ -49,11 +49,11 @@ void run_dispatch(int K, int D, int H, int Df, int n_layers,
     cpu.forward(X, nullptr, Y_cpu);
     cpu.backward(dY, dX_cpu);
 
-    gpu_e.to(Device::CUDA);
-    BGA_CHECK(gpu_e.device() == Device::CUDA);
-    Tensor gX = X.to(Device::CUDA), gdY = dY.to(Device::CUDA);
-    Tensor gY = Tensor::zeros_on(Device::CUDA, K, D);
-    Tensor gdX = Tensor::zeros_on(Device::CUDA, K, D);
+    gpu_e.to(gpu_device());
+    BGA_CHECK(gpu_e.device() == gpu_device());
+    Tensor gX = X.to(gpu_device()), gdY = dY.to(gpu_device());
+    Tensor gY = Tensor::zeros_on(gpu_device(), K, D);
+    Tensor gdX = Tensor::zeros_on(gpu_device(), K, D);
     gpu_e.zero_grad();
     gpu_e.forward(gX, nullptr, gY);
     gpu_e.backward(gdY, gdX);
@@ -74,7 +74,7 @@ void run_dispatch(int K, int D, int H, int Df, int n_layers,
                     "te.dispatch.Wq0_after_sgd", 1e-4f, 2e-3f);
 
     // Save/load round-trip after GPU migration.
-    gpu_e.to(Device::CUDA);
+    gpu_e.to(gpu_device());
     std::vector<uint8_t> blob;
     gpu_e.save_to(blob);
     TransformerEncoder restored;

@@ -44,11 +44,11 @@ void run_dispatch(int N, int D, uint64_t seed) {
     Tensor dWv_cpu = cpu.dWv(), dWo_cpu = cpu.dWo();
 
     // GPU.
-    gpu_a.to(Device::CUDA);
-    BGA_CHECK(gpu_a.device() == Device::CUDA);
-    Tensor gX = X.to(Device::CUDA), gdO = dO.to(Device::CUDA);
-    Tensor gO = Tensor::zeros_on(Device::CUDA, N, D);
-    Tensor gdX = Tensor::zeros_on(Device::CUDA, N, D);
+    gpu_a.to(gpu_device());
+    BGA_CHECK(gpu_a.device() == gpu_device());
+    Tensor gX = X.to(gpu_device()), gdO = dO.to(gpu_device());
+    Tensor gO = Tensor::zeros_on(gpu_device(), N, D);
+    Tensor gdX = Tensor::zeros_on(gpu_device(), N, D);
     gpu_a.zero_grad();
     gpu_a.forward(gX, nullptr, gO);
     gpu_a.backward(gdO, gdX);
@@ -65,7 +65,7 @@ void run_dispatch(int N, int D, uint64_t seed) {
     compare_tensors(cpu.Wo(), gpu_a.Wo(), "att.dispatch.Wo_after_sgd");
 
     // Save/load round-trip after GPU migration.
-    gpu_a.to(Device::CUDA);
+    gpu_a.to(gpu_device());
     std::vector<uint8_t> blob;
     gpu_a.save_to(blob);
     ScaledDotProductAttention restored;

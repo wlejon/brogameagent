@@ -1,7 +1,7 @@
 // End-to-end GPU dispatch parity test for LayerNorm.
 //
 // Builds two LayerNorm instances seeded identically; migrates one to
-// Device::CUDA; runs forward/backward and sgd_step on both; verifies that
+// gpu_device(); runs forward/backward and sgd_step on both; verifies that
 // outputs, parameter grads and post-step parameters match within tolerance.
 // Also exercises save/load round-trip after a host↔device migration.
 
@@ -44,11 +44,11 @@ void run_dispatch(int n, uint64_t seed) {
     Tensor dBeta_cpu  = cpu.dBeta();
 
     // GPU path: migrate, then run with device-resident tensors.
-    gpu_ln.to(Device::CUDA);
-    BGA_CHECK(gpu_ln.device() == Device::CUDA);
-    Tensor gx = x.to(Device::CUDA), gdY = dY.to(Device::CUDA);
-    Tensor gy = Tensor::zeros_on(Device::CUDA, n, 1);
-    Tensor gdX = Tensor::zeros_on(Device::CUDA, n, 1);
+    gpu_ln.to(gpu_device());
+    BGA_CHECK(gpu_ln.device() == gpu_device());
+    Tensor gx = x.to(gpu_device()), gdY = dY.to(gpu_device());
+    Tensor gy = Tensor::zeros_on(gpu_device(), n, 1);
+    Tensor gdX = Tensor::zeros_on(gpu_device(), n, 1);
     gpu_ln.zero_grad();
     gpu_ln.forward(gx, gy);
     gpu_ln.backward(gdY, gdX);
@@ -67,7 +67,7 @@ void run_dispatch(int n, uint64_t seed) {
     compare_tensors(cpu.beta(),  gpu_ln.beta(),  "ln.dispatch.beta_after_sgd");
 
     // Save/load round-trip after migrating to GPU and back.
-    gpu_ln.to(Device::CUDA);
+    gpu_ln.to(gpu_device());
     std::vector<uint8_t> blob;
     gpu_ln.save_to(blob);
     LayerNorm restored;

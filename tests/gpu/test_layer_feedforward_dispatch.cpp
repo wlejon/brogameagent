@@ -37,11 +37,11 @@ void run_dispatch(int K, int D, int Df, uint64_t seed) {
     cpu.forward(X, Y_cpu);
     cpu.backward(dY, dX_cpu);
 
-    gpu_f.to(Device::CUDA);
-    BGA_CHECK(gpu_f.device() == Device::CUDA);
-    Tensor gX = X.to(Device::CUDA), gdY = dY.to(Device::CUDA);
-    Tensor gY = Tensor::zeros_on(Device::CUDA, K, D);
-    Tensor gdX = Tensor::zeros_on(Device::CUDA, K, D);
+    gpu_f.to(gpu_device());
+    BGA_CHECK(gpu_f.device() == gpu_device());
+    Tensor gX = X.to(gpu_device()), gdY = dY.to(gpu_device());
+    Tensor gY = Tensor::zeros_on(gpu_device(), K, D);
+    Tensor gdX = Tensor::zeros_on(gpu_device(), K, D);
     gpu_f.zero_grad();
     gpu_f.forward(gX, gY);
     gpu_f.backward(gdY, gdX);
@@ -58,7 +58,7 @@ void run_dispatch(int K, int D, int Df, uint64_t seed) {
     compare_tensors(cpu.b2(), gpu_f.b2(), "ff.dispatch.b2_after_sgd");
 
     // Save/load round-trip after GPU migration.
-    gpu_f.to(Device::CUDA);
+    gpu_f.to(gpu_device());
     std::vector<uint8_t> blob;
     gpu_f.save_to(blob);
     FeedForward restored;

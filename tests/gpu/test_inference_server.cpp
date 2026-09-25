@@ -29,7 +29,7 @@ PolicyValueNet make_net() {
     cfg.seed         = 0xFEEDBEEFull;
     PolicyValueNet net;
     net.init(cfg);
-    net.to(Device::CUDA);
+    net.to(gpu_device());
     return net;
 }
 
@@ -46,8 +46,8 @@ BatchedInferenceServer::EvalResult direct_forward(PolicyValueNet& net,
     const int A = net.num_actions();
     Tensor x = Tensor::vec(in_dim);
     for (int i = 0; i < in_dim; ++i) x[i] = obs[i];
-    Tensor gx = x.to(Device::CUDA);
-    Tensor glogits = Tensor::zeros_on(Device::CUDA, A, 1);
+    Tensor gx = x.to(gpu_device());
+    Tensor glogits = Tensor::zeros_on(gpu_device(), A, 1);
     float gv = 0.0f;
     net.forward(gx, gv, glogits);
     Tensor h_logits = download_to_host(glogits);

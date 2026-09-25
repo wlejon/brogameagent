@@ -23,8 +23,6 @@ using brotensor::Tensor;
 
 namespace {
 
-Device g_gpu = Device::CPU;
-
 constexpr int N_MOVE = FactoredPolicyHead::N_MOVE;
 constexpr int N_ATK  = FactoredPolicyHead::N_ATTACK;
 constexpr int N_AB   = FactoredPolicyHead::N_ABILITY;
@@ -61,9 +59,9 @@ BGA_PARITY_TEST(softmax_forward_device_mask) {
     Tensor p_cpu = Tensor::vec(n);
     brotensor::softmax_forward(logits, p_cpu, mask.data());
 
-    Tensor gl = logits.to(g_gpu);
-    Tensor gp = Tensor::zeros_on(g_gpu, n, 1);
-    Tensor gm = Tensor::from_host_on(g_gpu, mask.data(), n, 1);
+    Tensor gl = logits.to(gpu_device());
+    Tensor gp = Tensor::zeros_on(gpu_device(), n, 1);
+    Tensor gm = Tensor::from_host_on(gpu_device(), mask.data(), n, 1);
     brotensor::softmax_forward(gl, gp, static_cast<const float*>(gm.data));
     Tensor p_gpu = download_to_host(gp);
     compare_tensors(p_cpu, p_gpu, "softmax_forward.masked");
@@ -81,9 +79,9 @@ BGA_PARITY_TEST(softmax_xent_device_mask) {
     Tensor p_cpu = Tensor::vec(n), d_cpu = Tensor::vec(n);
     const float loss_cpu = brotensor::softmax_xent(logits, target, p_cpu, d_cpu, mask.data());
 
-    Tensor gl = logits.to(g_gpu), gt = target.to(g_gpu);
-    Tensor gp = Tensor::zeros_on(g_gpu, n, 1), gd = Tensor::zeros_on(g_gpu, n, 1);
-    Tensor gm = Tensor::from_host_on(g_gpu, mask.data(), n, 1);
+    Tensor gl = logits.to(gpu_device()), gt = target.to(gpu_device());
+    Tensor gp = Tensor::zeros_on(gpu_device(), n, 1), gd = Tensor::zeros_on(gpu_device(), n, 1);
+    Tensor gm = Tensor::from_host_on(gpu_device(), mask.data(), n, 1);
     const float loss_gpu = brotensor::softmax_xent(gl, gt, gp, gd,
                                                    static_cast<const float*>(gm.data));
     BGA_CHECK(std::fabs(loss_cpu - loss_gpu) <= 1e-4f * std::fmax(1.0f, std::fabs(loss_cpu)));
@@ -106,8 +104,8 @@ BGA_PARITY_TEST(factored_softmax_masked) {
         Tensor p_cpu = Tensor::vec(TOTAL);
         brogameagent::nn::factored_softmax(logits, p_cpu, am, bm);
 
-        Tensor gl = logits.to(g_gpu);
-        Tensor gp = Tensor::zeros_on(g_gpu, TOTAL, 1);
+        Tensor gl = logits.to(gpu_device());
+        Tensor gp = Tensor::zeros_on(gpu_device(), TOTAL, 1);
         brogameagent::nn::factored_softmax(gl, gp, am, bm);
         Tensor p_gpu = download_to_host(gp);
         compare_tensors(p_cpu, p_gpu, variant == 0 ? "factored_softmax.masked"
@@ -137,9 +135,9 @@ BGA_PARITY_TEST(factored_xent_masked) {
     const float loss_cpu = brogameagent::nn::factored_xent(logits, mt, at, bt, p_cpu, d_cpu,
                                                            amask.data(), bmask.data());
 
-    Tensor gl = logits.to(g_gpu);
-    Tensor gmt = mt.to(g_gpu), gat = at.to(g_gpu), gbt = bt.to(g_gpu);
-    Tensor gp = Tensor::zeros_on(g_gpu, TOTAL, 1), gd = Tensor::zeros_on(g_gpu, TOTAL, 1);
+    Tensor gl = logits.to(gpu_device());
+    Tensor gmt = mt.to(gpu_device()), gat = at.to(gpu_device()), gbt = bt.to(gpu_device());
+    Tensor gp = Tensor::zeros_on(gpu_device(), TOTAL, 1), gd = Tensor::zeros_on(gpu_device(), TOTAL, 1);
     const float loss_gpu = brogameagent::nn::factored_xent(gl, gmt, gat, gbt, gp, gd,
                                                            amask.data(), bmask.data());
     BGA_CHECK(std::fabs(loss_cpu - loss_gpu) <= 1e-4f * std::fmax(1.0f, std::fabs(loss_cpu)));
@@ -151,7 +149,7 @@ BGA_PARITY_TEST(factored_xent_masked) {
 }
 
 BGA_PARITY_TEST(factored_rejects_mixed_devices) {
-    Tensor gl = Tensor::zeros_on(g_gpu, TOTAL, 1);
+    Tensor gl = Tensor::zeros_on(gpu_device(), TOTAL, 1);
     Tensor p_cpu = Tensor::vec(TOTAL);
     bool threw = false;
     try {
@@ -162,15 +160,4 @@ BGA_PARITY_TEST(factored_rejects_mixed_devices) {
     BGA_CHECK(threw);
 }
 
-int main() {
-    brotensor::init();
-    for (const Device& d : brotensor::available_devices()) {
-        if (d.is_gpu()) { g_gpu = d; break; }
-    }
-    if (!g_gpu.is_gpu()) {
-        std::printf("SKIP: no GPU backend registered\n");
-        return 0;
-    }
-    std::printf("GPU device: %s\n", brotensor::to_string(g_gpu).c_str());
-    return run_all("Masked softmax / xent GPU parity");
-}
+int main() { return run_all("Masked softmax / xent GPU parity"); }

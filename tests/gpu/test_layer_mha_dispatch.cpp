@@ -39,11 +39,11 @@ void run_dispatch(int K, int D, int H, uint64_t seed) {
     cpu.forward(X, nullptr, O_cpu);
     cpu.backward(dO, dX_cpu);
 
-    gpu_a.to(Device::CUDA);
-    BGA_CHECK(gpu_a.device() == Device::CUDA);
-    Tensor gX = X.to(Device::CUDA), gdO = dO.to(Device::CUDA);
-    Tensor gO = Tensor::zeros_on(Device::CUDA, K, D);
-    Tensor gdX = Tensor::zeros_on(Device::CUDA, K, D);
+    gpu_a.to(gpu_device());
+    BGA_CHECK(gpu_a.device() == gpu_device());
+    Tensor gX = X.to(gpu_device()), gdO = dO.to(gpu_device());
+    Tensor gO = Tensor::zeros_on(gpu_device(), K, D);
+    Tensor gdX = Tensor::zeros_on(gpu_device(), K, D);
     gpu_a.zero_grad();
     gpu_a.forward(gX, nullptr, gO);
     gpu_a.backward(gdO, gdX);
@@ -60,7 +60,7 @@ void run_dispatch(int K, int D, int H, uint64_t seed) {
     compare_tensors(cpu.Wo(), gpu_a.Wo(), "mha.dispatch.Wo_after_sgd");
 
     // Save/load round-trip after GPU migration.
-    gpu_a.to(Device::CUDA);
+    gpu_a.to(gpu_device());
     std::vector<uint8_t> blob;
     gpu_a.save_to(blob);
     MultiHeadAttention restored;

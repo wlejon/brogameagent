@@ -22,7 +22,7 @@ static void run_pvn_batched(int B, uint64_t seed) {
 
     PolicyValueNet net;
     net.init(cfg);
-    net.to(Device::CUDA);
+    net.to(gpu_device());
 
     SplitMix64 rng(seed ^ 0xBADCAFEull);
 
@@ -37,8 +37,8 @@ static void run_pvn_batched(int B, uint64_t seed) {
         Tensor xb = Tensor::vec(cfg.in_dim);
         for (int j = 0; j < cfg.in_dim; ++j)
             xb[j] = X_BD[static_cast<size_t>(b) * cfg.in_dim + j];
-        Tensor gxb = xb.to(Device::CUDA);
-        Tensor glogits = Tensor::zeros_on(Device::CUDA, cfg.num_actions, 1);
+        Tensor gxb = xb.to(gpu_device());
+        Tensor glogits = Tensor::zeros_on(gpu_device(), cfg.num_actions, 1);
         float gv = 0.0f;
         net.forward(gxb, gv, glogits);
         Tensor h_logits = download_to_host(glogits);
@@ -49,9 +49,9 @@ static void run_pvn_batched(int B, uint64_t seed) {
     }
 
     // ── Batched. ───────────────────────────────────────────────────────────
-    Tensor gX_BD = X_BD.to(Device::CUDA);
-    Tensor glogits_BD = Tensor::zeros_on(Device::CUDA, B, cfg.num_actions);
-    Tensor gvalues_B1 = Tensor::zeros_on(Device::CUDA, B, 1);
+    Tensor gX_BD = X_BD.to(gpu_device());
+    Tensor glogits_BD = Tensor::zeros_on(gpu_device(), B, cfg.num_actions);
+    Tensor gvalues_B1 = Tensor::zeros_on(gpu_device(), B, 1);
     net.forward_batched(gX_BD, glogits_BD, gvalues_B1);
     Tensor logits_batched = download_to_host(glogits_BD);
     Tensor values_batched = download_to_host(gvalues_B1);
