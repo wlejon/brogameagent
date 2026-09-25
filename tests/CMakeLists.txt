@@ -312,6 +312,23 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
     add_test(NAME brogameagent_gpu_pvn_batched_test
              COMMAND brogameagent_gpu_pvn_batched_test)
 
+    # Masked softmax / xent and the factored ops on the GPU device vs CPU.
+    add_executable(brogameagent_gpu_factored_masked_test
+        gpu/test_factored_masked_gpu.cpp
+    )
+    target_link_libraries(brogameagent_gpu_factored_masked_test PRIVATE brogameagent)
+    if(BROGAMEAGENT_WITH_CUDA)
+        target_include_directories(brogameagent_gpu_factored_masked_test PRIVATE
+        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    endif()
+    if(MSVC)
+        target_compile_options(brogameagent_gpu_factored_masked_test PRIVATE /W4)
+    else()
+        target_compile_options(brogameagent_gpu_factored_masked_test PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME brogameagent_gpu_factored_masked_test
+             COMMAND brogameagent_gpu_factored_masked_test)
+
     # BatchedInferenceServer functional + stress + bench.
     add_executable(brogameagent_gpu_inference_server_test
         gpu/test_inference_server.cpp

@@ -116,7 +116,11 @@ using OpponentPolicyHead = FactoredPolicyHead;
 // Helper: in-place softmax on each of the three factored regions of a logits
 // vector. Optional attack_mask / ability_mask: size N_ATTACK-1 and
 // N_ABILITY-1 respectively, reflecting action_mask::build output. The
-// trailing "no-op" class is always legal.
+// trailing "no-op" class is always legal. The masks are HOST buffers whatever
+// the tensors' device: on a GPU device the three regions run through
+// brotensor's device softmax, and the composed masks are uploaded to it.
+// logits/probs (and, for factored_xent, the targets and dLogits) share one
+// device; a GPU call throws std::invalid_argument on a mismatch.
 void factored_softmax(const brotensor::Tensor& logits, brotensor::Tensor& probs,
                       const float* attack_mask = nullptr,
                       const float* ability_mask = nullptr);

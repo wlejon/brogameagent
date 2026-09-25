@@ -3,9 +3,8 @@
 // policy-head shape constants.
 //
 // Tensor arguments follow the same rule as the classes: a bro.tensor
-// GpuTensor handle or a Float32Array viewed in place. The mask arguments
-// were Float32Arrays before the transition and still are — they are read as
-// a raw float*, never as a tensor.
+// GpuTensor handle or a Float32Array viewed in place. A mask argument may be
+// either too; it is brought to the device its op reads it on (see maskArg).
 
 #include "host_ai_nn_shared.h"
 
@@ -27,21 +26,44 @@ Value guardedOp(Fn&& fn) {
     return ev::undefined();
 }
 
-// An optional mask argument: absent (undefined / null) is no mask; anything
-// else must be a Float32Array of at least `need` elements, because the
-// kernels read `need` floats from it unchecked. A wrong value used to be
-// silently treated as "no mask". Allocates nothing on success — the pointer
-// is into the moving heap, like the in-place Float32Array tensors before it.
-bool maskArg(std::span<const Value> a, size_t i, size_t need, const char* what, float*& out) {
-    out = nullptr;
+// A resolved optional mask: `ptr` is null for no mask, else `need` FP32
+// entries on the device the op reads the mask on. That is the caller's own
+// buffer when it already lives there, else `staged`, a copy moved there.
+struct Mask {
+    const float* ptr = nullptr;
+    brotensor::Tensor staged;
+};
+
+// An optional mask argument, `m` being its slot resolved by tensorArgs():
+// absent (undefined / null) is no mask; anything else must be a Float32Array
+// or a GpuTensor of at least `need` FP32 elements, because the kernels read
+// `need` floats from it unchecked. `dev` is where the op reads it — brotensor
+// takes a mask as a raw pointer on its operands' device, so a Float32Array
+// feeding a GPU op is uploaded (a GPU kernel cannot read host memory) and a
+// GpuTensor feeding a host op is downloaded. Staging allocates only
+// brotensor memory, never on the JS heap, so the Float32Array views taken by
+// tensorArgs() stay valid.
+bool maskArg(std::span<const Value> a, size_t i, const TensorArg& m, size_t need,
+             brotensor::Device dev, const char* what, Mask& out) {
+    out.ptr = nullptr;
     if (i >= a.size() || ev::isUndefined(a[i]) || ev::isNull(a[i])) return true;
-    auto info = ev::typedArrayInfo(a[i]);
-    if (!info.data || info.elementKind != ev::elements::Float32 || info.elementCount < need) {
-        ev::throwTypeError(std::string(what) + " must be a Float32Array of at least " +
-                           std::to_string(need) + " entries");
+    if (!m || m.ptr->dtype != brotensor::Dtype::FP32 ||
+        static_cast<size_t>(m.ptr->size()) < need) {
+        ev::throwTypeError(std::string(what) + " must be a Float32Array or GpuTensor of at least " +
+                           std::to_string(need) + " FP32 entries");
         return false;
     }
-    out = reinterpret_cast<float*>(info.data);
+    if (m.ptr->device == dev) {
+        out.ptr = static_cast<const float*>(m.ptr->data);
+        return true;
+    }
+    try {
+        out.staged = m.ptr->to(dev);
+    } catch (const std::exception& e) {
+        ev::throwError(std::string(what) + ": " + e.what());
+        return false;
+    }
+    out.ptr = static_cast<const float*>(out.staged.data);
     return true;
 }
 
@@ -106,12 +128,13 @@ void installAINnOps(ObjectBuilder& nnNs) {
 
     nnNs.def("softmaxForward", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::throwTypeError("softmaxForward(logits,probs,mask?)");
-        auto [l, p] = tensorArgs<2>(a, {0, 1});
+        auto [l, p, m] = tensorArgs<3>(a, {0, 1, 2});
         if (!l || !p) return ev::throwTypeError("expected Tensors");
-        float* mask = nullptr;
-        if (!maskArg(a, 2, static_cast<size_t>(l.ptr->size()), "softmaxForward: mask", mask))
+        Mask mask;
+        if (!maskArg(a, 2, m, static_cast<size_t>(l.ptr->size()), l.ptr->device,
+                     "softmaxForward: mask", mask))
             return ev::undefined();
-        return guardedOp([&] { brotensor::softmax_forward(*l.ptr, *p.ptr, mask); });
+        return guardedOp([&] { brotensor::softmax_forward(*l.ptr, *p.ptr, mask.ptr); });
     });
 
     nnNs.def("softmaxBackward", 3, [](Value, std::span<const Value> a) -> Value {
@@ -123,14 +146,15 @@ void installAINnOps(ObjectBuilder& nnNs) {
 
     nnNs.def("softmaxXent", 5, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 4) return ev::throwTypeError("softmaxXent(logits,target,probs,dLogits,mask?)");
-        auto [l, t, p, dl] = tensorArgs<4>(a, {0, 1, 2, 3});
+        auto [l, t, p, dl, m] = tensorArgs<5>(a, {0, 1, 2, 3, 4});
         if (!l || !t || !p || !dl) return ev::throwTypeError("expected Tensors");
-        float* mask = nullptr;
-        if (!maskArg(a, 4, static_cast<size_t>(l.ptr->size()), "softmaxXent: mask", mask))
+        Mask mask;
+        if (!maskArg(a, 4, m, static_cast<size_t>(l.ptr->size()), l.ptr->device,
+                     "softmaxXent: mask", mask))
             return ev::undefined();
         float loss = 0.0f;
         try {
-            loss = brotensor::softmax_xent(*l.ptr, *t.ptr, *p.ptr, *dl.ptr, mask);
+            loss = brotensor::softmax_xent(*l.ptr, *t.ptr, *p.ptr, *dl.ptr, mask.ptr);
         } catch (const std::exception& e) {
             return ev::throwError(e.what());
         }
@@ -181,14 +205,17 @@ void installAINnOps(ObjectBuilder& nnNs) {
         if (a.size() < 2) {
             return ev::throwTypeError("factoredSoftmax(logits,probs,atkMask?,abilMask?)");
         }
-        auto [l, p] = tensorArgs<2>(a, {0, 1});
+        auto [l, p, am, bm] = tensorArgs<4>(a, {0, 1, 2, 3});
         if (!l || !p) return ev::throwTypeError("expected Tensors");
-        float* aMask = nullptr;
-        float* bMask = nullptr;
-        if (!maskArg(a, 2, nn::FactoredPolicyHead::N_ATTACK - 1, "factoredSoftmax: atkMask", aMask) ||
-            !maskArg(a, 3, nn::FactoredPolicyHead::N_ABILITY - 1, "factoredSoftmax: abilMask", bMask))
+        // The factored ops take host masks on every device (they compose the
+        // trailing no-op flag and upload for a GPU op themselves).
+        Mask aMask, bMask;
+        if (!maskArg(a, 2, am, nn::FactoredPolicyHead::N_ATTACK - 1, brotensor::Device::CPU,
+                     "factoredSoftmax: atkMask", aMask) ||
+            !maskArg(a, 3, bm, nn::FactoredPolicyHead::N_ABILITY - 1, brotensor::Device::CPU,
+                     "factoredSoftmax: abilMask", bMask))
             return ev::undefined();
-        return guardedOp([&] { nn::factored_softmax(*l.ptr, *p.ptr, aMask, bMask); });
+        return guardedOp([&] { nn::factored_softmax(*l.ptr, *p.ptr, aMask.ptr, bMask.ptr); });
     });
 
     nnNs.def("factoredXent", 8, [](Value, std::span<const Value> a) -> Value {
@@ -196,17 +223,18 @@ void installAINnOps(ObjectBuilder& nnNs) {
             return ev::throwTypeError(
                 "factoredXent(logits,mTgt,aTgt,abTgt,probs,dLogits,atkMask?,abilMask?)");
         }
-        auto [l, mt, at, abt, p, dl] = tensorArgs<6>(a, {0, 1, 2, 3, 4, 5});
+        auto [l, mt, at, abt, p, dl, am, bm] = tensorArgs<8>(a, {0, 1, 2, 3, 4, 5, 6, 7});
         if (!l || !mt || !at || !abt || !p || !dl) return ev::throwTypeError("expected Tensors");
-        float* aMask = nullptr;
-        float* bMask = nullptr;
-        if (!maskArg(a, 6, nn::FactoredPolicyHead::N_ATTACK - 1, "factoredXent: atkMask", aMask) ||
-            !maskArg(a, 7, nn::FactoredPolicyHead::N_ABILITY - 1, "factoredXent: abilMask", bMask))
+        Mask aMask, bMask;
+        if (!maskArg(a, 6, am, nn::FactoredPolicyHead::N_ATTACK - 1, brotensor::Device::CPU,
+                     "factoredXent: atkMask", aMask) ||
+            !maskArg(a, 7, bm, nn::FactoredPolicyHead::N_ABILITY - 1, brotensor::Device::CPU,
+                     "factoredXent: abilMask", bMask))
             return ev::undefined();
         float loss = 0.0f;
         try {
             loss = nn::factored_xent(*l.ptr, *mt.ptr, *at.ptr, *abt.ptr, *p.ptr, *dl.ptr,
-                                     aMask, bMask);
+                                     aMask.ptr, bMask.ptr);
         } catch (const std::exception& e) {
             return ev::throwError(e.what());
         }

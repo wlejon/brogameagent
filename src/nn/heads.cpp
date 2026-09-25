@@ -5,6 +5,9 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace brogameagent::nn {
 
@@ -102,6 +105,114 @@ void FactoredPolicyHead::backward(const brotensor::Tensor& dLogits, brotensor::T
     brotensor::add_inplace(dEmbed, de);
 }
 
+// ─── Factored softmax / xent on a GPU device ─────────────────────────────
+//
+// The CPU path below walks host pointers. On a GPU device each of the three
+// regions is a row view into the device buffers, run through brotensor's
+// device-dispatched softmax / softmax_xent. Those take the mask as a DEVICE
+// pointer on the operands' device, so the caller's host mask is composed
+// (trailing no-op class legal) and uploaded first — handing the host pointer
+// straight through is what a kernel cannot read.
+
+namespace {
+
+brotensor::Tensor region(const brotensor::Tensor& t, int off, int n) {
+    return brotensor::Tensor::view(t.device, static_cast<float*>(t.data) + off, n, 1);
+}
+
+// The composed head mask on `d`: the caller's first n-1 flags, then the
+// always-legal no-op. Empty (null data, "no mask") when the caller has none,
+// which the kernels treat as every entry legal — the same as all ones.
+brotensor::Tensor device_head_mask(brotensor::Device d, const float* host_mask, int n) {
+    if (!host_mask) return brotensor::Tensor{};
+    std::vector<float> m(static_cast<size_t>(n), 1.0f);
+    for (int i = 0; i < n - 1; ++i) m[static_cast<size_t>(i)] = host_mask[i];
+    return brotensor::Tensor::from_host_on(d, m.data(), n, 1);
+}
+
+const float* mask_ptr(const brotensor::Tensor& m) {
+    return static_cast<const float*>(m.data);
+}
+
+void check_factored_operand(const brotensor::Tensor& logits, const brotensor::Tensor& t,
+                            int n, const char* op, const char* name) {
+    if (t.device != logits.device) {
+        throw std::invalid_argument(std::string(op) + ": " + name + " is on " +
+                                    brotensor::to_string(t.device) + ", logits on " +
+                                    brotensor::to_string(logits.device));
+    }
+    if (t.dtype != brotensor::Dtype::FP32) {
+        throw std::invalid_argument(std::string(op) + ": " + name + " must be FP32");
+    }
+    if (t.size() < n) {
+        throw std::invalid_argument(std::string(op) + ": " + name + " has " +
+                                    std::to_string(t.size()) + " entries, needs " +
+                                    std::to_string(n));
+    }
+}
+
+void factored_softmax_device(const brotensor::Tensor& logits, brotensor::Tensor& probs,
+                             const float* attack_mask, const float* ability_mask) {
+    constexpr const char* op = "factored_softmax";
+    const int N_MOVE = FactoredPolicyHead::N_MOVE;
+    const int N_ATK  = FactoredPolicyHead::N_ATTACK;
+    const int N_AB   = FactoredPolicyHead::N_ABILITY;
+    const int total  = N_MOVE + N_ATK + N_AB;
+    check_factored_operand(logits, logits, total, op, "logits");
+    check_factored_operand(logits, probs, total, op, "probs");
+
+    const brotensor::Device d = logits.device;
+    const brotensor::Tensor amask = device_head_mask(d, attack_mask, N_ATK);
+    const brotensor::Tensor bmask = device_head_mask(d, ability_mask, N_AB);
+
+    brotensor::Tensor pm = region(probs, 0, N_MOVE);
+    brotensor::softmax_forward(region(logits, 0, N_MOVE), pm, nullptr);
+    brotensor::Tensor pa = region(probs, N_MOVE, N_ATK);
+    brotensor::softmax_forward(region(logits, N_MOVE, N_ATK), pa, mask_ptr(amask));
+    brotensor::Tensor pb = region(probs, N_MOVE + N_ATK, N_AB);
+    brotensor::softmax_forward(region(logits, N_MOVE + N_ATK, N_AB), pb, mask_ptr(bmask));
+}
+
+float factored_xent_device(const brotensor::Tensor& logits,
+                           const brotensor::Tensor& move_target,
+                           const brotensor::Tensor& attack_target,
+                           const brotensor::Tensor& ability_target,
+                           brotensor::Tensor& probs, brotensor::Tensor& dLogits,
+                           const float* attack_mask, const float* ability_mask) {
+    constexpr const char* op = "factored_xent";
+    const int N_MOVE = FactoredPolicyHead::N_MOVE;
+    const int N_ATK  = FactoredPolicyHead::N_ATTACK;
+    const int N_AB   = FactoredPolicyHead::N_ABILITY;
+    const int total  = N_MOVE + N_ATK + N_AB;
+    check_factored_operand(logits, logits, total, op, "logits");
+    check_factored_operand(logits, move_target, N_MOVE, op, "move_target");
+    check_factored_operand(logits, attack_target, N_ATK, op, "attack_target");
+    check_factored_operand(logits, ability_target, N_AB, op, "ability_target");
+    check_factored_operand(logits, probs, total, op, "probs");
+    check_factored_operand(logits, dLogits, total, op, "dLogits");
+
+    const brotensor::Device d = logits.device;
+    const brotensor::Tensor amask = device_head_mask(d, attack_mask, N_ATK);
+    const brotensor::Tensor bmask = device_head_mask(d, ability_mask, N_AB);
+
+    struct Slice { int off, n; const brotensor::Tensor* target; const float* mask; };
+    const Slice slices[3] = {
+        {0, N_MOVE, &move_target, nullptr},
+        {N_MOVE, N_ATK, &attack_target, mask_ptr(amask)},
+        {N_MOVE + N_ATK, N_AB, &ability_target, mask_ptr(bmask)},
+    };
+    float loss = 0.0f;
+    for (const Slice& s : slices) {
+        brotensor::Tensor p  = region(probs, s.off, s.n);
+        brotensor::Tensor dl = region(dLogits, s.off, s.n);
+        loss += brotensor::softmax_xent(region(logits, s.off, s.n), region(*s.target, 0, s.n),
+                                        p, dl, s.mask);
+    }
+    return loss;
+}
+
+} // namespace
+
 static void softmax_slice(const float* logits, int n, float* probs, const float* mask) {
     float m = -1e30f;
     for (int i = 0; i < n; ++i) {
@@ -120,6 +231,10 @@ static void softmax_slice(const float* logits, int n, float* probs, const float*
 
 void factored_softmax(const brotensor::Tensor& logits, brotensor::Tensor& probs,
                       const float* attack_mask, const float* ability_mask) {
+    if (logits.device.is_gpu()) {
+        factored_softmax_device(logits, probs, attack_mask, ability_mask);
+        return;
+    }
     const int N_MOVE = FactoredPolicyHead::N_MOVE;
     const int N_ATK  = FactoredPolicyHead::N_ATTACK;
     const int N_AB   = FactoredPolicyHead::N_ABILITY;
@@ -158,6 +273,10 @@ float factored_xent(const brotensor::Tensor& logits,
                     const brotensor::Tensor& ability_target,
                     brotensor::Tensor& probs, brotensor::Tensor& dLogits,
                     const float* attack_mask, const float* ability_mask) {
+    if (logits.device.is_gpu()) {
+        return factored_xent_device(logits, move_target, attack_target, ability_target,
+                                    probs, dLogits, attack_mask, ability_mask);
+    }
     const int N_MOVE = FactoredPolicyHead::N_MOVE;
     const int N_ATK  = FactoredPolicyHead::N_ATTACK;
     const int N_AB   = FactoredPolicyHead::N_ABILITY;
