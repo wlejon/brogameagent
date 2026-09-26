@@ -3,6 +3,8 @@
 #include "arg_reader.h"
 #include "embed/embed.h"
 
+#include <brass/runtime/exception.hpp>
+
 #include <exception>
 #include <functional>
 #include <span>
@@ -15,7 +17,8 @@ namespace brogameagent::api {
 namespace ev = bronze::embed;
 using Value = bronze::Value;
 
-/// A native method body with every C++ exception turned into a JS Error. The
+/// A native method body with every C++ exception turned into a JS Error, save
+/// a JS throw (brass::runtime::BrassException), which passes unchanged. The
 /// caller may be compiled JS, whose frames carry no unwind metadata, so an
 /// exception escaping a body (bad_alloc on a corrupt replay's counts, a
 /// library's invalid_argument) would otherwise end the process. A checked
@@ -24,6 +27,8 @@ inline ev::NativeFn guardNative(ev::NativeFn fn) {
     return [fn = std::move(fn)](Value self, std::span<const Value> args) -> Value {
         try {
             return fn(self, args);
+        } catch (const brass::runtime::BrassException&) {
+            throw;  // a JS throw (ev::throw*, or a callback's): it passes as thrown
         } catch (const JsRangeError& e) {
             return ev::throwRangeError(e.what());
         } catch (const std::exception& e) {
