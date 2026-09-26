@@ -63,6 +63,7 @@ const std::vector<double>* HexNav::stepCosts(const std::string& id) const {
 bool HexNav::setClearance(const std::string& id, const uint8_t* table, size_t n) {
     if (!table || n != static_cast<size_t>(cells())) return false;
     clearance_[id].assign(table, table + n);
+    depth_.erase(id);
     // A clearance table is half of a (table, clearance) component key; every
     // cached labelling that used this id is stale.
     for (auto it = components_.begin(); it != components_.end();) {
@@ -120,6 +121,7 @@ const std::vector<uint8_t>& HexNav::buildClearance(const std::string& id, int ra
 
     std::vector<uint8_t>& slot = clearance_[id];
     slot.swap(out);
+    depth_.erase(id);
     for (auto it = components_.begin(); it != components_.end();) {
         const size_t sep = it->first.find(kKeySep);
         if (sep != std::string::npos && it->first.compare(sep + 1, std::string::npos, id) == 0)
@@ -208,8 +210,14 @@ double HexNav::heuristic(int x, int y, int gq, int gr) const {
 // ── The one search ─────────────────────────────────────────────────────────
 
 bool HexNav::search(const std::vector<double>& table, const std::vector<uint8_t>* clr,
-                    int x0, int y0, int goal, double maxCost) {
+                    int x0, int y0, int goal, double maxCost,
+                    const uint8_t* depth, const PathOptions* opt) {
     const int size = size_;
+    const double* depthCost = (opt && depth && opt->depthCost && opt->depthLevels > 0) ? opt->depthCost : nullptr;
+    const int depthLevels = depthCost ? opt->depthLevels : 0;
+    const bool avoid = opt && opt->avoidCount > 0 && opt->avoidCells;
+    const size_t maxPops = opt ? opt->maxPops : 0;
+    size_t pops = 0;
     const bool astar = goal >= 0;
     int gq = 0, gr = 0;
     if (astar) {
@@ -234,6 +242,7 @@ bool HexNav::search(const std::vector<double>& table, const std::vector<uint8_t>
         const double g = e.k - e.h;                    // f − h, both exact; 0 for Dijkstra
         if (g > static_cast<double>(cost_[static_cast<size_t>(i)])) continue;  // stale entry
         if (i == goal) return true;
+        if (maxPops && ++pops > maxPops) return false;
         const int cx = i % size, cy = i / size;
         const int (*step)[2] = STEP[cy & 1];
         for (int d = 0; d < 6; d++) {
@@ -247,6 +256,14 @@ bool HexNav::search(const std::vector<double>& table, const std::vector<uint8_t>
                 const uint8_t v = c[static_cast<size_t>(ni)];
                 if (v != 1 && v != 2) continue;
                 sc = sc * static_cast<double>(v);
+            }
+            if (depthCost) {
+                const int dd = depth[static_cast<size_t>(ni)];
+                if (dd >= 1 && dd <= depthLevels) sc += depthCost[dd - 1];
+            }
+            if (avoid && avoidStamp_[static_cast<size_t>(ni)] == avoidGen_) {
+                sc += avoidVal_[static_cast<size_t>(ni)];
+                if (sc == kInf) continue;
             }
             const double nc = g + sc;
             if (nc > maxCost) continue;
@@ -299,6 +316,113 @@ bool HexNav::findPathRadius(const std::string& id, const std::string& clearanceI
     }
     releaseScratch();
     return ok;
+}
+
+void HexNav::stampAvoid(const PathOptions& opt) {
+    const size_t n = static_cast<size_t>(cells());
+    if (avoidStamp_.size() != n) {
+        avoidStamp_.assign(n, 0);
+        avoidVal_.assign(n, 0.0);
+        avoidGen_ = 0;
+    }
+    avoidGen_ += 1;
+    if (avoidGen_ == 0) {
+        std::fill(avoidStamp_.begin(), avoidStamp_.end(), 0);
+        avoidGen_ = 1;
+    }
+    for (size_t k = 0; k < opt.avoidCount; k++) {
+        const int32_t c = opt.avoidCells[k];
+        if (c < 0 || static_cast<size_t>(c) >= n) continue;
+        const double v = opt.avoidCost ? opt.avoidCost[k] : kInf;
+        if (avoidStamp_[static_cast<size_t>(c)] != avoidGen_) {
+            avoidStamp_[static_cast<size_t>(c)] = avoidGen_;
+            avoidVal_[static_cast<size_t>(c)] = v;
+        } else if (v > avoidVal_[static_cast<size_t>(c)]) {
+            avoidVal_[static_cast<size_t>(c)] = v;
+        }
+    }
+}
+
+bool HexNav::findPathShaped(const std::string& id, const std::string& clearanceId,
+                            int x0, int y0, int x1, int y1, const PathOptions& opt,
+                            std::vector<int32_t>& outPath) {
+    auto it = tables_.find(id);
+    auto ct = clearance_.find(clearanceId);
+    if (it == tables_.end() || ct == clearance_.end()) return false;
+    if (!inBounds(x0, y0) || !inBounds(x1, y1)) return false;
+    const int32_t start = y0 * size_ + x0, goal = y1 * size_ + x1;
+    const uint8_t gv = ct->second[static_cast<size_t>(goal)];
+    if (gv != 1 && gv != 2) return false;
+    if (disconnected(id, clearanceId, start, goal)) return false;
+    const uint8_t* depth = nullptr;
+    if (opt.depthCost && opt.depthLevels > 0) depth = clearanceDepth(clearanceId).data();
+    if (opt.avoidCount > 0 && opt.avoidCells) stampAvoid(opt);
+    const std::vector<uint8_t>& clr = clearance_.find(clearanceId)->second;
+    const bool ok = search(it->second, &clr, x0, y0, goal, opt.maxCost, depth, &opt);
+    if (ok) {
+        outPath.clear();
+        for (int32_t i = goal; i != -1; i = parent_[static_cast<size_t>(i)]) outPath.push_back(i);
+        std::reverse(outPath.begin(), outPath.end());
+    }
+    releaseScratch();
+    return ok;
+}
+
+const std::vector<uint8_t>& HexNav::clearanceDepth(const std::string& clearanceId) {
+    auto cached = depth_.find(clearanceId);
+    if (cached != depth_.end()) return cached->second;
+    const int size = size_;
+    const size_t n = static_cast<size_t>(cells());
+    std::vector<uint8_t> depth(n, 0);
+    auto ct = clearance_.find(clearanceId);
+    if (ct != clearance_.end()) {
+        const uint8_t* c = ct->second.data();
+        std::vector<int32_t> frontier, next;
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                const int32_t i = y * size + x;
+                const uint8_t v = c[static_cast<size_t>(i)];
+                if (v != 1 && v != 2) continue;
+                bool edge = x == 0 || y == 0 || x == size - 1 || y == size - 1;
+                if (!edge) {
+                    const int (*step)[2] = STEP[y & 1];
+                    for (int d = 0; d < 6 && !edge; d++) {
+                        const uint8_t w = c[static_cast<size_t>((y + step[d][1]) * size + x + step[d][0])];
+                        if (w != 1 && w != 2) edge = true;
+                    }
+                }
+                if (edge) {
+                    depth[static_cast<size_t>(i)] = 1;
+                    frontier.push_back(i);
+                }
+            }
+        }
+        uint8_t level = 1;
+        while (!frontier.empty() && level < 255) {
+            next.clear();
+            const uint8_t nl = static_cast<uint8_t>(level + 1);
+            for (int32_t i : frontier) {
+                const int cx = i % size, cy = i / size;
+                const int (*step)[2] = STEP[cy & 1];
+                for (int d = 0; d < 6; d++) {
+                    const int nx = cx + step[d][0], ny = cy + step[d][1];
+                    if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+                    const int32_t ni = ny * size + nx;
+                    const uint8_t v = c[static_cast<size_t>(ni)];
+                    if ((v != 1 && v != 2) || depth[static_cast<size_t>(ni)] != 0) continue;
+                    depth[static_cast<size_t>(ni)] = nl;
+                    next.push_back(ni);
+                }
+            }
+            frontier.swap(next);
+            level = nl;
+        }
+        for (size_t i = 0; i < n; i++) {
+            const uint8_t v = c[i];
+            if ((v == 1 || v == 2) && depth[i] == 0) depth[i] = 255;
+        }
+    }
+    return depth_.emplace(clearanceId, std::move(depth)).first->second;
 }
 
 bool HexNav::movementField(const std::string& id, int x0, int y0, double maxCost,

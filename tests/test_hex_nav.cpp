@@ -400,6 +400,68 @@ TEST(build_clearance_matches_walk) {
     }
 }
 
+TEST(shaped_search_defaults_match_radius_search) {
+    for (uint32_t seed = 41; seed <= 44; seed++) {
+        Grid g = makeGrid(32, seed, 0.0, false);
+        HexNav nav = makeNav(g, "c");
+        Lcg r(seed * 13);
+        HexNav::PathOptions opt;
+        for (int k = 0; k < 30; k++) {
+            const int x0 = r.next() % 32, y0 = r.next() % 32, x1 = r.next() % 32, y1 = r.next() % 32;
+            std::vector<int32_t> a, b;
+            const bool okA = nav.findPathRadius("t", "c", x0, y0, x1, y1, INF, a);
+            const bool okB = nav.findPathShaped("t", "c", x0, y0, x1, y1, opt, b);
+            CHECK(okA == okB);
+            if (okA) CHECK(a == b);
+        }
+    }
+}
+
+TEST(clearance_depth_and_shaped_costs) {
+    const int n = 20;
+    HexNav nav(n);
+    std::vector<double> t(n * n * 6, 1.0);
+    CHECK(nav.setStepCosts("t", t.data(), t.size()));
+    std::vector<uint8_t> clr(n * n, 1);
+    for (int x = 0; x < n; x++) { clr[5 * n + x] = 3; clr[11 * n + x] = 3; }
+    CHECK(nav.setClearance("c", clr.data(), clr.size()));
+    const std::vector<uint8_t>& depth = nav.clearanceDepth("c");
+    CHECK(depth[5 * n + 10] == 0);
+    CHECK(depth[6 * n + 10] == 1);
+    CHECK(depth[7 * n + 10] == 2);
+    CHECK(depth[8 * n + 10] == 3);
+    CHECK(depth[10 * n + 10] == 1);
+    CHECK(depth[8 * n + 0] == 1);
+
+    HexNav::PathOptions opt;
+    const double hug[2] = {0.5, 0.2};
+    opt.depthCost = hug;
+    opt.depthLevels = 2;
+    std::vector<int32_t> path;
+    CHECK(nav.findPathShaped("t", "c", 2, 6, 17, 6, opt, path));
+    int wallSide = 0;
+    for (int32_t c : path) if (c / n == 6 && c % n > 5 && c % n < 14) wallSide++;
+    CHECK(wallSide == 0);
+
+    std::vector<int32_t> avoid;
+    std::vector<double> cost;
+    for (int y = 6; y <= 10; y++) { avoid.push_back(y * n + 10); cost.push_back(INF); }
+    HexNav::PathOptions wall;
+    wall.avoidCells = avoid.data();
+    wall.avoidCost = cost.data();
+    wall.avoidCount = avoid.size();
+    CHECK(!nav.findPathShaped("t", "c", 2, 8, 17, 8, wall, path));
+    wall.maxPops = 5;
+    CHECK(!nav.findPathShaped("t", "c", 2, 8, 9, 8, wall, path));
+    wall.maxPops = 0;
+    CHECK(nav.findPathShaped("t", "c", 2, 8, 9, 8, wall, path));
+    CHECK(nav.findPathRadius("t", "c", 2, 8, 17, 8, INF, path));
+
+    clr[5 * n + 10] = 1;
+    CHECK(nav.setClearance("c", clr.data(), clr.size()));
+    CHECK(nav.clearanceDepth("c")[5 * n + 10] == 1);
+}
+
 TEST(rejects_bad_sizes_and_unknown_tables) {
     HexNav nav(8);
     std::vector<double> t(8 * 8 * 6, 1.0);

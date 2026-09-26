@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -81,6 +82,36 @@ public:
                         int x0, int y0, int x1, int y1, double maxCost,
                         std::vector<int32_t>& outPath);
 
+    /// What a shaped search adds to the plain clearance search. Every extra
+    /// cost is added to the step (`table × clearance`), so the heuristic stays
+    /// admissible whenever the table's own steps are at least 1.
+    struct PathOptions {
+        double maxCost = std::numeric_limits<double>::infinity();
+        /// `depthCost[k]` is added to entering a cell whose clearance depth
+        /// (see clearanceDepth) is `k + 1`; deeper cells add nothing.
+        const double* depthCost = nullptr;
+        int depthLevels = 0;
+        /// Per-query extra entry costs, one per listed cell (infinity blocks
+        /// the cell). A cell listed twice takes the larger cost.
+        const int32_t* avoidCells = nullptr;
+        const double* avoidCost = nullptr;
+        size_t avoidCount = 0;
+        /// Give up after this many frontier pops (0 = unbounded).
+        size_t maxPops = 0;
+    };
+
+    /// The clearance search with the extras of `opt`. Same ordering rules as
+    /// findPath; with default options it returns exactly findPathRadius's path.
+    bool findPathShaped(const std::string& id, const std::string& clearanceId,
+                        int x0, int y0, int x1, int y1, const PathOptions& opt,
+                        std::vector<int32_t>& outPath);
+
+    /// Clearance depth: for each cell the hex distance to the nearest cell the
+    /// clearance table says cannot be stood on, counting the outside of the
+    /// map as such a cell (0 = cannot be stood on, 1 = next to an obstacle),
+    /// capped at 255. Cached per clearance id and dropped when it is rebuilt.
+    const std::vector<uint8_t>& clearanceDepth(const std::string& clearanceId);
+
     /// Dijkstra from (x0,y0) out to `maxCost`: `cost[cell]` (single precision,
     /// infinity = unreached) and `parent[cell]` (−1 = none) over the whole
     /// grid. Returns false on an unknown table or out-of-bounds start.
@@ -124,7 +155,9 @@ private:
     double heuristic(int x, int y, int gq, int gr) const;
     // The one search; leaves its answer in the scratch (cost_/parent_).
     bool search(const std::vector<double>& table, const std::vector<uint8_t>* clr,
-                int x0, int y0, int goal, double maxCost);
+                int x0, int y0, int goal, double maxCost,
+                const uint8_t* depth = nullptr, const PathOptions* opt = nullptr);
+    void stampAvoid(const PathOptions& opt);
     void releaseScratch();
     void heapPush(double k, double h, int32_t v);
     Entry heapPop();
@@ -135,6 +168,11 @@ private:
     std::unordered_map<std::string, std::vector<double>> tables_;
     std::unordered_map<std::string, std::vector<uint8_t>> clearance_;
     std::unordered_map<std::string, std::vector<int32_t>> components_;
+    std::unordered_map<std::string, std::vector<uint8_t>> depth_;
+
+    std::vector<uint32_t> avoidStamp_;
+    std::vector<double> avoidVal_;
+    uint32_t avoidGen_ = 0;
 
     // Search scratch, kept clean between calls (Infinity / −1) by releaseScratch().
     std::vector<float> cost_;
