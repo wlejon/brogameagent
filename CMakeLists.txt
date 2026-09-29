@@ -28,9 +28,12 @@ endif()
 # The two are mutually exclusive at brotensor's level.
 option(BROGAMEAGENT_WITH_CUDA  "Dispatch GPU work via brotensor (CUDA)"  OFF)
 option(BROGAMEAGENT_WITH_METAL "Dispatch GPU work via brotensor (Metal)" OFF)
-if(BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL)
+option(BROGAMEAGENT_WITH_HIP   "Dispatch GPU work via brotensor (HIP)"   OFF)
+if((BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL) OR
+   (BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_HIP) OR
+   (BROGAMEAGENT_WITH_METAL AND BROGAMEAGENT_WITH_HIP))
     message(FATAL_ERROR
-        "BROGAMEAGENT_WITH_CUDA and BROGAMEAGENT_WITH_METAL are mutually exclusive.")
+        "BROGAMEAGENT_WITH_CUDA, BROGAMEAGENT_WITH_METAL, and BROGAMEAGENT_WITH_HIP are mutually exclusive.")
 endif()
 
 # --- NN + learning layer (optional) ---
@@ -43,7 +46,7 @@ endif()
 # minimal `bro` build wants. GPU dispatch is a feature of the NN layer, so
 # requesting a GPU backend implies it. Default ON preserves the full surface.
 option(BROGAMEAGENT_WITH_NN "Build the neural-net + learning layer (requires brotensor)" ON)
-if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
+if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_HIP)
     set(BROGAMEAGENT_WITH_NN ON CACHE BOOL "" FORCE)
 endif()
 
@@ -103,12 +106,19 @@ if(BROGAMEAGENT_WITH_NN)
     if(BROGAMEAGENT_WITH_CUDA)
         set(BROTENSOR_WITH_CUDA  ON  CACHE BOOL "" FORCE)
         set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_HIP   OFF CACHE BOOL "" FORCE)
     elseif(BROGAMEAGENT_WITH_METAL)
         set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
         set(BROTENSOR_WITH_METAL ON  CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_HIP   OFF CACHE BOOL "" FORCE)
+    elseif(BROGAMEAGENT_WITH_HIP)
+        set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_HIP   ON  CACHE BOOL "" FORCE)
     else()
         set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
         set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
+        set(BROTENSOR_WITH_HIP   OFF CACHE BOOL "" FORCE)
     endif()
     if(NOT TARGET brotensor)
         set(BROTENSOR_DIR "${CMAKE_SOURCE_DIR}/../brotensor" CACHE PATH "brotensor sibling")
@@ -317,7 +327,7 @@ if(BROGAMEAGENT_TOOLS)
         add_executable(nn_pretrain_ae tools/nn_pretrain_ae.cpp)
         target_link_libraries(nn_pretrain_ae PRIVATE brogameagent)
 
-        if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL)
+        if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_HIP)
             add_executable(nn_pretrain_ae_gpu tools/nn_pretrain_ae_gpu.cpp)
             target_link_libraries(nn_pretrain_ae_gpu PRIVATE brogameagent)
 
