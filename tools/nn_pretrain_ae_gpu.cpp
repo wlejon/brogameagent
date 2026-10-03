@@ -1,7 +1,7 @@
 // nn_pretrain_ae_gpu — GPU autoencoder pretraining for DeepSetsEncoder.
 //
 // Mirrors the shape of nn_pretrain_ae.cpp but trains on the default device
-// (best available — CUDA/Metal/CPU) end-to-end:
+// (best available — CUDA/Metal/Vulkan/CPU) end-to-end:
 //   1. Generate observations via short MCTS duels (same as the CPU tool).
 //   2. Construct DeepSetsAutoencoder, call to(default_device()) once.
 //   3. Per step: upload observation → forward → mse_vec_forward → mse_vec_backward

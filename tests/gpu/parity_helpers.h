@@ -112,8 +112,7 @@ inline Tensor download_to_host(const Tensor& g) {
 // ─── GPU device selection ─────────────────────────────────────────────────
 
 // The GPU device these tests run on: brotensor's default device when it is a
-// GPU (on an AMD build with HIP and Vulkan, Vulkan unless
-// BROTENSOR_PREFER_HIP=1 or BROTENSOR_DEFAULT_DEVICE=hip), else the first GPU
+// GPU (BROTENSOR_DEFAULT_DEVICE picks among several), else the first GPU
 // brotensor registered at init(), or CPU when no GPU backend probed. Call
 // brotensor::init() first; run_all() does, and uses the CPU answer to SKIP.
 inline brotensor::Device gpu_device() {

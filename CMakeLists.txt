@@ -24,19 +24,15 @@ endif()
 #
 # brogameagent dispatches GPU work to brotensor (sibling repo / submodule).
 # Selecting one of these options pulls in brotensor with the matching backend
-# and sets the BROTENSOR_HAS_CUDA / _METAL / _GPU defines on us transitively.
-# The two are mutually exclusive at brotensor's level.
+# and sets the BROTENSOR_HAS_CUDA / _METAL / _VULKAN / _GPU defines on us
+# transitively. CUDA and Metal are mutually exclusive at brotensor's level.
 option(BROGAMEAGENT_WITH_CUDA  "Dispatch GPU work via brotensor (CUDA)"  OFF)
 option(BROGAMEAGENT_WITH_METAL "Dispatch GPU work via brotensor (Metal)" OFF)
-option(BROGAMEAGENT_WITH_HIP   "Dispatch GPU work via brotensor (HIP)"   OFF)
-# Vulkan is additive: it coexists with any of the three above (with HIP on an
-# AMD machine, where brotensor makes it the default device).
+# Vulkan (the AMD GPU path) is additive: it coexists with either of the above.
 option(BROGAMEAGENT_WITH_VULKAN "Dispatch GPU work via brotensor (Vulkan)" OFF)
-if((BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL) OR
-   (BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_HIP) OR
-   (BROGAMEAGENT_WITH_METAL AND BROGAMEAGENT_WITH_HIP))
+if(BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL)
     message(FATAL_ERROR
-        "BROGAMEAGENT_WITH_CUDA, BROGAMEAGENT_WITH_METAL, and BROGAMEAGENT_WITH_HIP are mutually exclusive.")
+        "BROGAMEAGENT_WITH_CUDA and BROGAMEAGENT_WITH_METAL are mutually exclusive.")
 endif()
 
 # --- NN + learning layer (optional) ---
@@ -49,7 +45,7 @@ endif()
 # minimal `bro` build wants. GPU dispatch is a feature of the NN layer, so
 # requesting a GPU backend implies it. Default ON preserves the full surface.
 option(BROGAMEAGENT_WITH_NN "Build the neural-net + learning layer (requires brotensor)" ON)
-if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_HIP OR BROGAMEAGENT_WITH_VULKAN)
+if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN)
     set(BROGAMEAGENT_WITH_NN ON CACHE BOOL "" FORCE)
 endif()
 
@@ -109,19 +105,12 @@ if(BROGAMEAGENT_WITH_NN)
     if(BROGAMEAGENT_WITH_CUDA)
         set(BROTENSOR_WITH_CUDA  ON  CACHE BOOL "" FORCE)
         set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
-        set(BROTENSOR_WITH_HIP   OFF CACHE BOOL "" FORCE)
     elseif(BROGAMEAGENT_WITH_METAL)
         set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
         set(BROTENSOR_WITH_METAL ON  CACHE BOOL "" FORCE)
-        set(BROTENSOR_WITH_HIP   OFF CACHE BOOL "" FORCE)
-    elseif(BROGAMEAGENT_WITH_HIP)
-        set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
-        set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
-        set(BROTENSOR_WITH_HIP   ON  CACHE BOOL "" FORCE)
     else()
         set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
         set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
-        set(BROTENSOR_WITH_HIP   OFF CACHE BOOL "" FORCE)
     endif()
     # Turned on, never forced off: a parent (bro) that enables brotensor's
     # Vulkan backend keeps it whatever this option says.
@@ -335,7 +324,7 @@ if(BROGAMEAGENT_TOOLS)
         add_executable(nn_pretrain_ae tools/nn_pretrain_ae.cpp)
         target_link_libraries(nn_pretrain_ae PRIVATE brogameagent)
 
-        if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_HIP)
+        if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN)
             add_executable(nn_pretrain_ae_gpu tools/nn_pretrain_ae_gpu.cpp)
             target_link_libraries(nn_pretrain_ae_gpu PRIVATE brogameagent)
 

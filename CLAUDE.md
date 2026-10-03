@@ -44,7 +44,7 @@ serialization, `to(Device)` migration). The underlying tensor type and
 per-op math live in [brotensor](../brotensor): one `brotensor::Tensor`
 that carries a runtime `Device` tag, and a single device-neutral op
 surface (`brotensor::linear_forward(...)`, etc.) that dispatches to the
-CPU/CUDA/Metal/Vulkan/HIP backend by its operands' device. **Do not reintroduce
+CPU/CUDA/Metal/Vulkan backend by its operands' device. **Do not reintroduce
 tensor storage or op math into brogameagent**. A missing CPU op gets
 added to brotensor's CPU backend, not hand-rolled here.
 
@@ -83,7 +83,7 @@ when the NN layer is on). `bromath` (header-only) is an unconditional sibling
 at `../bromath`. Both have first-loader-wins guards so they're safe inside a
 parent project that pulls in multiple siblings.
 
-Defines that propagate from brotensor: `BROTENSOR_HAS_CUDA` / `BROTENSOR_HAS_METAL` / `BROTENSOR_HAS_HIP` / `BROTENSOR_HAS_VULKAN` / `BROTENSOR_HAS_GPU`. On AMD, build with `BROGAMEAGENT_WITH_VULKAN=ON` (the AMD backend of choice, the default device) plus `BROGAMEAGENT_WITH_HIP=ON` as the comparison backend (`BROTENSOR_PREFER_HIP=1` selects it). Code rarely needs them: the unified `Tensor` and op surface compile the same regardless of backend; reach for them only to gate a test path that genuinely needs a GPU device present.
+Defines that propagate from brotensor: `BROTENSOR_HAS_CUDA` / `BROTENSOR_HAS_METAL` / `BROTENSOR_HAS_VULKAN` / `BROTENSOR_HAS_GPU`. On AMD, build with `BROGAMEAGENT_WITH_VULKAN=ON` (the AMD GPU path). Code rarely needs them: the unified `Tensor` and op surface compile the same regardless of backend; reach for them only to gate a test path that genuinely needs a GPU device present.
 
 ## Tests
 
