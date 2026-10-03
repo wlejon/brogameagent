@@ -29,6 +29,9 @@ endif()
 option(BROGAMEAGENT_WITH_CUDA  "Dispatch GPU work via brotensor (CUDA)"  OFF)
 option(BROGAMEAGENT_WITH_METAL "Dispatch GPU work via brotensor (Metal)" OFF)
 option(BROGAMEAGENT_WITH_HIP   "Dispatch GPU work via brotensor (HIP)"   OFF)
+# Vulkan is additive: it coexists with any of the three above (with HIP on an
+# AMD machine, where brotensor makes it the default device).
+option(BROGAMEAGENT_WITH_VULKAN "Dispatch GPU work via brotensor (Vulkan)" OFF)
 if((BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_METAL) OR
    (BROGAMEAGENT_WITH_CUDA AND BROGAMEAGENT_WITH_HIP) OR
    (BROGAMEAGENT_WITH_METAL AND BROGAMEAGENT_WITH_HIP))
@@ -46,7 +49,7 @@ endif()
 # minimal `bro` build wants. GPU dispatch is a feature of the NN layer, so
 # requesting a GPU backend implies it. Default ON preserves the full surface.
 option(BROGAMEAGENT_WITH_NN "Build the neural-net + learning layer (requires brotensor)" ON)
-if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_HIP)
+if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_HIP OR BROGAMEAGENT_WITH_VULKAN)
     set(BROGAMEAGENT_WITH_NN ON CACHE BOOL "" FORCE)
 endif()
 
@@ -119,6 +122,11 @@ if(BROGAMEAGENT_WITH_NN)
         set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
         set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
         set(BROTENSOR_WITH_HIP   OFF CACHE BOOL "" FORCE)
+    endif()
+    # Turned on, never forced off: a parent (bro) that enables brotensor's
+    # Vulkan backend keeps it whatever this option says.
+    if(BROGAMEAGENT_WITH_VULKAN)
+        set(BROTENSOR_WITH_VULKAN ON CACHE BOOL "" FORCE)
     endif()
     if(NOT TARGET brotensor)
         set(BROTENSOR_DIR "${CMAKE_SOURCE_DIR}/../brotensor" CACHE PATH "brotensor sibling")

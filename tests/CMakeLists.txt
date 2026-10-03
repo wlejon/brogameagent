@@ -226,7 +226,7 @@ endif()
 add_test(NAME brogameagent_single_hero_net_tx_test
          COMMAND brogameagent_single_hero_net_tx_test)
 
-if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_HIP)
+if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_HIP OR BROGAMEAGENT_WITH_VULKAN)
     # Per-op CPU↔GPU parity tests for the brotensor op surface now live in
     # brotensor/tests/ (test_*_parity.cpp). What remains here exercises
     # brogameagent's own layer / server / trainer GPU dispatch.

@@ -202,9 +202,27 @@ bool resolveDevice(const std::string& name, brotensor::Device& out, std::string&
     for (auto& c : dev) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
     out = brotensor::Device::CPU;
+    brotensor::init();
+    // A backend by name: 'cuda', 'hip' / 'rocm', 'vulkan' / 'vk', 'metal'.
+    // Anything else but "gpu" is the CPU, as before.
+    brotensor::Device named = brotensor::Device::CPU;
+    if (dev == "cuda") named = brotensor::Device::CUDA;
+    else if (dev == "hip" || dev == "rocm") named = brotensor::Device::HIP;
+    else if (dev == "vulkan" || dev == "vk") named = brotensor::Device::VULKAN;
+    else if (dev == "metal") named = brotensor::Device::Metal;
+    if (named.is_gpu()) {
+        if (!brotensor::is_available(named) &&
+            !(named == brotensor::Device::CUDA && brotensor::default_device().is_gpu())) {
+            error = "device '" + dev + "' is not available in this build or on this machine";
+            return false;
+        }
+        out = named;
+        return true;
+    }
     if (dev != "gpu") return true;
 
-    brotensor::init();
+    // "gpu": brotensor's default device (on an AMD build with HIP and Vulkan,
+    // Vulkan unless BROTENSOR_PREFER_HIP=1).
     out = brotensor::default_device();
     if (out == brotensor::Device::CPU) {
         // GPU-first: a CPU-only build refuses rather than pretending. The old
