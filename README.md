@@ -7,7 +7,7 @@
 A C++20 game-AI library: navigation and movement, MCTS planners, and a
 hand-crafted autograd-free NN stack with ExIt-style self-improvement.
 No Python, no libtorch, no ONNX. Sibling repos `bromath` (header-only
-math) and `brotensor` (tensor + ops, CPU / CUDA / Metal) vendor in as
+math) and `brotensor` (tensor + ops, CPU / CUDA / Metal / Vulkan / HIP) vendor in as
 `add_subdirectory`; `recastnavigation` is the only external dependency
 and it's optional.
 
@@ -66,7 +66,8 @@ ctest --test-dir build -C Release
 | Option | Default | Effect |
 |---|---|---|
 | `BROGAMEAGENT_WITH_NN` | `ON` | `nn/` + `learn/`, the only users of brotensor. `OFF` drops that dependency entirely. Forced `ON` by either GPU option. |
-| `BROGAMEAGENT_WITH_CUDA` / `_METAL` | `OFF` | GPU dispatch through brotensor. Mutually exclusive. |
+| `BROGAMEAGENT_WITH_CUDA` / `_METAL` / `_HIP` | `OFF` | GPU dispatch through brotensor. Mutually exclusive. |
+| `BROGAMEAGENT_WITH_VULKAN` | `OFF` | Vulkan dispatch through brotensor, beside any of the above. The AMD backend of choice (the default device with HIP also on; HIP is the comparison backend, `BROTENSOR_PREFER_HIP=1`). |
 | `BROGAMEAGENT_WITH_NAVMESH` | `ON` standalone, `OFF` as a subdirectory | Polygon `NavMesh` via `recastnavigation`. |
 | `BROGAMEAGENT_TOOLS` / `_EXAMPLES` / `_TESTS` | top-level | CLI tools, examples, test binaries. |
 
