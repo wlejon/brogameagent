@@ -6,10 +6,23 @@
 
 A C++20 game-AI library: navigation and movement, MCTS planners, and a
 hand-crafted autograd-free NN stack with ExIt-style self-improvement.
-No Python, no libtorch, no ONNX. Sibling repos `bromath` (header-only
-math) and `brotensor` (tensor + ops, CPU / CUDA / Metal / Vulkan) vendor in as
-`add_subdirectory`; `recastnavigation` is the only external dependency
-and it's optional.
+No Python, no libtorch, no ONNX. It builds on two sibling repos,
+[bromath](https://github.com/wlejon/bromath) (header-only math) and
+[brotensor](https://github.com/wlejon/brotensor) (tensor + ops, CPU / CUDA /
+Metal / Vulkan); `recastnavigation` is the only external dependency and it's
+optional.
+
+brogameagent is one of the engine libraries of the
+[bro ecosystem](https://github.com/wlejon/bro/blob/main/docs/ecosystem.md):
+[bro](https://github.com/wlejon/bro) links it under `BRO_WITH_GAMEAI` and
+exposes it to apps as `bro.ai.game` through the JavaScript binding in
+`src/api/` (`brogameagent_api`), which needs
+[bronze](https://github.com/wlejon/bronze) and [brass](https://github.com/wlejon/brass).
+
+The core is CPU code. The neural layer runs wherever brotensor does: on the
+CPU by default, or on CUDA, Metal or Vulkan when one of the GPU options below is
+on. CI builds and tests the default (CPU) configuration on Windows (MSVC),
+Linux (GCC and Clang) and macOS (arm64); the GPU paths are tested on hardware.
 
 Two halves, separable at configure time: a **core** (navigation,
 steering, avoidance, perception, the combat sim, the planners) with no
@@ -62,6 +75,16 @@ the planner or learning stack is combat-specific.
 cmake -S . -B build && cmake --build build --config Release
 ctest --test-dir build -C Release
 ```
+
+bromath and brotensor resolve the way every repo in the ecosystem resolves a
+sibling: an existing target wins (bro adds both first), then a checkout beside
+this one (`../bromath`, `../brotensor`; override with `-DBROMATH_DIR` /
+`-DBROTENSOR_DIR`), then the `third_party/` submodules, which carry both, so
+`git clone --recursive` is enough for them. The JavaScript binding needs
+bronze and brass beside this repository in either layout (or
+`-DBRONZE_DIR=<path>`); they have no submodule, because the binding has to be
+compiled against the same bronze as the program that loads it.
+`-DBROGAMEAGENT_ENABLE_API=OFF` skips the binding.
 
 | Option | Default | Effect |
 |---|---|---|
@@ -239,6 +262,12 @@ circuit's analytic backward and returns non-zero on any failure;
 bias-correction, and the TX net. On GPU builds, `tests/gpu/` exercises
 per-layer host↔device migration and the batched inference / MCTS server
 paths. (Op-level CPU↔GPU parity is tested in brotensor.)
+`brogameagent_test_api` runs the JavaScript binding.
+
+CI runs the suite on Linux (GCC and Clang), Windows (MSVC) and macOS/arm64
+against the siblings' main branches, builds once more from the
+`third_party/` submodules alone (the fresh-clone path), and reports coverage
+of `include/brogameagent/` and `src/` in each run's summary.
 
 ## License
 
