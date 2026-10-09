@@ -13,18 +13,14 @@ concurrency:
 # brogameagent depends on two siblings: the header-only bromath and brotensor
 # (the host Tensor type + CPU op backend, a hard dependency of the NN/learning
 # layer). CI builds the default configuration — BROGAMEAGENT_WITH_NN=ON,
-# GPU backends OFF — so brotensor is pulled in CPU-only. Every job reconstructs
-# the sibling layout:
+# GPU backends OFF — so brotensor is pulled in CPU-only. Every job builds a
+# plain clone, checked out under brogameagent/ with the build tree beside it;
+# bromath, brotensor and bronze (the JavaScript runtime brogameagent_api binds,
+# with brass, its code generator) come from the commits CMakeLists.txt pins
+# (cmake/bro_deps.cmake), fetched at configure. There are no submodules and no
+# sibling checkouts.
 #
-#   $GITHUB_WORKSPACE/
-#     brogameagent/  <- this repo, checked out into a named path
-#     bromath/
-#     brotensor/
-#     bronze/        <- the JavaScript runtime brogameagent_api binds
-#     brass/         <- bronze's code generator
-#
-# bronze and brass are laid out by bronze's checkout-toolchain action and
-# compiled inside this build tree (bronze add_subdirectory()s brass), with the
+# bronze and brass compile inside this build tree with the
 # job's own compiler and CRT — the api is bound across bronze's C++ embed
 # boundary, so a prebuilt bronze would be an unverifiable ABI hazard. That is
 # what makes brogameagent_test_api the check that the library works the way
@@ -50,18 +46,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: brogameagent
-
-      - uses: actions/checkout@v7
-        with:
-          repository: wlejon/bromath
-          path: bromath
-
-      - uses: actions/checkout@v7
-        with:
-          repository: wlejon/brotensor
-          path: brotensor
-
-      - uses: wlejon/bronze/.github/actions/checkout-toolchain@main
 
       - name: Install Ninja (Linux)
         if: runner.os == 'Linux'
@@ -89,48 +73,11 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
-  # ── Submodule fallback ────────────────────────────────────────────────────
-  #
-  # No sibling checkouts: bromath and brotensor come from the flat third_party/
-  # submodules at the commits this repo pins, as they do for a fresh
-  # `git clone --recursive`. bronze and brass are the documented exception (no
-  # submodule; the api has to compile against the bronze of the program that
-  # loads it) and are laid out beside the repo as in the other jobs. The
-  # configure step checks each sibling really took the submodule path.
-  submodule:
-    name: Submodule fallback · ubuntu-24.04
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          path: brogameagent
-          submodules: recursive
-
-      - uses: wlejon/bronze/.github/actions/checkout-toolchain@main
-
-      - name: Install Ninja
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ninja-build
-
-      - name: Configure
-        shell: bash
-        run: |
-          test ! -e bromath && test ! -e brotensor
-          cmake -S brogameagent -B build -G Ninja -DCMAKE_BUILD_TYPE=Release | tee configure.log
-          for s in bromath brotensor; do
-            grep -q "brogameagent: $s from .*third_party/$s (submodule)" configure.log
-          done
-
-      - name: Build
-        run: cmake --build build --parallel 4
-
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
-
   # ── Coverage ──────────────────────────────────────────────────────────────
   #
   # Debug + --coverage on Linux. --filter scopes the numbers to brogameagent's
-  # own code (include/brogameagent/ + src/); the bromath and brotensor siblings
-  # are excluded.
+  # own code (include/brogameagent/ + src/); the bromath and brotensor
+  # dependencies are excluded.
   coverage:
     name: Coverage
     runs-on: ubuntu-24.04
@@ -138,18 +85,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: brogameagent
-
-      - uses: actions/checkout@v7
-        with:
-          repository: wlejon/bromath
-          path: bromath
-
-      - uses: actions/checkout@v7
-        with:
-          repository: wlejon/brotensor
-          path: brotensor
-
-      - uses: wlejon/bronze/.github/actions/checkout-toolchain@main
 
       - name: Install gcovr + Ninja
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gcovr ninja-build
@@ -191,7 +126,7 @@ jobs:
           {
             echo '## Coverage — `include/brogameagent/` + `src/`'
             echo
-            echo 'The bromath and brotensor siblings are filtered out.'
+            echo 'The bromath and brotensor dependencies are filtered out.'
             echo
             echo '```'
             cat coverage-summary.txt

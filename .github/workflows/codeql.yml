@@ -30,19 +30,10 @@ jobs:
         with:
           path: brogameagent
 
-      - uses: actions/checkout@v7
-        with:
-          repository: wlejon/bromath
-          path: bromath
-
-      - uses: actions/checkout@v7
-        with:
-          repository: wlejon/brotensor
-          path: brotensor
-
-      # bronze (and through it brass) is needed at configure for the api;
-      # neither is built here, since only the brogameagent target is traced.
-      - uses: wlejon/bronze/.github/actions/checkout-toolchain@main
+      # The dependencies — bromath, brotensor, and bronze (with brass) — are
+      # fetched at configure from the pinned commits. bronze is needed at
+      # configure for the api; it is not built here, since only the
+      # brogameagent target is traced.
 
       - name: Install Ninja
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ninja-build
@@ -69,9 +60,9 @@ jobs:
           build-mode: manual
           queries: security-extended
           # Relative to the workspace root; this repo is checked out into
-          # brogameagent/ (not the root) so the siblings can sit beside it.
+          # brogameagent/ (not the root), with the build tree beside it.
           # paths-ignore is the second line of defence, catching any finding that
-          # originates in a sibling *header* pulled into a brogameagent TU.
+          # originates in a dependency *header* pulled into a brogameagent TU.
           config-file: brogameagent/.github/codeql/codeql-config.yml
 
       # Only brogameagent's own library TUs are left to compile, so only they are

@@ -76,14 +76,15 @@ cmake -S . -B build && cmake --build build --config Release
 ctest --test-dir build -C Release
 ```
 
-bromath and brotensor resolve the way every repo in the ecosystem resolves a
-sibling: an existing target wins (bro adds both first), then a checkout beside
-this one (`../bromath`, `../brotensor`; override with `-DBROMATH_DIR` /
-`-DBROTENSOR_DIR`), then the `third_party/` submodules, which carry both, so
-`git clone --recursive` is enough for them. The JavaScript binding needs
-bronze and brass beside this repository in either layout (or
-`-DBRONZE_DIR=<path>`); they have no submodule, because the binding has to be
-compiled against the same bronze as the program that loads it.
+A plain clone is all it takes. Every dependency — bromath, brotensor, and
+bronze with brass — is pinned to a commit in `CMakeLists.txt`
+(`bro_dependency()`, `cmake/bro_deps.cmake`) and resolves the way every repo in
+the ecosystem resolves one: an existing target wins (bro adds them first), then
+a working tree beside this one (`../bromath`, `../brotensor`, `../bronze`, ...),
+then the pinned commit, fetched at configure.
+`-DFETCHCONTENT_SOURCE_DIR_<NAME>=<path>` points one dependency anywhere else.
+bronze and brass compile inside this build tree, because the JavaScript binding
+has to be compiled against the same bronze as the program that loads it.
 `-DBROGAMEAGENT_ENABLE_API=OFF` skips the binding.
 
 | Option | Default | Effect |
@@ -264,9 +265,8 @@ per-layer host↔device migration and the batched inference / MCTS server
 paths. (Op-level CPU↔GPU parity is tested in brotensor.)
 `brogameagent_test_api` runs the JavaScript binding.
 
-CI runs the suite on Linux (GCC and Clang), Windows (MSVC) and macOS/arm64
-against the siblings' main branches, builds once more from the
-`third_party/` submodules alone (the fresh-clone path), and reports coverage
+CI runs the suite on a plain clone on Linux (GCC and Clang), Windows (MSVC)
+and macOS/arm64 against the pinned dependencies, and reports coverage
 of `include/brogameagent/` and `src/` in each run's summary.
 
 ## License
