@@ -1,6 +1,6 @@
 version: 2
 
-# brogameagent pins its dependencies (bromath, brotensor, bronze) to commits
+# brogameagent takes its dependencies (bromath, brotensor, bronze) at their main
 # with bro_dependency() in CMakeLists.txt, not through a package manager, and
 # vendors nothing, so there is no manifest for
 # Dependabot to bump. The only versioned things it can watch are the pinned

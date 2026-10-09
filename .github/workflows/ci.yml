@@ -16,7 +16,7 @@ concurrency:
 # GPU backends OFF — so brotensor is pulled in CPU-only. Every job builds a
 # plain clone, checked out under brogameagent/ with the build tree beside it;
 # bromath, brotensor and bronze (the JavaScript runtime brogameagent_api binds,
-# with brass, its code generator) come from the commits CMakeLists.txt pins
+# with brass, its code generator) come from the heads of their main branches
 # (cmake/bro_deps.cmake), fetched at configure. There are no submodules and no
 # sibling checkouts.
 #

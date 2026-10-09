@@ -22,7 +22,7 @@ endif()
 
 # --- Optional GPU dispatch (CUDA or Metal via brotensor) ---
 #
-# brogameagent dispatches GPU work to brotensor (a pinned dependency).
+# brogameagent dispatches GPU work to brotensor (a bro_dependency).
 # Selecting one of these options pulls in brotensor with the matching backend
 # and sets the BROTENSOR_HAS_CUDA / _METAL / _VULKAN / _GPU defines on us
 # transitively. CUDA and Metal are mutually exclusive at brotensor's level.
@@ -119,8 +119,8 @@ endif()
 # --- Dependencies: bromath (header-only), brotensor (NN layer), bronze ---
 # Each resolves through cmake/bro_deps.cmake, like every repo in the bro
 # ecosystem: an existing target (a parent project such as bro got there first,
-# and its pins win); otherwise the ../<name> working tree beside the top-level
-# project; otherwise the commit pinned here, fetched at configure. Leaves first.
+# and its choice wins); otherwise the ../<name> working tree beside the top-level
+# project; otherwise the head of its main, fetched at configure. Leaves first.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/bro_deps.cmake)
 
 bro_dependency(bromath GITHUB wlejon/bromath TARGET bromath::bromath)

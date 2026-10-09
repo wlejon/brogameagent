@@ -81,7 +81,7 @@ bronze with brass — is pinned to a commit in `CMakeLists.txt`
 (`bro_dependency()`, `cmake/bro_deps.cmake`) and resolves the way every repo in
 the ecosystem resolves one: an existing target wins (bro adds them first), then
 a working tree beside this one (`../bromath`, `../brotensor`, `../bronze`, ...),
-then the pinned commit, fetched at configure.
+then the head of its main branch, fetched at configure.
 `-DFETCHCONTENT_SOURCE_DIR_<NAME>=<path>` points one dependency anywhere else.
 bronze and brass compile inside this build tree, because the JavaScript binding
 has to be compiled against the same bronze as the program that loads it.
