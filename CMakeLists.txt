@@ -71,7 +71,42 @@ endif()
 option(BROGAMEAGENT_WITH_NAVMESH
     "Polygon navmesh bake + queries (requires recastnavigation)" ${_bga_navmesh_default})
 if(BROGAMEAGENT_WITH_NAVMESH)
-    find_package(recastnavigation CONFIG QUIET)
+    # A standalone MSVC build links the static CRT (/MT, above), so it needs
+    # Recast from a static vcpkg triplet. Left to itself find_package also
+    # searches the prefixes of PATH entries, and a vcpkg
+    # installed/x64-windows/bin on PATH (for its DLLs) hands it the /MD copy,
+    # which does not link. So: no PATH search, and a vcpkg tree seen on PATH or
+    # under VCPKG_ROOT is tried in its -static triplet. A vcpkg toolchain
+    # (VCPKG_TARGET_TRIPLET) or an explicit CMAKE_PREFIX_PATH /
+    # recastnavigation_DIR still decides as before.
+    # A /MD copy an earlier configure cached is forgotten too.
+    set(_bga_recast_args)
+    set(_bga_static_crt OFF)
+    if(MSVC AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT VCPKG_TARGET_TRIPLET)
+        set(_bga_static_crt ON)
+        if(recastnavigation_DIR MATCHES "/installed/([^/]+)/share/"
+           AND NOT CMAKE_MATCH_1 MATCHES "-static$")
+            unset(recastnavigation_DIR CACHE)
+        endif()
+    endif()
+    if(_bga_static_crt AND NOT recastnavigation_DIR)
+        set(_bga_recast_hints)
+        file(TO_CMAKE_PATH "$ENV{PATH}" _bga_path)
+        foreach(_p IN LISTS _bga_path)
+            if(_p MATCHES "^(.*/installed)/([^/]+)/(debug/)?bin/?$")
+                set(_root "${CMAKE_MATCH_1}")
+                string(REGEX REPLACE "-static(-md)?$" "" _t "${CMAKE_MATCH_2}")
+                list(APPEND _bga_recast_hints "${_root}/${_t}-static")
+            endif()
+        endforeach()
+        if(DEFINED ENV{VCPKG_ROOT})
+            file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" _bga_vcpkg)
+            list(APPEND _bga_recast_hints "${_bga_vcpkg}/installed/x64-windows-static")
+        endif()
+        list(REMOVE_DUPLICATES _bga_recast_hints)
+        set(_bga_recast_args HINTS ${_bga_recast_hints} NO_SYSTEM_ENVIRONMENT_PATH)
+    endif()
+    find_package(recastnavigation CONFIG QUIET ${_bga_recast_args})
     if(NOT recastnavigation_FOUND)
         message(STATUS
             "brogameagent: recastnavigation not found — building without NavMesh. "
