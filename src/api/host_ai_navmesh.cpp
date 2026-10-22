@@ -81,10 +81,10 @@ void decorateNavMeshProto(ObjectBuilder& b) {
         ev::Persistent p(arr);
         p.set(ev::setProperty(p.get(), "partial", ev::fromBool(res.partial)));
 
-        Value linksVal = hostArrayOf(linkIndices.size(), [&](size_t i) {
+        ev::Persistent linksVal(hostArrayOf(linkIndices.size(), [&](size_t i) {
             return ev::fromDouble(linkIndices[i]);
-        });
-        p.set(ev::setProperty(p.get(), "links", linksVal));
+        }));
+        p.set(ev::setProperty(p.get(), "links", linksVal.get()));
 
         return p.get();
     });

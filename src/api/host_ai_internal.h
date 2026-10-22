@@ -222,40 +222,35 @@ extern HostClass g_optionMctsClass;
 // ---------------------------------------------------------------------------
 
 inline HostUnit* unwrapUnit(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    void* ptr = ev::handleData(v);
+    void* ptr = g_unitClass.unwrap(v);
     if (!ptr) return nullptr;
     auto* h = static_cast<HostUnit*>(ptr);
     return (h->tag == kHostUnitTag) ? h : nullptr;
 }
 
 inline HostNavGrid* unwrapNavGrid(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    void* ptr = ev::handleData(v);
+    void* ptr = g_navGridClass.unwrap(v);
     if (!ptr) return nullptr;
     auto* h = static_cast<HostNavGrid*>(ptr);
     return (h->tag == kHostNavGridTag) ? h : nullptr;
 }
 
 inline HostNavMesh* unwrapNavMesh(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    void* ptr = ev::handleData(v);
+    void* ptr = g_navMeshClass.unwrap(v);
     if (!ptr) return nullptr;
     auto* h = static_cast<HostNavMesh*>(ptr);
     return (h->tag == kHostNavMeshTag) ? h : nullptr;
 }
 
 inline HostAgent* unwrapAgent(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    void* ptr = ev::handleData(v);
+    void* ptr = g_agentClass.unwrap(v);
     if (!ptr) return nullptr;
     auto* h = static_cast<HostAgent*>(ptr);
     return (h->tag == kHostAgentTag) ? h : nullptr;
 }
 
 inline HostAgentBinding* unwrapAgentBinding(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    void* ptr = ev::handleData(v);
+    void* ptr = g_agentBindingClass.unwrap(v);
     if (!ptr) return nullptr;
     auto* h = static_cast<HostAgentBinding*>(ptr);
     if (h->tag != kHostAgentBindingTag) return nullptr;
@@ -266,16 +261,14 @@ inline HostAgentBinding* unwrapAgentBinding(Value v) {
 }
 
 inline HostHexNav* unwrapHexNav(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    void* ptr = ev::handleData(v);
+    void* ptr = g_hexNavClass.unwrap(v);
     if (!ptr) return nullptr;
     auto* h = static_cast<HostHexNav*>(ptr);
     return (h->tag == kHostHexNavTag) ? h : nullptr;
 }
 
 inline HostWorld* unwrapWorld(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    void* ptr = ev::handleData(v);
+    void* ptr = g_worldClass.unwrap(v);
     if (!ptr) return nullptr;
     auto* h = static_cast<HostWorld*>(ptr);
     return (h->tag == kHostWorldTag) ? h : nullptr;

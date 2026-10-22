@@ -4,6 +4,7 @@
 // a compiled script.
 
 #include "api/api.h"
+#include "../src/api/host_ai_internal.h"
 #include "embed/embed.h"
 #include "eval/eval.h"
 
@@ -425,6 +426,65 @@ static void test_integer_range_errors() {
     TEST_CHECK(got == "SUCCESS");
 }
 
+static void test_handle_branding_and_navmesh_links() {
+    std::cout << "[7] handle branding across classes and NavMesh.findPath links rooting (#23)..." << std::endl;
+
+    static uint32_t s_fakeNavGridTag = brogameagent::api::kHostNavGridTag;
+    ev::Persistent foreignP(ev::makeHandle(&s_fakeNavGridTag, [](void*) {}));
+    ev::registerGlobal("__testForeignHandle", foreignP.get());
+
+    // Foreign handle whose first 4 bytes match kHostNavGridTag must still be
+    // rejected by unwrapNavGrid because it was not created by g_navGridClass.
+    TEST_CHECK(brogameagent::api::unwrapNavGrid(foreignP.get()) == nullptr);
+    TEST_CHECK(brogameagent::api::unwrapUnit(foreignP.get()) == nullptr);
+    TEST_CHECK(brogameagent::api::unwrapNavMesh(foreignP.get()) == nullptr);
+    TEST_CHECK(brogameagent::api::unwrapAgent(foreignP.get()) == nullptr);
+    TEST_CHECK(brogameagent::api::unwrapAgentBinding(foreignP.get()) == nullptr);
+    TEST_CHECK(brogameagent::api::unwrapHexNav(foreignP.get()) == nullptr);
+    TEST_CHECK(brogameagent::api::unwrapWorld(foreignP.get()) == nullptr);
+
+    // Re-installing a HostClass on the same thread replaces s.ctor / s.proto cleanly.
+    brogameagent::api::g_navGridClass.install("AINavGrid", 0, nullptr, brogameagent::api::decorateNavGridProto);
+    brogameagent::api::g_navGridClass.alias("AINavGridAlias");
+
+    const std::string got = evalString(R"JS(
+        (function() {
+            const G = bro.ai.game;
+            const nav = G.createNavGrid({ minX: -5, minZ: -5, maxX: 5, maxZ: 5, cellSize: 1.0 });
+            if (typeof AINavGridAlias !== "function") return "AINavGridAlias missing";
+
+            // Foreign handle and cross-class handle must be rejected by prototype accessors/methods.
+            const widthGetter = Object.getOwnPropertyDescriptor(AINavGrid.prototype, "width").get;
+            if (widthGetter.call(__testForeignHandle) !== undefined) {
+                return "AINavGrid.width accepted unbranded foreign handle";
+            }
+            const worldCountGetter = Object.getOwnPropertyDescriptor(AIWorld.prototype, "agentCount").get;
+            if (worldCountGetter && worldCountGetter.call(nav) !== undefined && worldCountGetter.call(nav) !== 0) {
+                return "AIWorld.agentCount accepted AINavGrid";
+            }
+
+            if (G.navMeshAvailable) {
+                const pos = new Float32Array([
+                    -4, 0, -4,   4, 0, -4,   4, 0,  4,  -4, 0,  4
+                ]);
+                const idx = new Uint32Array([0, 2, 1, 0, 3, 2]);
+                const mesh = G.bakeNavMesh({
+                    positions: pos,
+                    indices: idx,
+                    offMeshLinks: [{ start: { x: -2, y: 0, z: 0 }, end: { x: 2, y: 0, z: 0 }, radius: 1.0, bidirectional: true }]
+                });
+                const res = mesh.findPath({ x: -3, y: 0, z: 0 }, { x: 3, y: 0, z: 0 });
+                if (!(res instanceof Float32Array) || !Array.isArray(res.links)) {
+                    return "NavMesh.findPath did not attach links array";
+                }
+            }
+            return "SUCCESS";
+        })()
+    )JS");
+    if (got != "SUCCESS") std::cerr << "branding/navmesh: " << got << std::endl;
+    TEST_CHECK(got == "SUCCESS");
+}
+
 int main() {
     std::cout << "Running brogameagent API test..." << std::endl;
 
@@ -438,6 +498,7 @@ int main() {
         test_register_capability();
         test_policy_mutation_during_step();
         test_integer_range_errors();
+        test_handle_branding_and_navmesh_links();
     }
     ev::destroyRealm(realm);
 
