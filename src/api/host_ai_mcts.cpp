@@ -905,46 +905,46 @@ void installAIMcts(ObjectBuilder& game) {
         return ev::undefined();
     });
 
-    game.def("rootParallelSearch", 1, [](Value, std::span<const Value> a) -> Value {
-        if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("rootParallelSearch(opts): opts required");
-        ev::Persistent opts(a[0]);
-        ev::Persistent worldsArr(ev::getProperty(opts.get(), "worlds"));
-        if (!ev::isObject(worldsArr.get())) return ev::throwTypeError("rootParallelSearch: opts.worlds required");
+    auto extractParallelWorlds = [](Value opts, const char* fn, std::vector<brogameagent::World*>& worlds,
+                                    std::shared_ptr<bgm::IEvaluator>& evaluator, std::shared_ptr<bgm::IRolloutPolicy>& rollout) -> Value {
+        ev::Persistent worldsArr(ev::getProperty(opts, "worlds"));
+        if (!ev::isObject(worldsArr.get())) return ev::throwTypeError((std::string(fn) + ": opts.worlds required").c_str());
         Value lenV = ev::getProperty(worldsArr.get(), "length");
         if (!ev::isNumber(lenV) || ev::toDouble(lenV) <= 0) return ev::throwTypeError("opts.worlds must be non-empty");
         const int nWorlds = static_cast<int>(std::min<uint32_t>(toLength(lenV), 1u << 16));
-
         // A JS callback would be run from the worker threads root-parallel
         // search spawns, and bronze's runtime is per-thread — so a function
         // here is still refused, exactly as before.
-        ev::Persistent evalV(ev::getProperty(opts.get(), "evaluator"));
-        if (ev::isFunction(evalV.get())) {
-            return ev::throwTypeError("rootParallelSearch: opts.evaluator cannot be a JS function");
-        }
-        ev::Persistent rollV(ev::getProperty(opts.get(), "rolloutPolicy"));
-        if (ev::isFunction(rollV.get())) {
-            return ev::throwTypeError("rootParallelSearch: opts.rolloutPolicy cannot be a JS function");
-        }
-
-        std::vector<brogameagent::World*> worlds;
+        ev::Persistent evalV(ev::getProperty(opts, "evaluator"));
+        if (ev::isFunction(evalV.get())) return ev::throwTypeError((std::string(fn) + ": opts.evaluator cannot be a JS function").c_str());
+        ev::Persistent rollV(ev::getProperty(opts, "rolloutPolicy"));
+        if (ev::isFunction(rollV.get())) return ev::throwTypeError((std::string(fn) + ": opts.rolloutPolicy cannot be a JS function").c_str());
         worlds.reserve(nWorlds);
         for (int i = 0; i < nWorlds; i++) {
             auto* w = unwrapWorld(ev::getElement(worldsArr.get(), static_cast<uint32_t>(i)));
             if (!w) return ev::throwTypeError("invalid World in worlds array");
             worlds.push_back(&w->world);
         }
+        if (auto* cell = unwrapEvaluatorCell(evalV.get())) evaluator = cell->p;
+        if (!evaluator) evaluator = extractHeroEvaluatorShared(evalV.get());
+        if (!evaluator) evaluator = std::make_shared<bgm::HpDeltaEvaluator>();
+        rollout = rolloutFromValueOrDefault(rollV.get());
+        return ev::undefined();
+    };
 
+    game.def("rootParallelSearch", 1, [extractParallelWorlds](Value, std::span<const Value> a) -> Value {
+        if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("rootParallelSearch(opts): opts required");
+        ev::Persistent opts(a[0]);
+        std::vector<brogameagent::World*> worlds;
+        std::shared_ptr<bgm::IEvaluator> evaluator;
+        std::shared_ptr<bgm::IRolloutPolicy> rollout;
+        if (extractParallelWorlds(opts.get(), "rootParallelSearch", worlds, evaluator, rollout); worlds.empty()) {
+            return ev::undefined();
+        }
         int heroId = getI32Property(opts.get(), "heroId", -1);
         if (heroId < 0) return ev::throwTypeError("opts.heroId required");
 
         auto cfg = parseMctsConfig(opts.get());
-        std::shared_ptr<bgm::IEvaluator> evaluator;
-        if (auto* cell = unwrapEvaluatorCell(evalV.get())) evaluator = cell->p;
-        if (!evaluator) evaluator = extractHeroEvaluatorShared(evalV.get());
-        if (!evaluator) evaluator = std::make_shared<bgm::HpDeltaEvaluator>();
-
-        auto rollout = rolloutFromValueOrDefault(rollV.get());
-
         bgm::OpponentPolicy oppPolicy = bgm::policy_aggressive;
         if (auto op = parseOpponentPolicy(opts.get())) oppPolicy = std::move(op);
 
@@ -958,40 +958,20 @@ void installAIMcts(ObjectBuilder& game) {
         return res.get();
     });
 
-    game.def("rootParallelSearchDecoupled", 1, [](Value, std::span<const Value> a) -> Value {
+    game.def("rootParallelSearchDecoupled", 1, [extractParallelWorlds](Value, std::span<const Value> a) -> Value {
         if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("rootParallelSearchDecoupled(opts): opts required");
         ev::Persistent opts(a[0]);
-        ev::Persistent worldsArr(ev::getProperty(opts.get(), "worlds"));
-        if (!ev::isObject(worldsArr.get())) return ev::throwTypeError("opts.worlds required");
-        Value lenV = ev::getProperty(worldsArr.get(), "length");
-        if (!ev::isNumber(lenV) || ev::toDouble(lenV) <= 0) return ev::throwTypeError("opts.worlds must be non-empty");
-        const int nWorlds = static_cast<int>(std::min<uint32_t>(toLength(lenV), 1u << 16));
-
-        ev::Persistent evalV(ev::getProperty(opts.get(), "evaluator"));
-        if (ev::isFunction(evalV.get())) return ev::throwTypeError("rootParallelSearchDecoupled: opts.evaluator cannot be a JS function");
-        ev::Persistent rollV(ev::getProperty(opts.get(), "rolloutPolicy"));
-        if (ev::isFunction(rollV.get())) return ev::throwTypeError("rootParallelSearchDecoupled: opts.rolloutPolicy cannot be a JS function");
-
         std::vector<brogameagent::World*> worlds;
-        worlds.reserve(nWorlds);
-        for (int i = 0; i < nWorlds; i++) {
-            auto* w = unwrapWorld(ev::getElement(worldsArr.get(), static_cast<uint32_t>(i)));
-            if (!w) return ev::throwTypeError("invalid World in worlds array");
-            worlds.push_back(&w->world);
+        std::shared_ptr<bgm::IEvaluator> evaluator;
+        std::shared_ptr<bgm::IRolloutPolicy> rollout;
+        if (extractParallelWorlds(opts.get(), "rootParallelSearchDecoupled", worlds, evaluator, rollout); worlds.empty()) {
+            return ev::undefined();
         }
-
         int heroId = getI32Property(opts.get(), "heroId", -1);
         int oppId = getI32Property(opts.get(), "oppId", -1);
         if (heroId < 0 || oppId < 0) return ev::throwTypeError("opts.heroId and opts.oppId required");
 
         auto cfg = parseMctsConfig(opts.get());
-        std::shared_ptr<bgm::IEvaluator> evaluator;
-        if (auto* cell = unwrapEvaluatorCell(evalV.get())) evaluator = cell->p;
-        if (!evaluator) evaluator = extractHeroEvaluatorShared(evalV.get());
-        if (!evaluator) evaluator = std::make_shared<bgm::HpDeltaEvaluator>();
-
-        auto rollout = rolloutFromValueOrDefault(rollV.get());
-
         bgm::ParallelSearchStats stats{};
         auto joint = bgm::root_parallel_search_decoupled(
             worlds, heroId, oppId, cfg, evaluator, rollout, &stats);

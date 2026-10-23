@@ -320,10 +320,8 @@ void installAIPlanner(ObjectBuilder& game) {
             if (ev::isObject(tc)) cfg.tactic_cfg = parseMctsConfig(tc);
             Value fc = ev::getProperty(opts.get(), "fine");
             if (ev::isObject(fc)) cfg.fine_cfg = parseMctsConfig(fc);
-            Value tmw = ev::getProperty(opts.get(), "tacticMatchWeight");
-            if (ev::isNumber(tmw)) cfg.tactic_match_weight = static_cast<float>(ev::toDouble(tmw));
-            Value tow = ev::getProperty(opts.get(), "tacticOtherWeight");
-            if (ev::isNumber(tow)) cfg.tactic_other_weight = static_cast<float>(ev::toDouble(tow));
+            cfg.tactic_match_weight = static_cast<float>(getDoubleProperty(opts.get(), "tacticMatchWeight", cfg.tactic_match_weight));
+            cfg.tactic_other_weight = static_cast<float>(getDoubleProperty(opts.get(), "tacticOtherWeight", cfg.tactic_other_weight));
             cell->planner->set_config(cfg);
 
             if (auto p = parseRolloutPolicy(opts.get(), cbs)) cell->planner->set_rollout_policy(std::move(p));

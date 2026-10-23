@@ -110,7 +110,7 @@ inline double numAt(std::span<const Value> args, size_t i) {
     Value v = args[i];
     if (!ev::isNumber(v)) return 0.0;
     double d = ev::toDouble(v);
-    return std::isnan(d) ? 0.0 : d;
+    return !std::isfinite(d) ? 0.0 : d;
 }
 
 // The integer argument readers: a missing or non-number argument is 0 (the
@@ -180,7 +180,7 @@ public:
     double getDouble(size_t i, double def = 0.0) const {
         if (i >= args_.size() || !ev::isNumber(args_[i])) return def;
         double d = ev::toDouble(args_[i]);
-        return std::isnan(d) ? def : d;
+        return !std::isfinite(d) ? def : d;
     }
     int getInt(size_t i, int def = 0) const {
         if (i >= args_.size() || !ev::isNumber(args_[i])) return def;

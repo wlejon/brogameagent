@@ -428,48 +428,50 @@ inline bool getBoolProperty(Value obj, const char* key, bool def = false) {
     return ev::toBool(v);
 }
 
+inline bool readFiniteFloatProp(Value obj, const char* key, float& out) {
+    Value v = ev::getProperty(obj, key);
+    if (!ev::isNumber(v)) return false;
+    const double d = ev::toDouble(v);
+    if (!std::isfinite(d)) return false;
+    out = static_cast<float>(d);
+    return true;
+}
+
+inline bool readFiniteFloatElem(Value obj, uint32_t idx, float& out) {
+    Value v = ev::getElement(obj, idx);
+    if (!ev::isNumber(v)) return false;
+    const double d = ev::toDouble(v);
+    if (!std::isfinite(d)) return false;
+    out = static_cast<float>(d);
+    return true;
+}
+
 inline bromath::Vec2 parseVec2(Value v, bromath::Vec2 def = {0.0f, 0.0f}) {
     if (!ev::isObject(v)) return def;
     ev::Persistent root(v);
-    Value xV = ev::getProperty(root.get(), "x");
-    Value zV = ev::getProperty(root.get(), "z");
-    if (ev::isUndefined(zV)) zV = ev::getProperty(root.get(), "y");
-    if (ev::isNumber(xV) || ev::isNumber(zV)) {
-        float x = ev::isNumber(xV) ? static_cast<float>(ev::toDouble(xV)) : def.x;
-        float z = ev::isNumber(zV) ? static_cast<float>(ev::toDouble(zV)) : def.y;
-        return {x, z};
-    }
-    Value e0 = ev::getElement(root.get(), 0);
-    Value e1 = ev::getElement(root.get(), 1);
-    if (!ev::isUndefined(e0) && !ev::isUndefined(e1)) {
-        float x = ev::isNumber(e0) ? static_cast<float>(ev::toDouble(e0)) : def.x;
-        float z = ev::isNumber(e1) ? static_cast<float>(ev::toDouble(e1)) : def.y;
-        return {x, z};
-    }
+    float x = def.x, z = def.y;
+    const bool hasX = readFiniteFloatProp(root.get(), "x", x);
+    bool hasZ = readFiniteFloatProp(root.get(), "z", z);
+    if (!hasZ) hasZ = readFiniteFloatProp(root.get(), "y", z);
+    if (hasX || hasZ) return {x, z};
+    const bool has0 = readFiniteFloatElem(root.get(), 0, x);
+    const bool has1 = readFiniteFloatElem(root.get(), 1, z);
+    if (has0 && has1) return {x, z};
     return def;
 }
 
 inline bromath::Vec3 parseVec3(Value v, bromath::Vec3 def = {0.0f, 0.0f, 0.0f}) {
     if (!ev::isObject(v)) return def;
     ev::Persistent root(v);
-    Value xV = ev::getProperty(root.get(), "x");
-    Value yV = ev::getProperty(root.get(), "y");
-    Value zV = ev::getProperty(root.get(), "z");
-    if (ev::isNumber(xV) || ev::isNumber(yV) || ev::isNumber(zV)) {
-        float x = ev::isNumber(xV) ? static_cast<float>(ev::toDouble(xV)) : def.x;
-        float y = ev::isNumber(yV) ? static_cast<float>(ev::toDouble(yV)) : def.y;
-        float z = ev::isNumber(zV) ? static_cast<float>(ev::toDouble(zV)) : def.z;
-        return {x, y, z};
-    }
-    Value e0 = ev::getElement(root.get(), 0);
-    Value e1 = ev::getElement(root.get(), 1);
-    Value e2 = ev::getElement(root.get(), 2);
-    if (!ev::isUndefined(e0) && !ev::isUndefined(e1) && !ev::isUndefined(e2)) {
-        float x = ev::isNumber(e0) ? static_cast<float>(ev::toDouble(e0)) : def.x;
-        float y = ev::isNumber(e1) ? static_cast<float>(ev::toDouble(e1)) : def.y;
-        float z = ev::isNumber(e2) ? static_cast<float>(ev::toDouble(e2)) : def.z;
-        return {x, y, z};
-    }
+    float x = def.x, y = def.y, z = def.z;
+    const bool hasX = readFiniteFloatProp(root.get(), "x", x);
+    const bool hasY = readFiniteFloatProp(root.get(), "y", y);
+    const bool hasZ = readFiniteFloatProp(root.get(), "z", z);
+    if (hasX || hasY || hasZ) return {x, y, z};
+    const bool has0 = readFiniteFloatElem(root.get(), 0, x);
+    const bool has1 = readFiniteFloatElem(root.get(), 1, y);
+    const bool has2 = readFiniteFloatElem(root.get(), 2, z);
+    if (has0 && has1 && has2) return {x, y, z};
     return def;
 }
 
@@ -478,15 +480,11 @@ inline brogameagent::AABB parseAABB(Value v) {
     if (!ev::isObject(v)) return box;
     ev::Persistent root(v);
 
-    Value minXV = ev::getProperty(root.get(), "minX");
-    Value minZV = ev::getProperty(root.get(), "minZ");
-    Value maxXV = ev::getProperty(root.get(), "maxX");
-    Value maxZV = ev::getProperty(root.get(), "maxZ");
-    if (ev::isNumber(minXV) && ev::isNumber(minZV) && ev::isNumber(maxXV) && ev::isNumber(maxZV)) {
-        float x0 = static_cast<float>(ev::toDouble(minXV));
-        float z0 = static_cast<float>(ev::toDouble(minZV));
-        float x1 = static_cast<float>(ev::toDouble(maxXV));
-        float z1 = static_cast<float>(ev::toDouble(maxZV));
+    float x0 = 0.0f, z0 = 0.0f, x1 = 0.0f, z1 = 0.0f;
+    if (readFiniteFloatProp(root.get(), "minX", x0) &&
+        readFiniteFloatProp(root.get(), "minZ", z0) &&
+        readFiniteFloatProp(root.get(), "maxX", x1) &&
+        readFiniteFloatProp(root.get(), "maxZ", z1)) {
         box.cx = 0.5f * (x0 + x1);
         box.cz = 0.5f * (z0 + z1);
         box.hw = 0.5f * std::abs(x1 - x0);
@@ -494,30 +492,27 @@ inline brogameagent::AABB parseAABB(Value v) {
         return box;
     }
 
-    Value hwV = ev::getProperty(root.get(), "hw");
-    Value hdV = ev::getProperty(root.get(), "hd");
-    Value cxV = ev::getProperty(root.get(), "cx");
-    Value czV = ev::getProperty(root.get(), "cz");
-    Value xV = ev::getProperty(root.get(), "x");
-    Value zV = ev::getProperty(root.get(), "z");
-    Value wV = ev::getProperty(root.get(), "width");
-    Value dV = ev::getProperty(root.get(), "depth");
+    float hw = 0.5f, hd = 0.5f, cx = 0.0f, cz = 0.0f, x = 0.0f, z = 0.0f, w = 0.0f, d = 0.0f;
+    const bool hasHw = readFiniteFloatProp(root.get(), "hw", hw);
+    const bool hasHd = readFiniteFloatProp(root.get(), "hd", hd);
+    const bool hasCx = readFiniteFloatProp(root.get(), "cx", cx);
+    const bool hasCz = readFiniteFloatProp(root.get(), "cz", cz);
+    const bool hasX = readFiniteFloatProp(root.get(), "x", x);
+    const bool hasZ = readFiniteFloatProp(root.get(), "z", z);
+    const bool hasW = readFiniteFloatProp(root.get(), "width", w);
+    const bool hasD = readFiniteFloatProp(root.get(), "depth", d);
 
-    if (ev::isNumber(hwV) || ev::isNumber(hdV)) {
-        box.hw = ev::isNumber(hwV) ? static_cast<float>(ev::toDouble(hwV)) : 0.5f;
-        box.hd = ev::isNumber(hdV) ? static_cast<float>(ev::toDouble(hdV)) : 0.5f;
-        box.cx = ev::isNumber(cxV) ? static_cast<float>(ev::toDouble(cxV)) : (ev::isNumber(xV) ? static_cast<float>(ev::toDouble(xV)) : 0.0f);
-        box.cz = ev::isNumber(czV) ? static_cast<float>(ev::toDouble(czV)) : (ev::isNumber(zV) ? static_cast<float>(ev::toDouble(zV)) : 0.0f);
+    if (hasHw || hasHd) {
+        box.hw = hw;
+        box.hd = hd;
+        box.cx = hasCx ? cx : (hasX ? x : 0.0f);
+        box.cz = hasCz ? cz : (hasZ ? z : 0.0f);
         return box;
     }
 
-    if (ev::isNumber(wV) && ev::isNumber(dV)) {
-        float w = static_cast<float>(ev::toDouble(wV));
-        float d = static_cast<float>(ev::toDouble(dV));
-        float x = ev::isNumber(xV) ? static_cast<float>(ev::toDouble(xV)) : 0.0f;
-        float z = ev::isNumber(zV) ? static_cast<float>(ev::toDouble(zV)) : 0.0f;
-        box.cx = ev::isNumber(cxV) ? static_cast<float>(ev::toDouble(cxV)) : (x + 0.5f * w);
-        box.cz = ev::isNumber(czV) ? static_cast<float>(ev::toDouble(czV)) : (z + 0.5f * d);
+    if (hasW && hasD) {
+        box.cx = hasCx ? cx : (x + 0.5f * w);
+        box.cz = hasCz ? cz : (z + 0.5f * d);
         box.hw = 0.5f * w;
         box.hd = 0.5f * d;
         return box;
