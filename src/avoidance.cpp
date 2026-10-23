@@ -1,5 +1,6 @@
 #include "brogameagent/avoidance.h"
 
+#include <brass/codegen/kernel_jit.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -682,14 +683,22 @@ void AvoidanceSim::computeNewVelocities(float dt) {
     if (dt <= 0.0f || agents_.empty()) return;
     rebuildGrid_();
 
-    std::vector<std::pair<float, int>> scratch;
     std::vector<Vec2> newVelocities(agents_.size());
 
     // Solve all agents against the same pre-step snapshot…
-    for (int i = 0; i < (int)agents_.size(); i++) {
-        newVelocities[(size_t)i] =
-            agents_[(size_t)i].responsive ? solveAgent_(i, dt, scratch)
-                                          : agents_[(size_t)i].velocity;
+    auto solveRange = [&](int64_t b, int64_t e) {
+        std::vector<std::pair<float, int>> scratch;
+        for (int64_t idx = b; idx < e; ++idx) {
+            const size_t i = static_cast<size_t>(idx);
+            newVelocities[i] =
+                agents_[i].responsive ? solveAgent_(static_cast<int>(i), dt, scratch)
+                                      : agents_[i].velocity;
+        }
+    };
+    if (agents_.size() >= 16) {
+        brass::codegen::parallel_for(0, static_cast<int64_t>(agents_.size()), solveRange);
+    } else {
+        solveRange(0, static_cast<int64_t>(agents_.size()));
     }
     // …then commit, so solve order can't leak into the results.
     for (size_t i = 0; i < agents_.size(); i++) {

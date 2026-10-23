@@ -5,7 +5,9 @@
 
 #include <brogameagent/brogameagent.h>
 
+#include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -180,6 +182,78 @@ TEST(reentrant_step_defers_to_the_outermost) {
     CHECK(inner == 1);
     CHECK(!sim.hasPolicy(1));
     CHECK(sim.steps() == 2);
+}
+
+TEST(vec_simulation_parallel_determinism) {
+    constexpr int kNumEnvs = 64;
+    VecSimulation::Config cfg;
+    cfg.numEnvs = kNumEnvs;
+    VecSimulation vecSim(cfg);
+    vecSim.seedAndReset(12345ULL);
+
+    // Reference: 64 independent 1-env VecSimulations (which run the serial path).
+    VecSimulation::Config singleCfg = cfg;
+    singleCfg.numEnvs = 1;
+    std::vector<std::unique_ptr<VecSimulation>> refSims;
+    refSims.reserve(kNumEnvs);
+    for (int i = 0; i < kNumEnvs; ++i) {
+        auto s = std::make_unique<VecSimulation>(singleCfg);
+        s->seedAndReset(12345ULL + static_cast<uint64_t>(i));
+        refSims.push_back(std::move(s));
+    }
+
+    std::vector<float> obsPar(kNumEnvs * observation::TOTAL, 0.0f);
+    std::vector<float> obsRef(observation::TOTAL, 0.0f);
+    std::vector<float> maskPar(kNumEnvs * action_mask::TOTAL, 0.0f);
+    std::vector<int> idsPar(kNumEnvs * action_mask::N_ENEMY_SLOTS, 0);
+    std::vector<float> maskRef(action_mask::TOTAL, 0.0f);
+    std::vector<int> idsRef(action_mask::N_ENEMY_SLOTS, 0);
+
+    std::vector<AgentAction> heroActs(kNumEnvs);
+    std::vector<AgentAction> oppActs(kNumEnvs);
+    for (int i = 0; i < kNumEnvs; ++i) {
+        heroActs[i].moveX = 1.0f;
+        heroActs[i].attackTargetId = VecSimulation::OPPONENT_ID;
+        oppActs[i].moveX = -1.0f;
+        oppActs[i].attackTargetId = VecSimulation::HERO_ID;
+    }
+
+    auto t0 = std::chrono::steady_clock::now();
+    for (int step = 0; step < 50; ++step) {
+        vecSim.observe(VecSimulation::HERO_ID, obsPar.data());
+        vecSim.actionMask(VecSimulation::HERO_ID, maskPar.data(), idsPar.data());
+        vecSim.applyActions(VecSimulation::HERO_ID, heroActs.data());
+        vecSim.applyActions(VecSimulation::OPPONENT_ID, oppActs.data());
+        vecSim.step();
+        vecSim.resetDone();
+    }
+    auto t1 = std::chrono::steady_clock::now();
+
+    for (int step = 0; step < 50; ++step) {
+        for (int i = 0; i < kNumEnvs; ++i) {
+            refSims[i]->observe(VecSimulation::HERO_ID, obsRef.data());
+            refSims[i]->actionMask(VecSimulation::HERO_ID, maskRef.data(), idsRef.data());
+            refSims[i]->applyActions(VecSimulation::HERO_ID, &heroActs[i]);
+            refSims[i]->applyActions(VecSimulation::OPPONENT_ID, &oppActs[i]);
+            refSims[i]->step();
+            refSims[i]->resetDone();
+        }
+    }
+
+    vecSim.observe(VecSimulation::HERO_ID, obsPar.data());
+    vecSim.actionMask(VecSimulation::HERO_ID, maskPar.data(), idsPar.data());
+    for (int i = 0; i < kNumEnvs; ++i) {
+        refSims[i]->observe(VecSimulation::HERO_ID, obsRef.data());
+        refSims[i]->actionMask(VecSimulation::HERO_ID, maskRef.data(), idsRef.data());
+        CHECK(std::memcmp(obsPar.data() + i * observation::TOTAL,
+                          obsRef.data(),
+                          observation::TOTAL * sizeof(float)) == 0);
+        CHECK(std::memcmp(maskPar.data() + i * action_mask::TOTAL,
+                          maskRef.data(),
+                          action_mask::TOTAL * sizeof(float)) == 0);
+    }
+    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    printf("    64-env x 50 steps parallel VecSimulation verified in %.2f ms\n", ms);
 }
 
 int main() {

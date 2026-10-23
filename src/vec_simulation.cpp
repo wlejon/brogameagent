@@ -2,6 +2,7 @@
 #include "brogameagent/observation.h"
 #include "brogameagent/action_mask.h"
 
+#include <brass/codegen/kernel_jit.hpp>
 #include <algorithm>
 #include <cmath>
 
@@ -219,20 +220,36 @@ void VecSimulation::resetEnvImpl_(EnvState& env) {
 }
 
 void VecSimulation::seedAndReset(uint64_t baseSeed) {
-    for (size_t i = 0; i < envs_.size(); i++) {
-        envs_[i]->rng.seed(baseSeed + static_cast<uint64_t>(i));
-        envs_[i]->world.seed(baseSeed + 0x9E3779B97F4A7C15ULL + static_cast<uint64_t>(i));
-        envs_[i]->episodeIdx = 0;
-        resetEnvImpl_(*envs_[i]);
+    auto evalRange = [&](int64_t b, int64_t e) {
+        for (int64_t idx = b; idx < e; ++idx) {
+            const size_t i = static_cast<size_t>(idx);
+            envs_[i]->rng.seed(baseSeed + static_cast<uint64_t>(i));
+            envs_[i]->world.seed(baseSeed + 0x9E3779B97F4A7C15ULL + static_cast<uint64_t>(i));
+            envs_[i]->episodeIdx = 0;
+            resetEnvImpl_(*envs_[i]);
+        }
+    };
+    if (envs_.size() >= 8) {
+        brass::codegen::parallel_for(0, static_cast<int64_t>(envs_.size()), evalRange);
+    } else {
+        evalRange(0, static_cast<int64_t>(envs_.size()));
     }
 }
 
 void VecSimulation::resetDone() {
-    for (auto& e : envs_) {
-        if (e->doneFlag) {
-            e->episodeIdx++;
-            resetEnvImpl_(*e);
+    auto evalRange = [&](int64_t b, int64_t e) {
+        for (int64_t idx = b; idx < e; ++idx) {
+            auto& env = envs_[static_cast<size_t>(idx)];
+            if (env->doneFlag) {
+                env->episodeIdx++;
+                resetEnvImpl_(*env);
+            }
         }
+    };
+    if (envs_.size() >= 8) {
+        brass::codegen::parallel_for(0, static_cast<int64_t>(envs_.size()), evalRange);
+    } else {
+        evalRange(0, static_cast<int64_t>(envs_.size()));
     }
 }
 
@@ -244,81 +261,112 @@ void VecSimulation::resetEnv(int envIdx) {
 
 void VecSimulation::observe(int agentId, float* out) const {
     const int stride = observation::TOTAL;
-    for (size_t i = 0; i < envs_.size(); i++) {
-        const Agent& a = (agentId == HERO_ID) ? envs_[i]->hero : envs_[i]->opponent;
-        observation::build(a, envs_[i]->world, out + i * stride);
+    auto evalRange = [&](int64_t b, int64_t e) {
+        for (int64_t idx = b; idx < e; ++idx) {
+            const size_t i = static_cast<size_t>(idx);
+            const Agent& a = (agentId == HERO_ID) ? envs_[i]->hero : envs_[i]->opponent;
+            observation::build(a, envs_[i]->world, out + i * stride);
+        }
+    };
+    if (envs_.size() >= 8) {
+        brass::codegen::parallel_for(0, static_cast<int64_t>(envs_.size()), evalRange);
+    } else {
+        evalRange(0, static_cast<int64_t>(envs_.size()));
     }
 }
 
 void VecSimulation::actionMask(int agentId, float* outMask, int* outEnemyIds) const {
     const int mStride  = action_mask::TOTAL;
     const int idStride = action_mask::N_ENEMY_SLOTS;
-    for (size_t i = 0; i < envs_.size(); i++) {
-        const Agent& a = (agentId == HERO_ID) ? envs_[i]->hero : envs_[i]->opponent;
-        action_mask::build(a, envs_[i]->world,
-                           outMask + i * mStride,
-                           outEnemyIds + i * idStride);
+    auto evalRange = [&](int64_t b, int64_t e) {
+        for (int64_t idx = b; idx < e; ++idx) {
+            const size_t i = static_cast<size_t>(idx);
+            const Agent& a = (agentId == HERO_ID) ? envs_[i]->hero : envs_[i]->opponent;
+            action_mask::build(a, envs_[i]->world,
+                               outMask + i * mStride,
+                               outEnemyIds + i * idStride);
+        }
+    };
+    if (envs_.size() >= 8) {
+        brass::codegen::parallel_for(0, static_cast<int64_t>(envs_.size()), evalRange);
+    } else {
+        evalRange(0, static_cast<int64_t>(envs_.size()));
     }
 }
 
 void VecSimulation::applyActions(int agentId, const AgentAction* actions) {
-    for (size_t i = 0; i < envs_.size(); i++) {
-        EnvState& e = *envs_[i];
-        Agent& a = (agentId == HERO_ID) ? e.hero : e.opponent;
-        if (!a.unit().alive()) continue;
-        e.world.applyAction(a, actions[i], cfg_.dt);
+    auto evalRange = [&](int64_t b, int64_t e) {
+        for (int64_t idx = b; idx < e; ++idx) {
+            const size_t i = static_cast<size_t>(idx);
+            EnvState& env = *envs_[i];
+            Agent& a = (agentId == HERO_ID) ? env.hero : env.opponent;
+            if (!a.unit().alive()) continue;
+            env.world.applyAction(a, actions[i], cfg_.dt);
+        }
+    };
+    if (envs_.size() >= 8) {
+        brass::codegen::parallel_for(0, static_cast<int64_t>(envs_.size()), evalRange);
+    } else {
+        evalRange(0, static_cast<int64_t>(envs_.size()));
     }
 }
 
 void VecSimulation::step() {
-    for (size_t i = 0; i < envs_.size(); i++) {
-        EnvState& e = *envs_[i];
+    auto evalRange = [&](int64_t b, int64_t end) {
+        for (int64_t idx = b; idx < end; ++idx) {
+            EnvState& e = *envs_[static_cast<size_t>(idx)];
 
-        // Advance projectiles and clean up dead ones. Agent cooldowns and
-        // movement were already integrated by applyActions (Agent::applyAction
-        // ticks cooldowns internally). DoT/HoT, however, must be ticked here
-        // because they emit events / mutate HP and aren't policy-driven.
-        e.world.applyDotHot(e.hero,     cfg_.dt);
-        e.world.applyDotHot(e.opponent, cfg_.dt);
-        e.world.stepProjectiles(cfg_.dt);
-        e.world.cullProjectiles();
-        e.stepCount++;
+            // Advance projectiles and clean up dead ones. Agent cooldowns and
+            // movement were already integrated by applyActions (Agent::applyAction
+            // ticks cooldowns internally). DoT/HoT, however, must be ticked here
+            // because they emit events / mutate HP and aren't policy-driven.
+            e.world.applyDotHot(e.hero,     cfg_.dt);
+            e.world.applyDotHot(e.opponent, cfg_.dt);
+            e.world.stepProjectiles(cfg_.dt);
+            e.world.cullProjectiles();
+            e.stepCount++;
 
-        // Drain reward deltas into accumulators.
-        auto dh = e.heroRT.consume(e.hero, e.world);
-        auto doo = e.oppRT.consume(e.opponent, e.world);
-        e.heroReward += cfg_.rewardDamageDealt    * dh.damageDealt
-                      + cfg_.rewardDamageTakenMul * dh.damageTaken
-                      + cfg_.rewardKill           * dh.kills
-                      + cfg_.rewardDeath          * dh.deaths
-                      + cfg_.rewardStep;
-        e.oppReward  += cfg_.rewardDamageDealt    * doo.damageDealt
-                      + cfg_.rewardDamageTakenMul * doo.damageTaken
-                      + cfg_.rewardKill           * doo.kills
-                      + cfg_.rewardDeath          * doo.deaths
-                      + cfg_.rewardStep;
+            // Drain reward deltas into accumulators.
+            auto dh = e.heroRT.consume(e.hero, e.world);
+            auto doo = e.oppRT.consume(e.opponent, e.world);
+            e.heroReward += cfg_.rewardDamageDealt    * dh.damageDealt
+                          + cfg_.rewardDamageTakenMul * dh.damageTaken
+                          + cfg_.rewardKill           * dh.kills
+                          + cfg_.rewardDeath          * dh.deaths
+                          + cfg_.rewardStep;
+            e.oppReward  += cfg_.rewardDamageDealt    * doo.damageDealt
+                          + cfg_.rewardDamageTakenMul * doo.damageTaken
+                          + cfg_.rewardKill           * doo.kills
+                          + cfg_.rewardDeath          * doo.deaths
+                          + cfg_.rewardStep;
 
-        // Termination check. Winner = the surviving alive agent; -1 if both
-        // alive (timeout) or both dead (mutual KO this step). Any winner==-1
-        // outcome is treated as a loss for BOTH sides via rewardTimeout —
-        // standing still must be strictly worse than fighting.
-        if (!e.doneFlag) {
-            bool heroAlive = e.hero.unit().alive();
-            bool oppAlive  = e.opponent.unit().alive();
-            bool terminal  = (!heroAlive || !oppAlive)
-                          || (e.stepCount >= cfg_.maxStepsPerEpisode);
-            if (terminal) {
-                e.doneFlag = true;
-                if (heroAlive && !oppAlive)      e.winner = HERO_ID;
-                else if (oppAlive && !heroAlive) e.winner = OPPONENT_ID;
-                else                             e.winner = -1;
+            // Termination check. Winner = the surviving alive agent; -1 if both
+            // alive (timeout) or both dead (mutual KO this step). Any winner==-1
+            // outcome is treated as a loss for BOTH sides via rewardTimeout —
+            // standing still must be strictly worse than fighting.
+            if (!e.doneFlag) {
+                bool heroAlive = e.hero.unit().alive();
+                bool oppAlive  = e.opponent.unit().alive();
+                bool terminal  = (!heroAlive || !oppAlive)
+                              || (e.stepCount >= cfg_.maxStepsPerEpisode);
+                if (terminal) {
+                    e.doneFlag = true;
+                    if (heroAlive && !oppAlive)      e.winner = HERO_ID;
+                    else if (oppAlive && !heroAlive) e.winner = OPPONENT_ID;
+                    else                             e.winner = -1;
 
-                if (e.winner < 0) {
-                    e.heroReward += cfg_.rewardTimeout;
-                    e.oppReward  += cfg_.rewardTimeout;
+                    if (e.winner < 0) {
+                        e.heroReward += cfg_.rewardTimeout;
+                        e.oppReward  += cfg_.rewardTimeout;
+                    }
                 }
             }
         }
+    };
+    if (envs_.size() >= 8) {
+        brass::codegen::parallel_for(0, static_cast<int64_t>(envs_.size()), evalRange);
+    } else {
+        evalRange(0, static_cast<int64_t>(envs_.size()));
     }
 }
 

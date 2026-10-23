@@ -248,6 +248,7 @@ target_compile_features(brogameagent PUBLIC cxx_std_20)
 # bromath is header-only INTERFACE; expose its include dirs without putting
 # the bromath target itself into our install-export set.
 target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:bromath::bromath>)
+target_link_libraries(brogameagent PUBLIC $<BUILD_INTERFACE:brass>)
 # brotensor backs the NN + learning layer only (host Tensor + CPU ops; GPU
 # kernels are an additive feature of brotensor itself). Linked only when that
 # layer is built.

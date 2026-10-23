@@ -654,6 +654,46 @@ TEST(world_avoidance_plumbs_priority_and_layers) {
     CHECK(minDist < 0.5f);  // masked out: they overlapped mid-way
 }
 
+TEST(parallel_crowd_64_agents_deterministic) {
+    // 64 agents (>= 16 threshold for brass::codegen::parallel_for) on a ring
+    // heading to antipodal points: two independent runs must be bit-identical
+    // and collision-free.
+    auto runOnce = []() {
+        AvoidanceSim sim;
+        constexpr int N = 64;
+        constexpr float R = 18.0f;
+        std::vector<bromath::Vec2> goals(N);
+        AvoidanceAgentParams params;
+        params.radius = 0.4f;
+        params.maxSpeed = 4.0f;
+        for (int i = 0; i < N; ++i) {
+            float a = static_cast<float>(i) * (2.0f * 3.14159265f / static_cast<float>(N));
+            bromath::Vec2 pos{R * std::cos(a), R * std::sin(a)};
+            goals[i] = {-pos.x, -pos.y};
+            sim.addAgent(pos, params);
+        }
+        const float dt = 1.0f / 60.0f;
+        for (int step = 0; step < 120; ++step) {
+            for (int i = 0; i < N; ++i) {
+                bromath::Vec2 toGoal = goals[i] - sim.position(i);
+                float d = bromath::vlen(toGoal);
+                sim.setPrefVelocity(i, d > 1e-4f ? toGoal * (std::min(4.0f, d) / d)
+                                                 : bromath::Vec2{0.0f, 0.0f});
+            }
+            sim.step(dt);
+        }
+        std::vector<bromath::Vec2> finalPos(N);
+        for (int i = 0; i < N; ++i) finalPos[i] = sim.position(i);
+        return finalPos;
+    };
+    auto p1 = runOnce();
+    auto p2 = runOnce();
+    for (size_t i = 0; i < p1.size(); ++i) {
+        CHECK(p1[i].x == p2[i].x);
+        CHECK(p1[i].y == p2[i].y);
+    }
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 int main() {
