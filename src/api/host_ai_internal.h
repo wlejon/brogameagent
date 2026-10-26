@@ -20,16 +20,40 @@
 #include <brogameagent/generic_mcts.h>
 #include <brogameagent/unit.h>
 
+#include "embed/embed_access.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace brogameagent::api {
+
+// `path` (a file the app named, opened as given) once the host's access gate
+// (embed/embed_access.h; api.h, "Access") allows reading it, or writing it
+// when `write`, asked with the path absolute and lexically normal (UTF-8). A
+// refusal is thrown (an Error, code EACCES, the path) and never returns, so
+// nothing is opened. An empty path names no file and asks nothing.
+inline std::string gatedPath(std::string path, bool write) {
+    if (path.empty() || !ev::accessGateActive()) return path;
+    namespace fs = std::filesystem;
+    fs::path p(std::u8string(path.begin(), path.end()));
+    std::error_code ec;
+    fs::path abs = fs::absolute(p, ec);
+    if (ec) abs = p;
+    const std::u8string u8 = abs.lexically_normal().u8string();
+    const std::string subject(u8.begin(), u8.end());
+    if (std::string refused = ev::checkAccess(write ? ev::AccessKind::Write : ev::AccessKind::Read, subject);
+        !refused.empty()) {
+        ev::throwAccessError(refused, "EACCES", subject);
+    }
+    return path;
+}
 
 inline constexpr uint32_t kHostNavGridTag        = 0x4E564744u;  // 'NVGD'
 inline constexpr uint32_t kHostNavMeshTag        = 0x4E564D53u;  // 'NVMS'

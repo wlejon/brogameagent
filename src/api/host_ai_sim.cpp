@@ -203,7 +203,7 @@ void ensureAISimClassesInstalled() {
         b.def("open", 4, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapRecorder(self);
             if (!h || a.empty()) return ev::fromBool(false);
-            return ev::fromBool(h->recorder.open(strAt(a, 0), u64At(a, 1), u64At(a, 2),
+            return ev::fromBool(h->recorder.open(gatedPath(strAt(a, 0), true), u64At(a, 1), u64At(a, 2),
                                                  static_cast<float>(numAt(a, 3))));
         });
 
@@ -246,7 +246,7 @@ void ensureAISimClassesInstalled() {
         b.def("open", 1, [](Value self, std::span<const Value> a) -> Value {
             auto* h = unwrapReplayReader(self);
             if (!h || a.empty()) return ev::fromBool(false);
-            return ev::fromBool(h->reader.open(strAt(a, 0)));
+            return ev::fromBool(h->reader.open(gatedPath(strAt(a, 0), false)));
         });
 
         b.accessor("errorMessage", [](Value self, std::span<const Value>) -> Value {

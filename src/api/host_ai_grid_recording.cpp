@@ -106,11 +106,12 @@ void decorateGridRecorder(ObjectBuilder& b) {
     b.def("open", 5, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapGridRecorder(self);
         if (!d || !d->rec || a.size() < 5) return ev::fromBool(false);
+        const std::string path = gatedPath(strAt(a, 0), true);
         ev::Persistent schemas(a[4]);
         d->roster = readSchema(ev::getProperty(schemas.get(), "roster"));
         d->frame = readSchema(ev::getProperty(schemas.get(), "frame"));
         d->events = readSchema(ev::getProperty(schemas.get(), "events"));
-        const bool ok = d->rec->open(strAt(a, 0), readSeedArg(a[1], 0), readSeedArg(a[2], 0),
+        const bool ok = d->rec->open(path, readSeedArg(a[1], 0), readSeedArg(a[2], 0),
                                      static_cast<float>(numAt(a, 3)), d->roster, d->frame,
                                      d->events);
         return ev::fromBool(ok);
@@ -156,7 +157,7 @@ void decorateGridReader(ObjectBuilder& b) {
     b.def("open", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapGridReader(self);
         if (!d || !d->rr || a.empty()) return ev::fromBool(false);
-        return ev::fromBool(d->rr->open(strAt(a, 0)));
+        return ev::fromBool(d->rr->open(gatedPath(strAt(a, 0), false)));
     });
     b.def("frame", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* d = unwrapGridReader(self);
@@ -323,7 +324,9 @@ Value createGridTrainer(std::span<const Value> a) {
     Value ckptV = ev::getProperty(opts.get(), "ckpt");
     if (ev::isObject(ckptV)) {
         ev::Persistent ck(ckptV);
-        cfg.ckpt_dir = readStringPropOr(ck.get(), "dir", cfg.ckpt_dir.c_str());
+        // The trainer writes its checkpoint ring and best.bin in this
+        // directory from its own thread: asked once, here, as a Write.
+        cfg.ckpt_dir = gatedPath(readStringPropOr(ck.get(), "dir", cfg.ckpt_dir.c_str()), true);
         cfg.ckpt_ring_size = getCountProp(ck.get(), "ringSize", cfg.ckpt_ring_size);
         cfg.best_window = getCountProp(ck.get(), "bestWindow", cfg.best_window);
     }
