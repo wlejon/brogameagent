@@ -1,6 +1,7 @@
 #pragma once
 
 #include "embed/embed.h"
+#include "embed/embed_host_class.h"
 #include "object_builder.h"
 
 #include <functional>
@@ -13,55 +14,33 @@ namespace brogameagent::api {
 namespace ev = bronze::embed;
 using Value = bronze::Value;
 
-// A host class: one constructor function + one prototype, with instances
-// born on that prototype by make()/createInstance().
+// bronze's HostClass (embed/embed_host_class.h): a constructor and prototype
+// per realm, branded handles, and unwrap() checked across inherit() lineages.
+// It used to be a copy kept per library, one constructor and prototype per
+// thread; the realms of one thread then shared a class's mutable prototype,
+// so one realm could change what another's instances do.
 //
-// The class objects are process-global (`HostClass g_navMeshClass`), but
-// what they hold is PER THREAD: bronze's runtime is per-thread, and a
-// Persistent is a slot in its creating thread's registry, so a constructor
-// made on the main thread means nothing to a Worker's realm. Every accessor
-// reads the CALLING thread's slots and install() fills the calling thread's;
-// a realm installs each class once, and installed() answers for the calling
-// thread, which is what an install guard has to ask.
-class HostClass {
+// The one thing added here is the decorate callback's builder: brogameagent's
+// own ObjectBuilder (object_builder.h), whose every method goes through
+// guardNative so a C++ exception becomes a JS Error rather than ending the
+// process. It decorates the prototype embed's install minted, and hands the
+// object's final address back.
+class HostClass : public bronze::embed::HostClass {
 public:
-    struct Slots {
-        ev::Persistent* proto = nullptr;
-        ev::Persistent* ctor = nullptr;
-    };
-
     void install(const char* name, uint32_t arity, ev::NativeFn body,
-                 const std::function<void(ObjectBuilder&)>& decorate = nullptr);
+                 const std::function<void(ObjectBuilder&)>& decorate = nullptr) {
+        bronze::embed::HostClass::install(
+            name, arity, std::move(body), [&decorate](ev::ObjectBuilder& proto) {
+                if (!decorate) return;
+                ObjectBuilder mine(proto.get());
+                decorate(mine);
+                proto.obj.set(mine.get());
+            });
+    }
 
     void init(const char* name, const std::function<void(ObjectBuilder&)>& decorate) {
         install(name, 0, nullptr, decorate);
     }
-
-    template <typename T>
-    Value createInstance(std::unique_ptr<T> ptr) const {
-        return make(ptr.release(), [](void* p) { delete static_cast<T*>(p); });
-    }
-
-    void alias(const char* name) const;
-    void inherit(const HostClass& base) const;
-
-    Value make(void* data, ev::HandleDestructor dtor,
-               ev::Finalize when = ev::Finalize::InSweep) const;
-
-    void setStatic(const char* name, Value v) const;
-
-    void* unwrap(Value val) const;
-    static void* unwrapBranded(Value val);
-
-    Value prototype() const;
-    Value constructor() const;
-
-    // Whether install() has run on the CALLING thread.
-    bool installed() const;
-
-private:
-    Slots& slots() const;
-    const Slots* slotsIfAny() const;
 };
 
 } // namespace brogameagent::api
