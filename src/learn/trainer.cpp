@@ -2,13 +2,13 @@
 #include "brogameagent/nn/heads.h"
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::learn {
 
 static void fill_from_array(brotensor::Tensor& t, const float* src, int n) {
-    assert(t.size() == n);
+    BGA_CHECK(t.size() == n);
     std::memcpy(t.ptr(), src, n * sizeof(float));
 }
 

@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cmath>
 
 namespace brogameagent::nn {
@@ -17,7 +17,7 @@ void DistributionalValueHead::init(int embed_dim, int hidden, int K, uint64_t& r
 }
 
 void DistributionalValueHead::forward(const brotensor::Tensor& embed, brotensor::Tensor& probs, float& value) {
-    assert(probs.size() == K_);
+    BGA_CHECK(probs.size() == K_);
     fc1_.forward(embed, h_raw_);
     brotensor::relu_forward(h_raw_, h_act_);
     fc2_.forward(h_act_, logits_);
@@ -28,7 +28,7 @@ void DistributionalValueHead::forward(const brotensor::Tensor& embed, brotensor:
 }
 
 float DistributionalValueHead::xent_backward(const brotensor::Tensor& probs, const brotensor::Tensor& p_target, brotensor::Tensor& dEmbed) {
-    assert(probs.size() == K_ && p_target.size() == K_);
+    BGA_CHECK(probs.size() == K_ && p_target.size() == K_);
     float loss = 0.0f;
     brotensor::Tensor dLogits = brotensor::Tensor::vec(K_);
     for (int i = 0; i < K_; ++i) {
@@ -47,7 +47,7 @@ float DistributionalValueHead::xent_backward(const brotensor::Tensor& probs, con
 }
 
 void DistributionalValueHead::project_target(float z, brotensor::Tensor& out) const {
-    assert(out.size() == K_);
+    BGA_CHECK(out.size() == K_);
     out.zero();
     // Clamp to [-1, 1].
     if (z < -1.0f) z = -1.0f;

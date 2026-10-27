@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -38,7 +38,7 @@ int TransformerEncoder::num_params() const {
 void TransformerEncoder::forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& Y) {
     const int K = X.rows;
     const int D = X.cols;
-    assert(D == cfg_.dim);
+    BGA_CHECK(D == cfg_.dim);
     if (Y.rows != K || Y.cols != D) Y.resize(K, D);
 
     activations_[0] = X;
@@ -113,11 +113,11 @@ void TransformerEncoder::save_to(std::vector<uint8_t>& out) const {
 }
 
 void TransformerEncoder::load_from(const uint8_t* data, size_t& offset, size_t size) {
-    assert(offset + sizeof(int32_t) <= size);
+    BGA_CHECK(offset + sizeof(int32_t) <= size);
     int32_t n = 0;
     std::memcpy(&n, data + offset, sizeof(int32_t));
     offset += sizeof(int32_t);
-    assert(static_cast<int>(n) == cfg_.n_layers
+    BGA_CHECK(static_cast<int>(n) == cfg_.n_layers
            && "TransformerEncoder must be init()'d with matching n_layers before load");
     for (auto& b : blocks_) b->load_from(data, offset, size);
     if (has_final_ln_) final_ln_.load_from(data, offset, size);

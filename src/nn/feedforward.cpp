@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 
 namespace brogameagent::nn {
 
@@ -32,7 +32,7 @@ void FeedForward::init(int dim, int d_ff, uint64_t& rng_state) {
 void FeedForward::forward(const brotensor::Tensor& X, brotensor::Tensor& Y) {
     const int K = X.rows;
     const int D = X.cols;
-    assert(D == d_);
+    BGA_CHECK(D == d_);
     (void)D;
     X_cache_ = X;
 
@@ -48,7 +48,7 @@ void FeedForward::forward(const brotensor::Tensor& X, brotensor::Tensor& Y) {
 void FeedForward::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
     const int K = X_cache_.rows;
     const int D = X_cache_.cols;
-    assert(dY.rows == K && dY.cols == D);
+    BGA_CHECK(dY.rows == K && dY.cols == D);
     (void)D;
 
     // Layer 2 backward: Y = H_post @ W2^T + b2.

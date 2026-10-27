@@ -69,20 +69,8 @@ void decorateNavGridProto(ObjectBuilder& b) {
         auto* h = unwrapNavGrid(self);
         if (!h || !h->grid) return ev::throwTypeError("NavGrid.prototype.removeObstacle: invalid receiver");
         if (a.empty()) return ev::throwTypeError("NavGrid.prototype.removeObstacle: expected obstacle AABB");
-        auto box = parseAABB(a[0]);
         float padding = (a.size() >= 2) ? static_cast<float>(numAt(a, 1)) : 0.0f;
-        float minX = box.cx - box.hw - padding;
-        float maxX = box.cx + box.hw + padding;
-        float minZ = box.cz - box.hd - padding;
-        float maxZ = box.cz + box.hd + padding;
-        float cs = h->grid->cellSize();
-        if (cs > 0.0f) {
-            for (float x = minX; x <= maxX; x += cs * 0.5f) {
-                for (float z = minZ; z <= maxZ; z += cs * 0.5f) {
-                    h->grid->setWalkable(x, z, true);
-                }
-            }
-        }
+        h->grid->removeObstacle(parseAABB(a[0]), padding);
         return ev::undefined();
     });
 

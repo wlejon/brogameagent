@@ -36,6 +36,25 @@ void NavGrid::addObstacle(const AABB& box, float padding) {
     }
 }
 
+void NavGrid::removeObstacle(const AABB& box, float padding) {
+    auto same = [&](const AABB& b) {
+        return b.cx == box.cx && b.cz == box.cz && b.hw == box.hw && b.hd == box.hd;
+    };
+    auto it = std::find_if(obstacleBoxes_.begin(), obstacleBoxes_.end(), same);
+    if (it != obstacleBoxes_.end()) obstacleBoxes_.erase(it);
+
+    int gx0 = std::max(0, toGridX(box.cx - box.hw - padding));
+    int gx1 = std::min(width_ - 1, toGridX(box.cx + box.hw + padding));
+    int gz0 = std::max(0, toGridZ(box.cz - box.hd - padding));
+    int gz1 = std::min(height_ - 1, toGridZ(box.cz + box.hd + padding));
+
+    for (int gz = gz0; gz <= gz1; gz++) {
+        for (int gx = gx0; gx <= gx1; gx++) {
+            grid_[gz * width_ + gx] = 0;
+        }
+    }
+}
+
 bool NavGrid::isWalkable(float x, float z) const {
     int gx = toGridX(x);
     int gz = toGridZ(z);
@@ -269,12 +288,20 @@ std::vector<bromath::Vec2> NavGrid::smoothPath(const std::vector<bromath::Vec2>&
     return smooth;
 }
 
+// A cell index saturates: an infinite or 1e308 coordinate is past the edge,
+// and NaN is off the grid, rather than a float-to-int conversion out of range.
+static int cellIndex(double g) {
+    if (!(g > -1.0)) return -1;
+    if (g >= static_cast<double>(std::numeric_limits<int>::max())) return std::numeric_limits<int>::max();
+    return static_cast<int>(g);
+}
+
 int NavGrid::toGridX(float worldX) const {
-    return static_cast<int>((worldX - minX_) / cellSize_);
+    return cellIndex((static_cast<double>(worldX) - minX_) / cellSize_);
 }
 
 int NavGrid::toGridZ(float worldZ) const {
-    return static_cast<int>((worldZ - minZ_) / cellSize_);
+    return cellIndex((static_cast<double>(worldZ) - minZ_) / cellSize_);
 }
 
 float NavGrid::toWorldX(int gx) const {

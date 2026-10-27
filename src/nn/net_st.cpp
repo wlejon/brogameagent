@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -93,12 +93,12 @@ std::vector<uint8_t> SingleHeroNetST::save() const {
 }
 
 void SingleHeroNetST::load(const std::vector<uint8_t>& blob) {
-    assert(blob.size() >= sizeof(uint32_t) * 2);
+    BGA_CHECK(blob.size() >= sizeof(uint32_t) * 2);
     uint32_t magic = 0, version = 0;
     std::memcpy(&magic,   blob.data(),                   sizeof(uint32_t));
     std::memcpy(&version, blob.data() + sizeof(uint32_t), sizeof(uint32_t));
-    assert(magic == kMagicST);
-    assert(version == kVersionST);
+    BGA_CHECK(magic == kMagicST);
+    BGA_CHECK(version == kVersionST);
     size_t offset = sizeof(uint32_t) * 2;
     enc_.load_from(blob.data(), offset, blob.size());
     trunk_.load_from(blob.data(), offset, blob.size());

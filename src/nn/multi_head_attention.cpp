@@ -2,14 +2,14 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 
 namespace brogameagent::nn {
 
 void MultiHeadAttention::init(int n_slots, int dim, int num_heads,
                               uint64_t& rng_state) {
-    assert(num_heads >= 1);
-    assert(dim % num_heads == 0 && "dim must be divisible by num_heads");
+    BGA_CHECK(num_heads >= 1);
+    BGA_CHECK(dim % num_heads == 0 && "dim must be divisible by num_heads");
     n_  = n_slots;
     d_  = dim;
     h_  = num_heads;
@@ -43,7 +43,7 @@ void MultiHeadAttention::init(int n_slots, int dim, int num_heads,
 void MultiHeadAttention::forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& O) {
     const int K = X.rows;
     const int D = X.cols;
-    assert(D == d_);
+    BGA_CHECK(D == d_);
     n_ = K;
 
     X_cache_ = X;
@@ -60,7 +60,7 @@ void MultiHeadAttention::forward(const brotensor::Tensor& X, const float* mask, 
 void MultiHeadAttention::backward(const brotensor::Tensor& dO, brotensor::Tensor& dX) {
     const int K = X_cache_.rows;
     const int D = X_cache_.cols;
-    assert(dO.rows == K && dO.cols == D);
+    BGA_CHECK(dO.rows == K && dO.cols == D);
     (void)D;
     brotensor::mha_backward(dO, X_cache_, Qh_, Kh_, Vh_, Attnh_, Yconcat_,
                             Wq_, Wk_, Wv_, Wo_,

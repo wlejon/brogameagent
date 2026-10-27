@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -18,9 +18,9 @@ void ForwardModelHead::init(int embed_dim, int hidden, uint64_t& rng_state) {
 }
 
 void ForwardModelHead::forward(const brotensor::Tensor& embed, const brotensor::Tensor& action, brotensor::Tensor& pred_next) {
-    assert(embed.size() == embed_dim_);
-    assert(action.size() == ACTION_DIM);
-    assert(pred_next.size() == embed_dim_);
+    BGA_CHECK(embed.size() == embed_dim_);
+    BGA_CHECK(action.size() == ACTION_DIM);
+    BGA_CHECK(pred_next.size() == embed_dim_);
     std::memcpy(input_cat_.ptr(),                embed.ptr(),  embed_dim_ * sizeof(float));
     std::memcpy(input_cat_.ptr() + embed_dim_,   action.ptr(), ACTION_DIM * sizeof(float));
     fc1_.forward(input_cat_, h_raw_);
@@ -29,8 +29,8 @@ void ForwardModelHead::forward(const brotensor::Tensor& embed, const brotensor::
 }
 
 void ForwardModelHead::backward(const brotensor::Tensor& dPred, brotensor::Tensor& dEmbed) {
-    assert(dPred.size() == embed_dim_);
-    assert(dEmbed.size() == embed_dim_);
+    BGA_CHECK(dPred.size() == embed_dim_);
+    BGA_CHECK(dEmbed.size() == embed_dim_);
     brotensor::Tensor dHact = brotensor::Tensor::vec(h_act_.size());
     fc2_.backward(dPred, dHact);
     brotensor::Tensor dHraw = brotensor::Tensor::vec(h_raw_.size());
@@ -42,7 +42,7 @@ void ForwardModelHead::backward(const brotensor::Tensor& dPred, brotensor::Tenso
 }
 
 void build_action_onehot(int move_idx, int attack_idx, int ability_idx, brotensor::Tensor& out) {
-    assert(out.size() == ForwardModelHead::ACTION_DIM);
+    BGA_CHECK(out.size() == ForwardModelHead::ACTION_DIM);
     out.zero();
     if (move_idx    >= 0 && move_idx    < ForwardModelHead::N_MOVE)    out[move_idx] = 1.0f;
     if (attack_idx  >= 0 && attack_idx  < ForwardModelHead::N_ATTACK)  out[ForwardModelHead::N_MOVE + attack_idx] = 1.0f;
@@ -50,7 +50,7 @@ void build_action_onehot(int move_idx, int attack_idx, int ability_idx, brotenso
 }
 
 float spr_loss(const brotensor::Tensor& pred, const brotensor::Tensor& target, brotensor::Tensor& dPred) {
-    assert(pred.size() == target.size() && dPred.size() == pred.size());
+    BGA_CHECK(pred.size() == target.size() && dPred.size() == pred.size());
     float l = 0.0f;
     for (int i = 0; i < pred.size(); ++i) {
         const float d = pred[i] - target[i];

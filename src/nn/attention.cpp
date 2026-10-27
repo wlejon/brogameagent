@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 
 namespace brogameagent::nn {
 
@@ -32,7 +32,7 @@ void ScaledDotProductAttention::init(int n_slots, int dim, uint64_t& rng_state, 
 }
 
 void ScaledDotProductAttention::forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& O) {
-    assert(X.rows == n_ && X.cols == d_);
+    BGA_CHECK(X.rows == n_ && X.cols == d_);
     X_cache_ = X;
     // The mask feeds the device-dispatched attention op verbatim — it must
     // live on X's device. Stash the pointer for backward; caller owns it.
@@ -43,7 +43,7 @@ void ScaledDotProductAttention::forward(const brotensor::Tensor& X, const float*
 }
 
 void ScaledDotProductAttention::backward(const brotensor::Tensor& dO, brotensor::Tensor& dX) {
-    assert(dO.rows == n_ && dO.cols == d_);
+    BGA_CHECK(dO.rows == n_ && dO.cols == d_);
     brotensor::attention_backward(dO, X_cache_, Q_, K_, V_, Attn_, Y_,
                                   Wq_, Wk_, Wv_, Wo_,
                                   mask_ptr_,

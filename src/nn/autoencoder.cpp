@@ -1,6 +1,6 @@
 #include "brogameagent/nn/autoencoder.h"
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -73,12 +73,12 @@ std::vector<uint8_t> DeepSetsAutoencoder::save() const {
 }
 
 void DeepSetsAutoencoder::load(const std::vector<uint8_t>& blob) {
-    assert(blob.size() >= sizeof(uint32_t) * 2);
+    BGA_CHECK(blob.size() >= sizeof(uint32_t) * 2);
     uint32_t magic = 0, version = 0;
     std::memcpy(&magic,   blob.data(),                   sizeof(uint32_t));
     std::memcpy(&version, blob.data() + sizeof(uint32_t), sizeof(uint32_t));
-    assert(magic == kAeMagic);
-    assert(version == kAeVersion);
+    BGA_CHECK(magic == kAeMagic);
+    BGA_CHECK(version == kAeVersion);
     size_t offset = sizeof(uint32_t) * 2;
     enc_.load_from(blob.data(), offset, blob.size());
     dec_.load_from(blob.data(), offset, blob.size());
@@ -93,9 +93,9 @@ std::vector<uint8_t> DeepSetsAutoencoder::save_encoder() const {
 // ─── reconstruction_loss ──────────────────────────────────────────────────
 
 float reconstruction_loss(const brotensor::Tensor& x, const brotensor::Tensor& x_hat, brotensor::Tensor& dX_hat) {
-    assert(x.size() == observation::TOTAL);
-    assert(x_hat.size() == observation::TOTAL);
-    assert(dX_hat.size() == observation::TOTAL);
+    BGA_CHECK(x.size() == observation::TOTAL);
+    BGA_CHECK(x_hat.size() == observation::TOTAL);
+    BGA_CHECK(dX_hat.size() == observation::TOTAL);
     dX_hat.zero();
 
     double sum_sq = 0.0;

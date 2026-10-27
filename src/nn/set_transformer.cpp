@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -97,8 +97,8 @@ void SetTransformerEncoder::load_from(const uint8_t* d, size_t& o, size_t s) {
 }
 
 void SetTransformerEncoder::forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
-    assert(x.size() == observation::TOTAL);
-    assert(y.size() == out_dim());
+    BGA_CHECK(x.size() == observation::TOTAL);
+    BGA_CHECK(y.size() == out_dim());
     x_cache_ = x;
     const int D = cfg_.embed_dim;
 
@@ -199,8 +199,8 @@ void SetTransformerEncoder::forward(const brotensor::Tensor& x, brotensor::Tenso
 }
 
 void SetTransformerEncoder::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
-    assert(dY.size() == out_dim());
-    assert(dX.size() == observation::TOTAL);
+    BGA_CHECK(dY.size() == out_dim());
+    BGA_CHECK(dX.size() == observation::TOTAL);
     dX.zero();
     const int D = cfg_.embed_dim;
 

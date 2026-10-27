@@ -1,6 +1,6 @@
 #include "brogameagent/learn/contrastive.h"
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cmath>
 #include <vector>
 
@@ -14,8 +14,8 @@ float infonce_loss(const std::vector<Tensor>& anchors,
                    std::vector<Tensor>& dPositives,
                    float temperature) {
     const int B = static_cast<int>(anchors.size());
-    assert(B > 0);
-    assert(static_cast<int>(positives.size()) == B);
+    BGA_CHECK(B > 0);
+    BGA_CHECK(static_cast<int>(positives.size()) == B);
     const int D = anchors[0].size();
     const float tau = temperature;
     const float eps = 1e-8f;

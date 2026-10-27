@@ -3,7 +3,7 @@
 #include <brotensor/ops.h>
 
 #include <algorithm>
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -100,8 +100,8 @@ void DeepSetsEncoder::to(brotensor::Device d) {
 // reads of tensor values — slot slicing uses copy_d2d, mask construction uses
 // build_slot_mask, both device-dispatched.
 void DeepSetsEncoder::forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
-    assert(x.size() == observation::TOTAL);
-    assert(y.size() == out_dim());
+    BGA_CHECK(x.size() == observation::TOTAL);
+    BGA_CHECK(y.size() == out_dim());
     x_cache_ = x;
     const int E = cfg_.embed_dim;
 
@@ -151,8 +151,8 @@ void DeepSetsEncoder::forward(const brotensor::Tensor& x, brotensor::Tensor& y) 
 
 // ─── backward ──────────────────────────────────────────────────────────────
 void DeepSetsEncoder::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
-    assert(dY.size() == out_dim());
-    assert(dX.size() == observation::TOTAL);
+    BGA_CHECK(dY.size() == out_dim());
+    BGA_CHECK(dX.size() == observation::TOTAL);
     if (dX.rows != observation::TOTAL || dX.cols != 1 || dX.device != dY.device) {
         dX = brotensor::Tensor::zeros_on(dY.device, observation::TOTAL, 1);
     } else {

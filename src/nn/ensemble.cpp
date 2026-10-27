@@ -1,6 +1,6 @@
 #include "brogameagent/nn/ensemble.h"
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -20,8 +20,8 @@ void EnsembleNet::init(int N, SingleHeroNet::Config base) {
 
 void EnsembleNet::forward_mean(const brotensor::Tensor& x, float& value_mean, float& value_std, brotensor::Tensor& logits_mean) {
     const int N = num_members();
-    assert(N > 0);
-    assert(logits_mean.size() == members_[0].policy_logits());
+    BGA_CHECK(N > 0);
+    BGA_CHECK(logits_mean.size() == members_[0].policy_logits());
     logits_mean.zero();
     std::vector<float> vals(N, 0.0f);
     brotensor::Tensor lg = brotensor::Tensor::vec(members_[0].policy_logits());
@@ -59,19 +59,19 @@ std::vector<uint8_t> EnsembleNet::save() const {
 }
 
 void EnsembleNet::load(const std::vector<uint8_t>& blob) {
-    assert(blob.size() >= sizeof(int32_t));
+    BGA_CHECK(blob.size() >= sizeof(int32_t));
     int32_t count = 0;
     std::memcpy(&count, blob.data(), sizeof(int32_t));
-    assert(count >= 0);
+    BGA_CHECK(count >= 0);
     // Re-init with current base config to shape members, then overwrite weights.
     init(count, base_);
     size_t offset = sizeof(int32_t);
     for (int i = 0; i < count; ++i) {
-        assert(offset + sizeof(int32_t) <= blob.size());
+        BGA_CHECK(offset + sizeof(int32_t) <= blob.size());
         int32_t sz = 0;
         std::memcpy(&sz, blob.data() + offset, sizeof(int32_t));
         offset += sizeof(int32_t);
-        assert(offset + static_cast<size_t>(sz) <= blob.size());
+        BGA_CHECK(offset + static_cast<size_t>(sz) <= blob.size());
         std::vector<uint8_t> member_blob(blob.begin() + offset, blob.begin() + offset + sz);
         members_[i].load(member_blob);
         offset += static_cast<size_t>(sz);

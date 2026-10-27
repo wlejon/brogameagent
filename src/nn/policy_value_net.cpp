@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 #include <utility>
 
@@ -15,9 +15,9 @@ static constexpr uint32_t kVersion = 2;
 
 void PolicyValueNet::init(const Config& cfg) {
     cfg_ = cfg;
-    assert(cfg.in_dim > 0);
-    assert(!cfg.hidden.empty());
-    assert(cfg.value_hidden > 0);
+    BGA_CHECK(cfg.in_dim > 0);
+    BGA_CHECK(!cfg.hidden.empty());
+    BGA_CHECK(cfg.value_hidden > 0);
 
     // Resolve head shape. Default: one head spanning num_actions. With
     // head_sizes provided, num_actions either matches the sum or is auto-
@@ -25,23 +25,23 @@ void PolicyValueNet::init(const Config& cfg) {
     head_sizes_.clear();
     head_offsets_.clear();
     if (cfg.head_sizes.empty()) {
-        assert(cfg.num_actions > 0);
+        BGA_CHECK(cfg.num_actions > 0);
         head_sizes_.push_back(cfg.num_actions);
     } else {
         int sum = 0;
         for (int h : cfg.head_sizes) {
-            assert(h > 0);
+            BGA_CHECK(h > 0);
             sum += h;
             head_sizes_.push_back(h);
         }
         if (cfg_.num_actions == 0) cfg_.num_actions = sum;
-        else assert(cfg_.num_actions == sum);
+        else BGA_CHECK(cfg_.num_actions == sum);
     }
     head_offsets_.reserve(head_sizes_.size() + 1);
     int off = 0;
     for (int h : head_sizes_) { head_offsets_.push_back(off); off += h; }
     head_offsets_.push_back(off);
-    assert(off == cfg_.num_actions);
+    BGA_CHECK(off == cfg_.num_actions);
 
     uint64_t seed = cfg_.seed;
 
@@ -322,29 +322,29 @@ std::vector<uint8_t> PolicyValueNet::save() const {
 }
 
 void PolicyValueNet::load(const std::vector<uint8_t>& blob) {
-    assert(blob.size() >= sizeof(uint32_t) * 2);
+    BGA_CHECK(blob.size() >= sizeof(uint32_t) * 2);
     uint32_t magic = 0, version = 0;
     std::memcpy(&magic,   blob.data(),                    sizeof(uint32_t));
     std::memcpy(&version, blob.data() + sizeof(uint32_t), sizeof(uint32_t));
-    assert(magic == kMagic);
-    assert(version == 1 || version == 2);
+    BGA_CHECK(magic == kMagic);
+    BGA_CHECK(version == 1 || version == 2);
     size_t offset = sizeof(uint32_t) * 2;
 
     if (version >= 2) {
         // Validate that the saved head shape matches what init() resolved.
         // A loader that wants to *adopt* a different shape should re-init
         // before calling load(); we don't reshape silently.
-        assert(blob.size() >= offset + sizeof(uint32_t));
+        BGA_CHECK(blob.size() >= offset + sizeof(uint32_t));
         uint32_t n_heads = 0;
         std::memcpy(&n_heads, blob.data() + offset, sizeof(uint32_t));
         offset += sizeof(uint32_t);
-        assert(n_heads == head_sizes_.size());
-        assert(blob.size() >= offset + sizeof(uint32_t) * n_heads);
+        BGA_CHECK(n_heads == head_sizes_.size());
+        BGA_CHECK(blob.size() >= offset + sizeof(uint32_t) * n_heads);
         for (uint32_t i = 0; i < n_heads; ++i) {
             uint32_t h = 0;
             std::memcpy(&h, blob.data() + offset, sizeof(uint32_t));
             offset += sizeof(uint32_t);
-            assert(static_cast<int>(h) == head_sizes_[i]);
+            BGA_CHECK(static_cast<int>(h) == head_sizes_[i]);
         }
     }
     // v1 has no head metadata — we treat the saved net as single-head with

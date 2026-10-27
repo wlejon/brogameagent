@@ -2,14 +2,14 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cmath>
 
 namespace brogameagent::nn {
 
 static inline void mat_vec(const brotensor::Tensor& W, const brotensor::Tensor& x, brotensor::Tensor& y) {
     const int out = W.rows, in = W.cols;
-    assert(x.size() == in && y.size() == out);
+    BGA_CHECK(x.size() == in && y.size() == out);
     for (int i = 0; i < out; ++i) {
         float acc = 0.0f;
         const float* row = W.ptr() + static_cast<size_t>(i) * in;
@@ -68,7 +68,7 @@ int GRUCell::num_params() const {
 
 void GRUCell::forward(const brotensor::Tensor& x, const brotensor::Tensor& h_prev, brotensor::Tensor& h) {
     const int H = hidden();
-    assert(h.size() == H);
+    BGA_CHECK(h.size() == H);
     x_cache_ = x;
     h_prev_cache_ = h_prev;
 
@@ -100,7 +100,7 @@ void GRUCell::forward(const brotensor::Tensor& x, const brotensor::Tensor& h_pre
 
 void GRUCell::backward(const brotensor::Tensor& dH, brotensor::Tensor& dX, brotensor::Tensor& dH_prev) {
     const int H = hidden(), I = in_dim();
-    assert(dH.size() == H);
+    BGA_CHECK(dH.size() == H);
 
     // h = (1 - z) * n + z * h_prev
     brotensor::Tensor dz = brotensor::Tensor::vec(H);

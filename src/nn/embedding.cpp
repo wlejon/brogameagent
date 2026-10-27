@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -19,15 +19,15 @@ void Embedding::init(int vocab, int dim, uint64_t& rng_state) {
 }
 
 void Embedding::forward(int idx, brotensor::Tensor& out) {
-    assert(idx >= 0 && idx < W_.rows);
-    assert(out.size() == W_.cols);
+    BGA_CHECK(idx >= 0 && idx < W_.rows);
+    BGA_CHECK(out.size() == W_.cols);
     const int d = W_.cols;
     std::memcpy(out.ptr(), W_.ptr() + static_cast<size_t>(idx) * d, d * sizeof(float));
 }
 
 void Embedding::backward(int idx, const brotensor::Tensor& dY) {
-    assert(idx >= 0 && idx < W_.rows);
-    assert(dY.size() == W_.cols);
+    BGA_CHECK(idx >= 0 && idx < W_.rows);
+    BGA_CHECK(dY.size() == W_.cols);
     const int d = W_.cols;
     float* row = dW_.ptr() + static_cast<size_t>(idx) * d;
     const float* g = dY.ptr();

@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -98,8 +98,8 @@ void DeepSetsDecoder::to(brotensor::Device d) {
 // (K_slots, embed_dim) minibatch and run a shared-weight Linear+ReLU+Linear
 // over it via the batched ops. No host reads of tensor values.
 void DeepSetsDecoder::forward(const brotensor::Tensor& x, brotensor::Tensor& y) {
-    assert(x.size() == in_dim());
-    assert(y.size() == out_dim());
+    BGA_CHECK(x.size() == in_dim());
+    BGA_CHECK(y.size() == out_dim());
     const int E = cfg_.embed_dim;
 
     // Split input into three embed-sized chunks; cache for backward.
@@ -138,8 +138,8 @@ void DeepSetsDecoder::forward(const brotensor::Tensor& x, brotensor::Tensor& y) 
 
 // ─── backward ──────────────────────────────────────────────────────────────
 void DeepSetsDecoder::backward(const brotensor::Tensor& dY, brotensor::Tensor& dX) {
-    assert(dY.size() == out_dim());
-    assert(dX.size() == in_dim());
+    BGA_CHECK(dY.size() == out_dim());
+    BGA_CHECK(dX.size() == in_dim());
     if (dX.rows != in_dim() || dX.cols != 1 || dX.device != dY.device) {
         dX = brotensor::Tensor::zeros_on(dY.device, in_dim(), 1);
     } else {

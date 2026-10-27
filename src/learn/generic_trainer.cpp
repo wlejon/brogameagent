@@ -3,7 +3,7 @@
 #include <brotensor/ops.h>
 #include <brotensor/runtime.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::learn {
@@ -81,7 +81,7 @@ public:
 
     void backward_batched(const brotensor::Tensor& dL,
                           const brotensor::Tensor& dV) override {
-        assert(last_X_ != nullptr &&
+        BGA_CHECK(last_X_ != nullptr &&
                "forward_batched_train must precede backward_batched");
         const brotensor::Tensor& X = *last_X_;
         const int B   = X.rows;

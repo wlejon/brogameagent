@@ -1,7 +1,7 @@
 #include "brogameagent/nn/factored.h"
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -74,8 +74,8 @@ void factored_to_flat(const float* logits,
                       const std::vector<int>& head_offsets,
                       float* flat_prior,
                       const float* head_masks) {
-    assert(!head_sizes.empty());
-    assert(head_offsets.size() == head_sizes.size() + 1);
+    BGA_CHECK(!head_sizes.empty());
+    BGA_CHECK(head_offsets.size() == head_sizes.size() + 1);
 
     const int n_heads = static_cast<int>(head_sizes.size());
     const int total   = flat_action_count(head_sizes);
@@ -116,8 +116,8 @@ void factored_to_flat(const brotensor::Tensor& logits,
                       const std::vector<int>& head_offsets,
                       brotensor::Tensor& flat_prior,
                       const float* head_masks) {
-    assert(logits.size() == head_offsets.back());
-    assert(flat_prior.size() == flat_action_count(head_sizes));
+    BGA_CHECK(logits.size() == head_offsets.back());
+    BGA_CHECK(flat_prior.size() == flat_action_count(head_sizes));
     factored_to_flat(logits.ptr(), head_sizes, head_offsets,
                      flat_prior.ptr(), head_masks);
 }

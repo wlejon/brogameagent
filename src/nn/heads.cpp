@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -75,7 +75,7 @@ void FactoredPolicyHead::to(brotensor::Device d) {
 }
 
 void FactoredPolicyHead::forward(const brotensor::Tensor& embed, brotensor::Tensor& logits) {
-    assert(logits.size() == total_logits());
+    BGA_CHECK(logits.size() == total_logits());
     brotensor::Tensor lm = brotensor::Tensor::vec(N_MOVE).to(device_);
     brotensor::Tensor la = brotensor::Tensor::vec(N_ATTACK).to(device_);
     brotensor::Tensor lb = brotensor::Tensor::vec(N_ABILITY).to(device_);
@@ -87,7 +87,7 @@ void FactoredPolicyHead::forward(const brotensor::Tensor& embed, brotensor::Tens
 }
 
 void FactoredPolicyHead::backward(const brotensor::Tensor& dLogits, brotensor::Tensor& dEmbed) {
-    assert(dLogits.size() == total_logits());
+    BGA_CHECK(dLogits.size() == total_logits());
     dEmbed.zero();
 
     brotensor::Tensor dLm = brotensor::Tensor::vec(N_MOVE).to(device_);

@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -39,12 +39,12 @@ void tensor_write(const brotensor::Tensor& t, std::vector<uint8_t>& out) {
 }
 
 void tensor_read(brotensor::Tensor& t, const uint8_t* data, size_t& offset, size_t size) {
-    assert(offset + sizeof(int32_t) * 2 <= size);
+    BGA_CHECK(offset + sizeof(int32_t) * 2 <= size);
     int32_t r = 0, c = 0;
     std::memcpy(&r, data + offset, sizeof(int32_t)); offset += sizeof(int32_t);
     std::memcpy(&c, data + offset, sizeof(int32_t)); offset += sizeof(int32_t);
     const size_t bytes = static_cast<size_t>(r) * c * sizeof(float);
-    assert(offset + bytes <= size);
+    BGA_CHECK(offset + bytes <= size);
     brotensor::Tensor h = brotensor::Tensor::mat(r, c);
     if (bytes) std::memcpy(h.ptr(), data + offset, bytes);
     offset += bytes;

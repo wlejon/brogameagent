@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cmath>
 
 namespace brogameagent::nn {
@@ -41,7 +41,7 @@ void TransformerBlock::RowLN::adam_step(float lr, float beta1, float beta2,
 void TransformerBlock::RowLN::forward(const brotensor::Tensor& X, brotensor::Tensor& Y) {
     const int K = X.rows;
     const int D = X.cols;
-    assert(D == gamma.size());
+    BGA_CHECK(D == gamma.size());
     if (Y.rows != K || Y.cols != D) Y.resize(K, D);
     // xhat caches normalised x; keep it on the same device as the input.
     if (xhat.rows != K || xhat.cols != D || xhat.device != X.device) {
@@ -134,7 +134,7 @@ int TransformerBlock::num_params() const {
 void TransformerBlock::forward(const brotensor::Tensor& X, const float* mask, brotensor::Tensor& Y) {
     const int K = X.rows;
     const int D = X.cols;
-    assert(D == cfg_.dim);
+    BGA_CHECK(D == cfg_.dim);
     if (Y.rows != K || Y.cols != D) Y.resize(K, D);
     X_cache_ = X;
 

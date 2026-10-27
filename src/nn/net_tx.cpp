@@ -2,7 +2,7 @@
 
 #include <brotensor/ops.h>
 
-#include <cassert>
+#include "brogameagent/nn/check.h"
 #include <cstring>
 
 namespace brogameagent::nn {
@@ -180,12 +180,12 @@ std::vector<uint8_t> SingleHeroNetTX::save() const {
 }
 
 void SingleHeroNetTX::load(const std::vector<uint8_t>& blob) {
-    assert(blob.size() >= 2 * sizeof(uint32_t));
+    BGA_CHECK(blob.size() >= 2 * sizeof(uint32_t));
     uint32_t magic = 0, version = 0;
     std::memcpy(&magic,   blob.data(),                    sizeof(uint32_t));
     std::memcpy(&version, blob.data() + sizeof(uint32_t), sizeof(uint32_t));
-    assert(magic == kMagicTX);
-    assert(version == kVersionTX);
+    BGA_CHECK(magic == kMagicTX);
+    BGA_CHECK(version == kVersionTX);
     size_t off = 2 * sizeof(uint32_t);
     load_from(blob.data(), off, blob.size());
 }
@@ -193,7 +193,7 @@ void SingleHeroNetTX::load(const std::vector<uint8_t>& blob) {
 // ─── Forward / backward ───────────────────────────────────────────────────
 
 void SingleHeroNetTX::forward(const brotensor::Tensor& x_in, float& value, brotensor::Tensor& logits) {
-    assert(x_in.size() == observation::TOTAL);
+    BGA_CHECK(x_in.size() == observation::TOTAL);
     const int D = cfg_.d_model;
 
     // Stage the input to the parameter device so every op below dispatches

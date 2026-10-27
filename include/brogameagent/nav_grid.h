@@ -47,6 +47,10 @@ public:
     /// @param padding  Extra clearance around the obstacle (agent radius).
     void addObstacle(const AABB& box, float padding = 0);
 
+    /// Mark cells overlapping an AABB as walkable again, and forget an
+    /// obstacle box equal to it.
+    void removeObstacle(const AABB& box, float padding = 0);
+
     /// The raw (unpadded) obstacle boxes added so far. Retained so embedders
     /// can bridge the same walls into other systems — e.g. baking them into
     /// World avoidance obstacles so ORCA respects what A* paths around.
