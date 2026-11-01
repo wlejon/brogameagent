@@ -153,13 +153,9 @@ void check_factored_operand(const brotensor::Tensor& logits, const brotensor::Te
 
 void factored_softmax_device(const brotensor::Tensor& logits, brotensor::Tensor& probs,
                              const float* attack_mask, const float* ability_mask) {
-    constexpr const char* op = "factored_softmax";
     const int N_MOVE = FactoredPolicyHead::N_MOVE;
     const int N_ATK  = FactoredPolicyHead::N_ATTACK;
     const int N_AB   = FactoredPolicyHead::N_ABILITY;
-    const int total  = N_MOVE + N_ATK + N_AB;
-    check_factored_operand(logits, logits, total, op, "logits");
-    check_factored_operand(logits, probs, total, op, "probs");
 
     const brotensor::Device d = logits.device;
     const brotensor::Tensor amask = device_head_mask(d, attack_mask, N_ATK);
@@ -179,17 +175,9 @@ float factored_xent_device(const brotensor::Tensor& logits,
                            const brotensor::Tensor& ability_target,
                            brotensor::Tensor& probs, brotensor::Tensor& dLogits,
                            const float* attack_mask, const float* ability_mask) {
-    constexpr const char* op = "factored_xent";
     const int N_MOVE = FactoredPolicyHead::N_MOVE;
     const int N_ATK  = FactoredPolicyHead::N_ATTACK;
     const int N_AB   = FactoredPolicyHead::N_ABILITY;
-    const int total  = N_MOVE + N_ATK + N_AB;
-    check_factored_operand(logits, logits, total, op, "logits");
-    check_factored_operand(logits, move_target, N_MOVE, op, "move_target");
-    check_factored_operand(logits, attack_target, N_ATK, op, "attack_target");
-    check_factored_operand(logits, ability_target, N_AB, op, "ability_target");
-    check_factored_operand(logits, probs, total, op, "probs");
-    check_factored_operand(logits, dLogits, total, op, "dLogits");
 
     const brotensor::Device d = logits.device;
     const brotensor::Tensor amask = device_head_mask(d, attack_mask, N_ATK);
@@ -231,6 +219,16 @@ static void softmax_slice(const float* logits, int n, float* probs, const float*
 
 void factored_softmax(const brotensor::Tensor& logits, brotensor::Tensor& probs,
                       const float* attack_mask, const float* ability_mask) {
+    // Every operand is checked on every device: the CPU path below walks the
+    // pointers unchecked, so a short buffer (a Float32Array(0)) would be
+    // written past its end.
+    {
+        constexpr const char* op = "factored_softmax";
+        const int total = FactoredPolicyHead::N_MOVE + FactoredPolicyHead::N_ATTACK +
+                          FactoredPolicyHead::N_ABILITY;
+        check_factored_operand(logits, logits, total, op, "logits");
+        check_factored_operand(logits, probs, total, op, "probs");
+    }
     if (logits.device.is_gpu()) {
         factored_softmax_device(logits, probs, attack_mask, ability_mask);
         return;
@@ -273,6 +271,20 @@ float factored_xent(const brotensor::Tensor& logits,
                     const brotensor::Tensor& ability_target,
                     brotensor::Tensor& probs, brotensor::Tensor& dLogits,
                     const float* attack_mask, const float* ability_mask) {
+    // Checked on every device, as factored_softmax is.
+    {
+        constexpr const char* op = "factored_xent";
+        const int N_MOVE = FactoredPolicyHead::N_MOVE;
+        const int N_ATK  = FactoredPolicyHead::N_ATTACK;
+        const int N_AB   = FactoredPolicyHead::N_ABILITY;
+        const int total  = N_MOVE + N_ATK + N_AB;
+        check_factored_operand(logits, logits, total, op, "logits");
+        check_factored_operand(logits, move_target, N_MOVE, op, "move_target");
+        check_factored_operand(logits, attack_target, N_ATK, op, "attack_target");
+        check_factored_operand(logits, ability_target, N_AB, op, "ability_target");
+        check_factored_operand(logits, probs, total, op, "probs");
+        check_factored_operand(logits, dLogits, total, op, "dLogits");
+    }
     if (logits.device.is_gpu()) {
         return factored_xent_device(logits, move_target, attack_target, ability_target,
                                     probs, dLogits, attack_mask, ability_mask);

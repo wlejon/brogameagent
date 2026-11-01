@@ -344,6 +344,27 @@ const char* kNnOps = R"JS(
         if (err) return err;
         nn.factoredSoftmax(fLogits, fProbs, new Float32Array(nn.N_ATTACK - 1).fill(1),
                            new Float32Array(nn.N_ABILITY - 1).fill(1));
+        // Operands shorter than the factored heads are refused on the CPU as
+        // on a GPU, not written past their end (a Float32Array(0) each was
+        // heap corruption that the native fuzz found as a later crash).
+        const throws = (fn, what) => {
+            try { fn(); } catch (e) { return null; }
+            return what + " did not throw";
+        };
+        const none = new Float32Array(0);
+        err = throws(() => nn.factoredSoftmax(none, none), "factoredSoftmax on empty operands");
+        if (err) return err;
+        err = throws(() => nn.factoredSoftmax(fLogits, new Float32Array(3)), "factoredSoftmax short probs");
+        if (err) return err;
+        err = throws(() => nn.factoredXent(none, none, none, none, none, none),
+                     "factoredXent on empty operands");
+        if (err) return err;
+        err = throws(() => nn.factoredXent(fLogits, new Float32Array(nn.N_MOVE), new Float32Array(nn.N_ATTACK),
+                                           new Float32Array(nn.N_ABILITY), fProbs, new Float32Array(2)),
+                     "factoredXent short dLogits");
+        if (err) return err;
+        nn.factoredXent(fLogits, new Float32Array(nn.N_MOVE), new Float32Array(nn.N_ATTACK),
+                        new Float32Array(nn.N_ABILITY), fProbs, new Float32Array(fLogits.length));
 
         const mse = nn.mseScalar(0.5, 1.0);
         if (!(mse.loss > 0) || typeof mse.dPred !== "number") return "mseScalar: " + JSON.stringify(mse);
