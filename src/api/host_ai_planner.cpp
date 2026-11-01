@@ -1,11 +1,9 @@
 // Hierarchical planners: TacticMcts, LayeredPlanner, TeamOption /
 // TeamOptionMcts and Commander.
 //
-// None of these survived the port; every app that reached for
-// createLayeredPlanner / createCommander / createTacticMcts found the name
-// missing. They are restored here with the option/evaluator/prior wiring the
-// old bodies did, so a planner configured from JS actually uses what it was
-// handed.
+// createTacticMcts / createLayeredPlanner / createCommander and the rest
+// carry their option / evaluator / prior wiring, so a planner configured from
+// JS actually uses what it was handed.
 
 #include "host_ai_mcts_shared.h"
 

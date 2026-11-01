@@ -1,10 +1,9 @@
 // Simulation / Recorder / ReplayReader.
 //
-// The fixed-dt rollout driver and the .bgar replay writer + reader were all
-// dropped by the port; createSimulation / createRecorder / createReplayReader
-// were missing entirely, taking addPolicy, removePolicy, runSteps,
-// resetCounters, open, writeRoster, recordFrame, close, frame, trajectory and
-// damageSummary with them.
+// The fixed-dt rollout driver and the .bgar replay writer + reader:
+// createSimulation / createRecorder / createReplayReader, with addPolicy,
+// removePolicy, runSteps, resetCounters, open, writeRoster, recordFrame,
+// close, frame, trajectory and damageSummary.
 
 #include "host_ai_mcts_shared.h"
 

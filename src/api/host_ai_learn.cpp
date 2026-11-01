@@ -2,8 +2,6 @@
 // NeuralPrior, GumbelNoisePrior, ExItTrainer, the search-trace free
 // functions, and the extractors the MCTS factories consult so a neural prior
 // or evaluator can be passed wherever a preset name can.
-//
-// Ported from ai_learn_bindings.cpp.
 
 #include "host_ai_learn_shared.h"
 
@@ -336,8 +334,8 @@ void installAILearnCore(ObjectBuilder& learnNs) {
         if (a.empty()) return ev::throwTypeError("createGumbelNoisePrior(innerPrior, scale?)");
         auto inner = extractPriorShared(a[0]);
         if (!inner) {
-            // The old binding took only a NeuralPrior / GumbelNoisePrior here;
-            // a plain AIUniformPrior-style cell is just as valid an inner.
+            // Besides a NeuralPrior / GumbelNoisePrior, a plain
+            // AIUniformPrior-style cell is just as valid an inner.
             if (auto* cell = unwrapPriorCell(a[0])) inner = cell->p;
         }
         if (!inner) return ev::throwTypeError("innerPrior must be a bound prior");

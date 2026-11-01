@@ -4,8 +4,7 @@
 // platformer training kit.
 //
 // grid/harness.h embeds a learn::GenericTrainer, which pulls brotensor, so
-// the whole surface is gated on the neural layer exactly as it was before
-// the transition.
+// the whole surface is gated on the neural layer.
 
 #include "host_ai_learn_shared.h"
 

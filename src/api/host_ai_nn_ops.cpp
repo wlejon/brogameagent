@@ -1,5 +1,5 @@
 // bro.ai.game.nn — the free ops: the brotensor forward/backward primitives
-// the old binding exposed one-for-one, the factored-policy helpers, and the
+// exposed one-for-one, the factored-policy helpers, and the
 // policy-head shape constants.
 //
 // Tensor arguments follow the same rule as the classes: a bro.tensor
@@ -243,7 +243,7 @@ void installAINnOps(ObjectBuilder& nnNs) {
 
     // ── Multi-head policy helpers ─────────────────────────────────────────
     // These take Float32Arrays rather than tensors, the way the trainer
-    // worker shuffles data — unchanged from before the transition.
+    // worker shuffles data.
 
     nnNs.def("factoredToFlat", 4, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3) {

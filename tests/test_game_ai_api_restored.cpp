@@ -1,7 +1,6 @@
-// Coverage for the parts of brogameagent_api that were restored after the
-// bronze port dropped them: the `field` / `applyAction` / `findById` /
-// `registerAbility` / `seed` tail of the classic surface, and the whole
-// bro.ai.game.nn / .learn / .grid namespaces.
+// Coverage for HexNav.field, Agent.applyAction, World.findById /
+// registerAbility / seed, and the whole bro.ai.game.nn / .learn / .grid
+// namespaces.
 //
 // Every check runs as real JavaScript through bronze so the test exercises
 // the same path an app does.
@@ -44,7 +43,7 @@ void runJs(const char* label, const char* script) {
 }
 
 // ---------------------------------------------------------------------------
-// The classic surface: World.findById / registerAbility / seed,
+// The world tail: World.findById / registerAbility / seed,
 // Agent.applyAction, HexNav.field
 // ---------------------------------------------------------------------------
 
@@ -262,7 +261,7 @@ const char* kNnCircuits = R"JS(
         const nn = bro.ai.game.nn;
         if (nn.available === false) return "nn namespace is stubbed out";
 
-        // The old AITensor factory now answers a bro.tensor GpuTensor.
+        // createTensor answers a bro.tensor GpuTensor.
         const t = nn.createTensor(2, 3);
         if (!t || t.rows !== 2 || t.cols !== 3) return "createTensor shape: " + JSON.stringify(t);
 
@@ -312,8 +311,7 @@ const char* kNnOps = R"JS(
     (function() {
         const nn = bro.ai.game.nn;
 
-        // Ops take a GpuTensor or a Float32Array; the flat form is the one
-        // the old binding's AITensor stood in for.
+        // Ops take a GpuTensor or a Float32Array; this checks the flat form.
         const y = new Float32Array(3);
         nn.reluForward(new Float32Array([-1, 0.5, 2]), y);
         if (y[0] !== 0 || y[1] !== 0.5 || y[2] !== 2) return "reluForward: " + Array.from(y);
@@ -425,7 +423,7 @@ const char* kNnNets = R"JS(
 
         // WeightsHandle is the trainer→evaluator hot-swap: publish(blob,
         // version), snapshot() → { blob, version }, version() — the version
-        // is a BigInt, as it was before the port.
+        // is a BigInt.
         const handle = nn.createWeightsHandle();
         if (handle.snapshot() !== null) return "a fresh handle should snapshot null";
         handle.publish(blob, 3);
@@ -630,7 +628,7 @@ const char* kGridRecording = R"JS(
         const path = "brogameagent_test_grid_replay.bin";
 
         // open(path, episodeId, seed, dt, { roster, frame, events }); rows are
-        // positional, in schema order, exactly as the old binding read them.
+        // positional, in schema order.
         const rec = grid.createGenericRecorder();
         const schemas = {
             roster: [{ name: "id", type: "i32" }, { name: "team", type: "i32" }],
@@ -810,7 +808,7 @@ void collectNow() {
 } // namespace
 
 int main() {
-    std::cout << "Running brogameagent restored-API test..." << std::endl;
+    std::cout << "Running brogameagent world-tail / nn / learn / grid API test..." << std::endl;
 
     ev::Realm* realm = ev::createRealm();
     {
@@ -846,6 +844,6 @@ int main() {
     }
     ev::destroyRealm(realm);
 
-    std::cout << "All brogameagent restored-API tests passed!" << std::endl;
+    std::cout << "All brogameagent world-tail / nn / learn / grid API tests passed!" << std::endl;
     return 0;
 }

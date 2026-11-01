@@ -2,9 +2,8 @@
 
 // Shared plumbing for the bro.ai.game.nn / .learn / .grid bindings.
 //
-// The old surface had its own AITensor class. It is gone: a tensor argument
-// is now a bro.tensor GpuTensor handle (brotensor's own binding) or a plain
-// Float32Array, which this header turns into a non-owning CPU view. Nothing
+// A tensor argument is a bro.tensor GpuTensor handle (brotensor's own
+// binding) or a plain Float32Array, which this header turns into a non-owning CPU view. Nothing
 // here allocates a second tensor type.
 
 #include "host_ai_mcts_shared.h"
@@ -191,8 +190,7 @@ float* floatPtr(Value v, size_t& count);
 
 Value makeUint8Array(const uint8_t* data, size_t count);
 
-/// The old bindings answered seeds and weight versions as BigInt. bronze's
-/// embed API has no BigInt constructor, so this goes through the global
+/// Seeds and weight versions are answered as BigInt. bronze's embed API has no BigInt constructor, so this goes through the global
 /// `BigInt(<decimal string>)`, which is exact for the full uint64 range.
 Value makeBigIntValue(uint64_t v);
 /// BigInt or Number in, uint64 out; `def` for undefined/null.

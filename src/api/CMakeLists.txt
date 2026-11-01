@@ -42,8 +42,8 @@ target_link_libraries(brogameagent_api PUBLIC
 
 if(BROGAMEAGENT_WITH_NN AND TARGET brotensor_api)
     # The nn bindings hand tensors to JS as bro.tensor GpuTensor handles
-    # (getTensorFromHandle / createGpuTensorValue) rather than reviving the
-    # old AITensor class, so they need brotensor's own binding. brotensor's
+    # (getTensorFromHandle / createGpuTensorValue), so they need brotensor's
+    # own binding. brotensor's
     # api is INSTALLED by the host exactly once — brogameagent never calls
     # installTensor() itself.
     target_link_libraries(brogameagent_api PUBLIC brotensor_api)

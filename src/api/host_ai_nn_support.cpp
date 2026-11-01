@@ -44,8 +44,8 @@ TensorArg tensorArg(Value v) {
     TensorArg out;
     if (ev::isUndefined(v) || ev::isNull(v)) return out;
 
-    // A Float32Array is viewed in place: the old surface's AITensor is gone,
-    // so a plain typed array is how a caller hands over CPU-side floats
+    // A Float32Array is viewed in place: a plain typed array is how a caller
+    // hands over CPU-side floats
     // without allocating a GpuTensor for them.
     if (auto info = ev::typedArrayInfo(v)) {
         if (info.data && info.elementKind == ev::elements::Float32) {

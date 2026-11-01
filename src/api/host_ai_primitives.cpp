@@ -2,12 +2,9 @@
 // and rollout policies that createMcts/createTeamMcts/... accept in place of
 // a preset name.
 //
-// Before the transition these were ten separate qjsbind classes holding a
-// shared_ptr each; the port dropped them for factories returning `{}`, which
-// silently disabled every search configured with one. They are restored here
-// as ten host classes over four payload cells (one per C++ interface), so
-// `AITacticPrior` still carries setMatchWeight/setOtherWeight and the
-// extractors can recover the shared_ptr by tag.
+// Ten host classes over four payload cells (one per C++ interface), each
+// holding a shared_ptr, so `AITacticPrior` carries setMatchWeight /
+// setOtherWeight and the extractors can recover the shared_ptr by tag.
 
 #include "host_ai_mcts_shared.h"
 

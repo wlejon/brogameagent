@@ -1,7 +1,5 @@
 // bro.ai.game.grid — the recording/training half: GenericRecorder,
 // GenericReplayReader and GridTrainer.
-//
-// Ported from ai_grid_bindings.cpp.
 
 #include "host_ai_grid_shared.h"
 

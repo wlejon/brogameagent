@@ -1,11 +1,8 @@
 // bro.ai.game.learn — the observation-agnostic half: GenericReplayBuffer,
 // GenericExItTrainer, the batched inference server, and the two
 // IInferenceBackend wrappers that are GenericMcts's native prior/value fast
-// path.
-//
-// Ported from ai_learn_bindings.cpp; makeNativePriorFn / makeNativeValueFn
-// come from ai_generic_mcts_bindings.cpp, where the `backend` option wired
-// them in.
+// path (makeNativePriorFn / makeNativeValueFn, which GenericMcts's `backend`
+// option wires in).
 
 #include "host_ai_learn_shared.h"
 
@@ -169,8 +166,8 @@ void decorateGenericTrainer(ObjectBuilder& b) {
         c.rng_seed = readSeedArg(ev::getProperty(root.get(), "rngSeed"), c.rng_seed);
 
         // Where compute happens. "gpu" requires net.to('gpu') first. Unlike
-        // the net's own to(), the old binding did not throw here — an absent
-        // GPU left the trainer on the CPU device it already had.
+        // the net's own to(), this does not throw — an absent GPU leaves the
+        // trainer on the CPU device it already had.
         Value devV = ev::getProperty(root.get(), "device");
         if (ev::isString(devV)) {
             brotensor::Device target = brotensor::Device::CPU;

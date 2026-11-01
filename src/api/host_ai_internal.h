@@ -705,8 +705,8 @@ Value aiCreateHexNav(Value self, std::span<const Value> a);
 Value aiCreateWorld(Value self, std::span<const Value> a);
 void ensureAIClassesInstalled();
 
-// The tail of the pre-transition HexNav / Agent / World surface
-// (host_ai_world_extra.cpp). Split out so host_ai_game.cpp stays well under
+// HexNav.field(), Agent.applyAction() and World.findById() /
+// registerAbility() / seed() (host_ai_world_extra.cpp). Split out so host_ai_game.cpp stays well under
 // the file-size ceiling.
 void decorateHexNavExtras(ObjectBuilder& b);
 void decorateAgentExtras(ObjectBuilder& b);

@@ -1,9 +1,9 @@
 // Belief / observability / Information-Set MCTS.
 //
 // createTeamBelief, observe, mergeObservations, createInfoSetMcts and
-// createInfoSetTeamMcts were all absent after the port, and with them every
-// TeamBelief method (clear, registerEnemy, propagate, update, sample, mean,
-// enemies) and the IS-MCTS setBelief / setEvaluator / setPrior wiring.
+// createInfoSetTeamMcts, every TeamBelief method (clear, registerEnemy,
+// propagate, update, sample, mean, enemies), the IS-MCTS setBelief /
+// setEvaluator / setPrior wiring and patchSnapshotWithParticles.
 
 #include "host_ai_mcts_shared.h"
 
@@ -517,7 +517,7 @@ void installAIBelief(ObjectBuilder& game) {
     });
 
     // Overwrite a snapshot's hidden enemies with one determinization's
-    // particles — the IS-MCTS helper the port left as a no-op.
+    // particles — the IS-MCTS determinization helper.
     game.def("patchSnapshotWithParticles", 2, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) {
             return ev::throwTypeError("patchSnapshotWithParticles(snapshot, particleMap)");

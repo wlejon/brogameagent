@@ -1,9 +1,9 @@
-// The tail of the pre-transition `bro.ai.game` surface: HexNav.field(),
-// Agent.applyAction(), and World.findById() / registerAbility() / seed().
+// HexNav.field(), Agent.applyAction(), and World.findById() /
+// registerAbility() / seed().
 //
-// These lived in the old ai_bindings.cpp next to the methods they belong to;
-// they are here rather than in host_ai_game.cpp / host_ai_agent.cpp only to
-// keep those files well inside the file-size ceiling.
+// They are here rather than in host_ai_game.cpp / host_ai_agent.cpp beside
+// the methods they belong with only to keep those files well inside the
+// file-size ceiling.
 
 #include "host_ai_internal.h"
 
@@ -141,8 +141,7 @@ void decorateAgentExtras(ObjectBuilder& b) {
 
 void decorateWorldExtras(ObjectBuilder& b) {
     // findById(unitId) → the AIAgent wrapper on this world's roster, or null.
-    // The old body walked the wrapper's `__agents` array for pointer
-    // identity; the roster HostWorld already keeps is the same list.
+    // Looked up through the roster HostWorld keeps.
     b.def("findById", 1, [](Value self, std::span<const Value> a) -> Value {
         HostWorld* w = unwrapWorld(self);
         if (!w || a.empty()) return ev::null();
@@ -157,8 +156,7 @@ void decorateWorldExtras(ObjectBuilder& b) {
     //
     // fn(caster, world, targetId) fires from the native cast path — including
     // from inside an MCTS rollout on a cloned World, where `caster` is a
-    // clone's Agent and so has no wrapper: the old body passed undefined
-    // there too.
+    // clone's Agent and so has no wrapper: `caster` is undefined there.
     b.def("registerAbility", 2, [](Value self, std::span<const Value> a) -> Value {
         HostWorld* w = unwrapWorld(self);
         if (!w || a.size() < 2) return ev::undefined();

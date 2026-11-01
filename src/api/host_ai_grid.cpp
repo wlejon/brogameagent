@@ -1,8 +1,6 @@
 // bro.ai.game.grid — the observation/curriculum half: ObsWindow,
 // FrameStack, FailureTape, BestCrop, PotentialShaper, StallDetector and the
 // behaviour-cloning generator.
-//
-// Ported from ai_grid_bindings.cpp.
 
 #include "host_ai_grid_shared.h"
 

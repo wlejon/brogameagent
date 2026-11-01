@@ -49,7 +49,7 @@ inline constexpr uint32_t kHostPriorTag          = 0x41495052u;  // 'AIPR'
 // ---------------------------------------------------------------------------
 // Primitive cells — one struct per interface, shared by every concrete class
 // of that interface (the class objects differ so `AIUniformPrior` and
-// `AITacticPrior` stay distinct names, as they were before the transition).
+// `AITacticPrior` are distinct names).
 // ---------------------------------------------------------------------------
 
 struct HostEvaluatorCell {

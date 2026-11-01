@@ -2,9 +2,8 @@
 
 // Payload cells and class handles for bro.ai.game.learn.
 //
-// Where the pre-transition binding pinned a JS reference on the wrapper
-// object (`JS_SetPropertyStr(this_val, "__net", ...)`) to keep a net alive
-// for a raw pointer, these cells hold an ev::Persistent instead: a
+// A cell that keeps a net alive for a raw pointer holds it in an
+// ev::Persistent rather than in a property on the wrapper object: a
 // Persistent is itself a GC root, so the anchoring is the cell's own
 // business and nothing leaks onto the JS surface.
 

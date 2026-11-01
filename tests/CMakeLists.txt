@@ -79,8 +79,7 @@ endif()
 
 # Bronze JavaScript binding (brogameagent_api): mount points, TypeErrors on
 # bad arguments, a NavGrid findPath round trip. Core-only.
-# brogameagent_test_api_restored covers the surface the bronze port dropped
-# and this tree restored: World.findById/registerAbility/seed,
+# brogameagent_test_api_restored covers World.findById/registerAbility/seed,
 # Agent.applyAction, HexNav.field, and the nn / learn / grid namespaces.
 if(BROGAMEAGENT_ENABLE_API AND TARGET brogameagent_api)
     # With the NN layer on, brogameagent_api links brotensor_api, whose

@@ -2,9 +2,8 @@
 // SingleHeroNetTX, WeightsHandle, their factories, and the installer that
 // mounts the whole `nn` namespace.
 //
-// Ported from ai_nn_bindings.cpp. Device migration keeps the old GPU-first
-// rule: `to("gpu")` on a build without a GPU backend throws rather than
-// quietly staying on the CPU.
+// Device migration is GPU-first: `to("gpu")` on a build without a GPU
+// backend throws rather than quietly staying on the CPU.
 
 #include "host_ai_nn_shared.h"
 

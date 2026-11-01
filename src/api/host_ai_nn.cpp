@@ -1,10 +1,8 @@
 // bro.ai.game.nn — the circuit half: Linear, Relu, Tanh, DeepSetsEncoder,
 // ValueHead, FactoredPolicyHead.
 //
-// Ported from the pre-transition qjsbind classes in ai_nn_bindings.cpp. The
-// one deliberate change is the tensor type: the old AITensor class is gone,
-// so every place the old surface took one now takes a bro.tensor GpuTensor
-// handle or a Float32Array (viewed in place) — see tensorArg().
+// Every tensor argument is a bro.tensor GpuTensor handle or a Float32Array
+// (viewed in place) — see tensorArg().
 
 #include "host_ai_nn_shared.h"
 
@@ -66,10 +64,8 @@ Value loadCircuit(T& c, Value arg) {
     return ev::undefined();
 }
 
-/// A parameter tensor handed back to JS. The pre-transition binding copied
-/// the tensor into a fresh AITensor (`new TensorData{ d->l.W() }`), so the
-/// value JS sees is a snapshot, not an alias; a GpuTensor built the same way
-/// keeps that.
+/// A parameter tensor handed back to JS: a GpuTensor holding a copy, so the
+/// value JS sees is a snapshot, not an alias.
 Value paramTensor(const brotensor::Tensor& t) {
     Value v = brotensor::api::createGpuTensorValue(t);
     if (!ev::isObject(v)) {
@@ -186,7 +182,7 @@ void decorateActivation(ObjectBuilder& b, const char* label) {
         return guarded([&] { (d->*Field).backward(*dY.ptr, *dX.ptr); });
     });
     // Present so an activation drops into the same training loop as a
-    // parameterised circuit; both were no-ops before the transition too.
+    // parameterised circuit; both are no-ops.
     b.def("zeroGrad", 0, [](Value, std::span<const Value>) -> Value { return ev::undefined(); });
     b.def("sgdStep", 2, [](Value, std::span<const Value>) -> Value { return ev::undefined(); });
 }
@@ -407,8 +403,8 @@ void ensureAINnCircuitClassesInstalled() {
 void installAINnCircuits(ObjectBuilder& nnNs) {
     ensureAINnCircuitClassesInstalled();
 
-    // createTensor(rows, cols=1) — the old AITensor factory, now answering a
-    // bro.tensor GpuTensor so there is exactly one tensor type in the stack.
+    // createTensor(rows, cols=1) — answers a bro.tensor GpuTensor, so there
+    // is exactly one tensor type in the stack.
     nnNs.def("createTensor", 2, [](Value, std::span<const Value> a) -> Value {
         const int r = a.empty() ? 0 : dimAt(a, 0, "createTensor: rows");
         const int c = a.size() >= 2 ? dimAt(a, 1, "createTensor: cols") : 1;
