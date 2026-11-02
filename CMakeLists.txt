@@ -175,6 +175,9 @@ add_library(brogameagent STATIC
     src/replay_reader.cpp
     src/vec_simulation.cpp
     src/mcts.cpp
+    src/mcts_decoupled.cpp
+    src/mcts_team.cpp
+    src/mcts_layered.cpp
     src/generic_mcts.cpp
     src/tot_reasoning.cpp
     src/capability_set.cpp

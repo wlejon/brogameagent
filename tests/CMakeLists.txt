@@ -177,6 +177,13 @@ endif()
 
 add_executable(brogameagent_test
     test_main.cpp
+    test_nav.cpp
+    test_world_agent.cpp
+    test_sim_replay.cpp
+    test_mcts.cpp
+    test_mcts_options.cpp
+    test_cap_belief_generic.cpp
+    test_grid.cpp
 )
 
 target_link_libraries(brogameagent_test PRIVATE brogameagent)
