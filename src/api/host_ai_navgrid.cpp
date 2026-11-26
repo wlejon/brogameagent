@@ -329,9 +329,8 @@ Value aiCreateNavGrid(Value, std::span<const Value> a) {
         }
     }
 
-    Value fromPhys = ev::getProperty(root.get(), "fromPhysics");
-    if (!ev::isUndefined(fromPhys) && !ev::isNull(fromPhys) &&
-        !(ev::isBool(fromPhys) && !ev::toBool(fromPhys))) {
+    // What the host reads obstacles from is the host's to say: it sees the options.
+    {
         const auto& hooks = getNavMeshHooks();
         if (hooks.collectObstacles) {
             std::vector<brogameagent::AABB> boxes;
