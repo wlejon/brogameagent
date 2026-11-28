@@ -254,9 +254,6 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN
         set(_target brogameagent_gpu_${_name}_dispatch_test)
         add_executable(${_target} gpu/test_${_name}_dispatch.cpp)
         target_link_libraries(${_target} PRIVATE brogameagent)
-        if(BROGAMEAGENT_WITH_CUDA)
-            target_include_directories(${_target} PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-        endif()
         if(MSVC)
             target_compile_options(${_target} PRIVATE /W4)
         else()
@@ -271,10 +268,6 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN
     )
     target_link_libraries(brogameagent_gpu_generic_trainer_batched_parity_test
         PRIVATE brogameagent)
-    if(BROGAMEAGENT_WITH_CUDA)
-        target_include_directories(brogameagent_gpu_generic_trainer_batched_parity_test
-            PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_generic_trainer_batched_parity_test
             PRIVATE /W4)
@@ -290,10 +283,6 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN
         gpu/test_exit_trainer_gpu.cpp
     )
     target_link_libraries(brogameagent_gpu_exit_trainer_test PRIVATE brogameagent)
-    if(BROGAMEAGENT_WITH_CUDA)
-        target_include_directories(brogameagent_gpu_exit_trainer_test PRIVATE
-        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_exit_trainer_test PRIVATE /W4)
     else()
@@ -307,10 +296,6 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN
         gpu/test_policy_value_net_batched.cpp
     )
     target_link_libraries(brogameagent_gpu_pvn_batched_test PRIVATE brogameagent)
-    if(BROGAMEAGENT_WITH_CUDA)
-        target_include_directories(brogameagent_gpu_pvn_batched_test PRIVATE
-        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_pvn_batched_test PRIVATE /W4)
     else()
@@ -324,10 +309,6 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN
         gpu/test_factored_masked_gpu.cpp
     )
     target_link_libraries(brogameagent_gpu_factored_masked_test PRIVATE brogameagent)
-    if(BROGAMEAGENT_WITH_CUDA)
-        target_include_directories(brogameagent_gpu_factored_masked_test PRIVATE
-        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_factored_masked_test PRIVATE /W4)
     else()
@@ -341,10 +322,6 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN
         gpu/test_inference_server.cpp
     )
     target_link_libraries(brogameagent_gpu_inference_server_test PRIVATE brogameagent)
-    if(BROGAMEAGENT_WITH_CUDA)
-        target_include_directories(brogameagent_gpu_inference_server_test PRIVATE
-        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_inference_server_test PRIVATE /W4)
     else()
@@ -358,10 +335,6 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN
         gpu/test_mcts_server.cpp
     )
     target_link_libraries(brogameagent_gpu_mcts_server_test PRIVATE brogameagent)
-    if(BROGAMEAGENT_WITH_CUDA)
-        target_include_directories(brogameagent_gpu_mcts_server_test PRIVATE
-        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_mcts_server_test PRIVATE /W4)
     else()
@@ -375,10 +348,6 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN
         gpu/test_single_hero_net_tx_batched.cpp
     )
     target_link_libraries(brogameagent_gpu_tx_batched_test PRIVATE brogameagent)
-    if(BROGAMEAGENT_WITH_CUDA)
-        target_include_directories(brogameagent_gpu_tx_batched_test PRIVATE
-        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_tx_batched_test PRIVATE /W4)
     else()
@@ -392,10 +361,6 @@ if(BROGAMEAGENT_WITH_CUDA OR BROGAMEAGENT_WITH_METAL OR BROGAMEAGENT_WITH_VULKAN
         gpu/test_mcts_server_tx.cpp
     )
     target_link_libraries(brogameagent_gpu_mcts_server_tx_test PRIVATE brogameagent)
-    if(BROGAMEAGENT_WITH_CUDA)
-        target_include_directories(brogameagent_gpu_mcts_server_tx_test PRIVATE
-        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-    endif()
     if(MSVC)
         target_compile_options(brogameagent_gpu_mcts_server_tx_test PRIVATE /W4)
     else()

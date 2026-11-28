@@ -6,9 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(MSVC)
-    # Restrict MSVC-only flags to CXX. nvcc forwards host args verbatim and
-    # things like /MP, /permissive-, /utf-8, /W4 either confuse its pipeline
-    # (single-input rule for /MP) or get parsed as nvcc options themselves.
+    # Scope MSVC-specific compile flags to CXX so mixed-language or external
+    # targets don't inherit host-only flags accidentally.
     add_compile_options(
         $<$<COMPILE_LANGUAGE:CXX>:/MP>
         $<$<COMPILE_LANGUAGE:CXX>:/permissive->
